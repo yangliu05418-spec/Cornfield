@@ -556,7 +556,7 @@ func (w *GenerateWorker) claimSubmissionSlot(ctx context.Context, item generatio
 	if _, err = tx.Exec(ctx, `UPDATE generation_batches SET status='running',updated_at=now() WHERE id=$1 AND status='queued'`, item.BatchID); err != nil {
 		return submissionClaim{}, err
 	}
-	if _, err = tx.Exec(ctx, `INSERT INTO job_events(owner_user_id,batch_id,job_id,event_type,payload) VALUES($1,$2,$3,'job.submitting',jsonb_build_object('status','submitting','attempt',$4))`, item.OwnerID, item.BatchID, item.JobID, attempt); err != nil {
+	if _, err = tx.Exec(ctx, `INSERT INTO job_events(owner_user_id,batch_id,job_id,event_type,payload) VALUES($1,$2,$3,'job.submitting',jsonb_build_object('status','submitting','attempt',$4::integer))`, item.OwnerID, item.BatchID, item.JobID, attempt); err != nil {
 		return submissionClaim{}, err
 	}
 	if err = tx.Commit(ctx); err != nil {
@@ -744,7 +744,7 @@ func (w *GenerateWorker) acceptSubmission(ctx context.Context, item generationRe
 	if command.RowsAffected() != 1 {
 		return false, nil
 	}
-	if _, err = tx.Exec(ctx, `INSERT INTO job_events(owner_user_id,batch_id,job_id,event_type,payload) VALUES($1,$2,$3,'job.updated',jsonb_build_object('status',$4))`, item.OwnerID, item.BatchID, item.JobID, status); err != nil {
+	if _, err = tx.Exec(ctx, `INSERT INTO job_events(owner_user_id,batch_id,job_id,event_type,payload) VALUES($1,$2,$3,'job.updated',jsonb_build_object('status',$4::text))`, item.OwnerID, item.BatchID, item.JobID, status); err != nil {
 		return false, err
 	}
 	if err = tx.Commit(ctx); err != nil {
@@ -887,7 +887,7 @@ func (w *GenerateWorker) handleProviderError(ctx context.Context, item generatio
 	if command.RowsAffected() != 1 {
 		return river.JobSnooze(100 * time.Millisecond)
 	}
-	if _, updateErr = tx.Exec(ctx, `INSERT INTO job_events(owner_user_id,batch_id,job_id,event_type,payload) VALUES($1,$2,$3,'job.retry_scheduled',jsonb_build_object('status','dispatched','retry_after_ms',$4))`, item.OwnerID, item.BatchID, item.JobID, delay.Milliseconds()); updateErr != nil {
+	if _, updateErr = tx.Exec(ctx, `INSERT INTO job_events(owner_user_id,batch_id,job_id,event_type,payload) VALUES($1,$2,$3,'job.retry_scheduled',jsonb_build_object('status','dispatched','retry_after_ms',$4::bigint))`, item.OwnerID, item.BatchID, item.JobID, delay.Milliseconds()); updateErr != nil {
 		return updateErr
 	}
 	if commitErr := tx.Commit(ctx); commitErr != nil {
@@ -944,7 +944,7 @@ func (w *GenerateWorker) markUncertain(ctx context.Context, item generationRecor
 		dispatch_state='finished',upstream_active_until=$4,completed_at=now(),updated_at=now() WHERE id=$1`, item.JobID, code, message, deadline); err != nil {
 		return err
 	}
-	if _, err = tx.Exec(ctx, `INSERT INTO job_events(owner_user_id,batch_id,job_id,event_type,payload) VALUES($1,$2,$3,'job.submission_uncertain',jsonb_build_object('status','submission_uncertain','error_code',$4))`, item.OwnerID, item.BatchID, item.JobID, code); err != nil {
+	if _, err = tx.Exec(ctx, `INSERT INTO job_events(owner_user_id,batch_id,job_id,event_type,payload) VALUES($1,$2,$3,'job.submission_uncertain',jsonb_build_object('status','submission_uncertain','error_code',$4::text))`, item.OwnerID, item.BatchID, item.JobID, code); err != nil {
 		return err
 	}
 	if _, err = reconcileWorkerBatch(ctx, tx, item.BatchID); err != nil {
@@ -977,7 +977,7 @@ func (w *GenerateWorker) failWithUpstreamLease(ctx context.Context, item generat
 		retryable=$4,upstream_active_until=$5,completed_at=now(),updated_at=now() WHERE id=$1`, item.JobID, code, message, retryable, upstreamActiveUntil); err != nil {
 		return err
 	}
-	if _, err = tx.Exec(ctx, `INSERT INTO job_events(owner_user_id,batch_id,job_id,event_type,payload) VALUES($1,$2,$3,'job.failed',jsonb_build_object('status','failed','error_code',$4,'message',$5,'retryable',$6,'upstream_may_still_be_active',$7::boolean))`, item.OwnerID, item.BatchID, item.JobID, code, message, retryable, upstreamActiveUntil != nil); err != nil {
+	if _, err = tx.Exec(ctx, `INSERT INTO job_events(owner_user_id,batch_id,job_id,event_type,payload) VALUES($1,$2,$3,'job.failed',jsonb_build_object('status','failed','error_code',$4::text,'message',$5::text,'retryable',$6::boolean,'upstream_may_still_be_active',$7::boolean))`, item.OwnerID, item.BatchID, item.JobID, code, message, retryable, upstreamActiveUntil != nil); err != nil {
 		return err
 	}
 	if _, err = reconcileWorkerBatch(ctx, tx, item.BatchID); err != nil {
@@ -1011,7 +1011,7 @@ func (w *GenerateWorker) markCancelledWithUpstreamLease(ctx context.Context, ite
 			return err
 		}
 		if _, err = tx.Exec(ctx, `INSERT INTO job_events(owner_user_id,batch_id,job_id,event_type,payload)
-			VALUES($1,$2,$3,'job.cancelled',jsonb_build_object('status','cancelled','late_result_discarded',$4,
+			VALUES($1,$2,$3,'job.cancelled',jsonb_build_object('status','cancelled','late_result_discarded',$4::boolean,
 			'cancel_mode',$5::text,'cost_may_have_been_incurred',COALESCE($5::text='discard_result_only',false)))`, item.OwnerID, item.BatchID, item.JobID, lateResult, persistedCancelMode); err != nil {
 			return err
 		}
@@ -1045,7 +1045,7 @@ func (w *GenerateWorker) markCancelledInTx(ctx context.Context, tx pgx.Tx, item 
 		return err
 	}
 	if _, err := tx.Exec(ctx, `INSERT INTO job_events(owner_user_id,batch_id,job_id,event_type,payload)
-		VALUES($1,$2,$3,'job.cancelled',jsonb_build_object('status','cancelled','late_result_discarded',$4,
+		VALUES($1,$2,$3,'job.cancelled',jsonb_build_object('status','cancelled','late_result_discarded',$4::boolean,
 		'cancel_mode',$5::text,'cost_may_have_been_incurred',COALESCE($5::text='discard_result_only',false)))`, item.OwnerID, item.BatchID, item.JobID, lateResult, persistedCancelMode); err != nil {
 		return err
 	}
@@ -1346,7 +1346,7 @@ func (w *GenerateWorker) ingestStaged(ctx context.Context, item generationRecord
 		return err
 	}
 	if _, err = tx.Exec(ctx, `INSERT INTO job_events(owner_user_id,batch_id,job_id,event_type,payload)
-		VALUES($1,$2,$3,'job.succeeded',jsonb_build_object('status','succeeded','output_count',$4,'outputs',$5::jsonb))`, item.OwnerID, item.BatchID, item.JobID, len(eventOutputs), string(encodedOutputs)); err != nil {
+		VALUES($1,$2,$3,'job.succeeded',jsonb_build_object('status','succeeded','output_count',$4::integer,'outputs',$5::jsonb))`, item.OwnerID, item.BatchID, item.JobID, len(eventOutputs), string(encodedOutputs)); err != nil {
 		return err
 	}
 	if _, err = reconcileWorkerBatch(ctx, tx, item.BatchID); err != nil {
@@ -1502,7 +1502,7 @@ func (w *GenerateWorker) ingest(ctx context.Context, item generationRecord, resu
 	if _, err = tx.Exec(ctx, `UPDATE generation_jobs SET status='succeeded',dispatch_state='finished',completed_at=now(),error_code=NULL,error_message=NULL,updated_at=now() WHERE id=$1`, item.JobID); err != nil {
 		return err
 	}
-	if _, err = tx.Exec(ctx, `INSERT INTO job_events(owner_user_id,batch_id,job_id,event_type,payload) VALUES($1,$2,$3,'job.succeeded',jsonb_build_object('status','succeeded','output_count',$4,'outputs',$5::jsonb))`, item.OwnerID, item.BatchID, item.JobID, outputCount, string(encodedOutputs)); err != nil {
+	if _, err = tx.Exec(ctx, `INSERT INTO job_events(owner_user_id,batch_id,job_id,event_type,payload) VALUES($1,$2,$3,'job.succeeded',jsonb_build_object('status','succeeded','output_count',$4::integer,'outputs',$5::jsonb))`, item.OwnerID, item.BatchID, item.JobID, outputCount, string(encodedOutputs)); err != nil {
 		return err
 	}
 	if _, err = reconcileWorkerBatch(ctx, tx, item.BatchID); err != nil {
@@ -1592,7 +1592,7 @@ func reconcileWorkerBatch(ctx context.Context, tx pgx.Tx, batchID uuid.UUID) (st
 	} else if status == "succeeded" || status == "partial" || status == "cancelled" {
 		eventType = "batch.completed"
 	}
-	if _, err := tx.Exec(ctx, `INSERT INTO job_events(owner_user_id,batch_id,event_type,payload) VALUES($1,$2,$3,jsonb_build_object('status',$4,'completed_outputs',$5))`, ownerID, batchID, eventType, status, completed); err != nil {
+	if _, err := tx.Exec(ctx, `INSERT INTO job_events(owner_user_id,batch_id,event_type,payload) VALUES($1,$2,$3,jsonb_build_object('status',$4::text,'completed_outputs',$5::integer))`, ownerID, batchID, eventType, status, completed); err != nil {
 		return "", err
 	}
 	return status, nil

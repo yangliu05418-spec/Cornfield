@@ -273,7 +273,7 @@ func (s *Scheduler) dispatch(ctx context.Context) {
 			return
 		}
 		batchIDs[batchID] = ownerID
-		if _, err = tx.Exec(ctx, `INSERT INTO job_events(owner_user_id,batch_id,job_id,event_type,payload) VALUES($1,$2,$3,'job.dispatched',jsonb_build_object('status',$4))`, ownerID, batchID, item.id, status); err != nil {
+		if _, err = tx.Exec(ctx, `INSERT INTO job_events(owner_user_id,batch_id,job_id,event_type,payload) VALUES($1,$2,$3,'job.dispatched',jsonb_build_object('status',$4::text))`, ownerID, batchID, item.id, status); err != nil {
 			s.Log.Warn("scheduler job event insert failed", "error", err, "generation_job_id", item.id)
 			return
 		}

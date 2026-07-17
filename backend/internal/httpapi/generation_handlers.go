@@ -460,7 +460,7 @@ func (s *Server) createGeneration(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	if _, err = tx.Exec(r.Context(), `INSERT INTO job_events(owner_user_id,batch_id,event_type,payload) VALUES($1,$2,'batch.created',jsonb_build_object('status','queued','expected_outputs',$3))`, sess.UserID, batchID, expected); err != nil {
+	if _, err = tx.Exec(r.Context(), `INSERT INTO job_events(owner_user_id,batch_id,event_type,payload) VALUES($1,$2,'batch.created',jsonb_build_object('status','queued','expected_outputs',$3::integer))`, sess.UserID, batchID, expected); err != nil {
 		writeError(w, http.StatusInternalServerError, "DATABASE_ERROR", "创建任务失败", true, r)
 		return
 	}
@@ -703,7 +703,7 @@ func (s *Server) cancelBatch(w http.ResponseWriter, r *http.Request) {
 		if item.status == "cancelled" {
 			eventType = "job.cancelled"
 		}
-		if _, err = tx.Exec(r.Context(), `INSERT INTO job_events(owner_user_id,batch_id,job_id,event_type,payload) VALUES($1,$2,$3,$4,jsonb_build_object('status',$5,'cancel_mode',$6,'cost_may_have_been_incurred',$6<>'local'))`, ownerID, id, item.id, eventType, item.status, item.cancelMode); err != nil {
+		if _, err = tx.Exec(r.Context(), `INSERT INTO job_events(owner_user_id,batch_id,job_id,event_type,payload) VALUES($1,$2,$3,$4,jsonb_build_object('status',$5::text,'cancel_mode',$6::text,'cost_may_have_been_incurred',$6::text<>'local'))`, ownerID, id, item.id, eventType, item.status, item.cancelMode); err != nil {
 			writeError(w, http.StatusInternalServerError, "DATABASE_ERROR", "取消任务失败", true, r)
 			return
 		}
@@ -785,7 +785,7 @@ func (s *Server) cancelJob(w http.ResponseWriter, r *http.Request) {
 		if status == "cancelled" {
 			eventType = "job.cancelled"
 		}
-		if _, err = tx.Exec(r.Context(), `INSERT INTO job_events(owner_user_id,batch_id,job_id,event_type,payload) VALUES($1,$2,$3,$4,jsonb_build_object('status',$5,'cancel_mode',$6,'cost_may_have_been_incurred',$6<>'local'))`, ownerID, batchID, jobID, eventType, status, cancelMode); err != nil {
+		if _, err = tx.Exec(r.Context(), `INSERT INTO job_events(owner_user_id,batch_id,job_id,event_type,payload) VALUES($1,$2,$3,$4,jsonb_build_object('status',$5::text,'cancel_mode',$6::text,'cost_may_have_been_incurred',$6::text<>'local'))`, ownerID, batchID, jobID, eventType, status, cancelMode); err != nil {
 			writeError(w, http.StatusInternalServerError, "DATABASE_ERROR", "取消抽卡失败", true, r)
 			return
 		}
@@ -974,7 +974,7 @@ func reconcileHTTPBatch(ctx context.Context, tx pgx.Tx, batchID uuid.UUID) (stri
 	} else if status == "succeeded" || status == "partial" || status == "cancelled" {
 		eventType = "batch.completed"
 	}
-	if _, err := tx.Exec(ctx, `INSERT INTO job_events(owner_user_id,batch_id,event_type,payload) VALUES($1,$2,$3,jsonb_build_object('status',$4,'completed_outputs',$5))`, ownerID, batchID, eventType, status, completed); err != nil {
+	if _, err := tx.Exec(ctx, `INSERT INTO job_events(owner_user_id,batch_id,event_type,payload) VALUES($1,$2,$3,jsonb_build_object('status',$4::text,'completed_outputs',$5::integer))`, ownerID, batchID, eventType, status, completed); err != nil {
 		return "", err
 	}
 	return status, nil

@@ -256,9 +256,9 @@ func (s *Server) reconcileSubmission(w http.ResponseWriter, r *http.Request) {
 		eventType = "job.failed"
 	}
 	if _, err = tx.Exec(r.Context(), `INSERT INTO job_events(owner_user_id,batch_id,job_id,event_type,payload)
-		VALUES($1,$2,$3,$4,jsonb_build_object('status',$5,'action',$6,'next_operation',$7,
-		'duplicate_cost_risk',$8,'provider_charge_assumed',$9,'retryable',$10,
-		'error_code',CASE WHEN $5='failed' THEN 'PROVIDER_RESULT_UNRECOVERABLE' ELSE NULL END))`,
+		VALUES($1,$2,$3,$4,jsonb_build_object('status',$5::text,'action',$6::text,'next_operation',$7::text,
+		'duplicate_cost_risk',$8::boolean,'provider_charge_assumed',$9::boolean,'retryable',$10::boolean,
+		'error_code',CASE WHEN $5::text='failed' THEN 'PROVIDER_RESULT_UNRECOVERABLE' ELSE NULL END))`,
 		ownerID, batchID, jobID, eventType, plan.Status, plan.Action, plan.NextOperation,
 		plan.DuplicateCostRisk, plan.ProviderChargeAssumed, plan.Retryable); err != nil {
 		writeError(w, http.StatusInternalServerError, "DATABASE_ERROR", "Unable to record reconciliation event", true, r)

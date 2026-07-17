@@ -1,6 +1,7 @@
 package modelconfig
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -96,21 +97,37 @@ func NormalizeSnapshotJSON(data []byte) ([]byte, error) {
 		return nil, err
 	}
 	policyData, ok := snapshot["policy"]
-	if !ok {
-		return json.Marshal(snapshot)
+	if ok {
+		var policy map[string]json.RawMessage
+		if err := json.Unmarshal(policyData, &policy); err != nil {
+			return nil, err
+		}
+		if err := normalizeLegacyPolicyJSON(policy); err != nil {
+			return nil, err
+		}
+		normalizedPolicy, err := json.Marshal(policy)
+		if err != nil {
+			return nil, err
+		}
+		snapshot["policy"] = normalizedPolicy
 	}
-	var policy map[string]json.RawMessage
-	if err := json.Unmarshal(policyData, &policy); err != nil {
-		return nil, err
-	}
-	if err := normalizeLegacyPolicyJSON(policy); err != nil {
-		return nil, err
-	}
-	normalizedPolicy, err := json.Marshal(policy)
+	normalizedSnapshot, err := json.Marshal(snapshot)
 	if err != nil {
 		return nil, err
 	}
-	snapshot["policy"] = normalizedPolicy
+	return canonicalizeSnapshotJSON(normalizedSnapshot)
+}
+
+func canonicalizeSnapshotJSON(data []byte) ([]byte, error) {
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.UseNumber()
+	var snapshot any
+	if err := decoder.Decode(&snapshot); err != nil {
+		return nil, err
+	}
+	// PostgreSQL jsonb does not preserve object-key order at any nesting
+	// level. Re-encoding a generic JSON value recursively sorts every object
+	// while retaining arrays, unknown fields, and exact numeric tokens.
 	return json.Marshal(snapshot)
 }
 

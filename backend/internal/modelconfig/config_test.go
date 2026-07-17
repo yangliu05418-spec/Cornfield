@@ -30,8 +30,8 @@ func TestPolicyJSONUsesSnakeCaseAndAcceptsLegacySnapshots(t *testing.T) {
 }
 
 func TestNormalizeSnapshotJSONOnlyAliasesLegacyPolicyKeys(t *testing.T) {
-	legacy := []byte(`{"id":"model","unknown":{"keep":true},"policy":{"GenerationTimeoutSeconds":900}}`)
-	current := []byte(`{"policy":{"generation_timeout_seconds":900},"unknown":{"keep":true},"id":"model"}`)
+	legacy := []byte(`{"id":"model","unknown":{"nested":{"z":1,"a":2},"keep":true},"policy":{"GenerationTimeoutSeconds":900}}`)
+	current := []byte(`{"policy":{"generation_timeout_seconds":900},"unknown":{"keep":true,"nested":{"a":2,"z":1}},"id":"model"}`)
 	normalizedLegacy, err := NormalizeSnapshotJSON(legacy)
 	if err != nil {
 		t.Fatal(err)

@@ -1,0 +1,61 @@
+revision: 1
+models:
+  - id: legnext-midjourney-v7
+    display_name: Midjourney V7
+    provider: legnext
+    provider_model: midjourney
+    enabled: true
+    order: 10
+    prompt_suffix: "--v 7 --fast"
+    outputs_per_draw: 4
+    capabilities:
+      text_to_image: true
+      image_to_image: true
+      aspect_ratios: ["1:1", "16:9", "9:16", "4:3", "3:4", "3:2", "2:3"]
+      resolutions: ["standard"]
+      max_reference_images: 4
+      max_reference_bytes: 10485760
+      draw_count:
+        min: 1
+        max: 4
+        default: 1
+    policy:
+      submit_timeout_seconds: 30
+      generation_timeout_seconds: 900
+      max_concurrency: 2
+      max_safe_retries: 3
+      breaker_min_requests: 10
+      breaker_failure_ratio: 0.5
+      breaker_cooldown_seconds: 30
+      # Verified by a live image-to-image canary on 2026-07-17. Keep this list
+      # exact: result downloads reject every other host and all private IPs.
+      allowed_output_hosts: ["cdn.legnext.ai", "cdn.midjourney.com", "img.playjoy3d.com"]
+
+  - id: openrouter-gpt-image-1
+    display_name: GPT Image 1
+    provider: openrouter
+    provider_model: openai/gpt-image-1
+    enabled: true
+    order: 20
+    request_parameters: ["n", "input_references"]
+    outputs_per_draw: 1
+    capabilities:
+      text_to_image: true
+      image_to_image: true
+      aspect_ratios: ["1:1"]
+      resolutions: ["1K"]
+      max_reference_images: 4
+      max_reference_bytes: 26214400
+      draw_count:
+        min: 1
+        max: 4
+        default: 1
+    policy:
+      submit_timeout_seconds: 180
+      generation_timeout_seconds: 300
+      max_concurrency: 4
+      max_safe_retries: 2
+      breaker_min_requests: 10
+      breaker_failure_ratio: 0.5
+      breaker_cooldown_seconds: 30
+      allowed_output_hosts: []

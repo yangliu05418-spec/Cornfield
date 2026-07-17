@@ -1,0 +1,272 @@
+{
+  "color": {
+    "Page Background": {
+      "$type": "color",
+      "$value": "#0f1113",
+      "$description": "Primary page/canvas background, full-bleed sections"
+    },
+    "Surface Primary": {
+      "$type": "color",
+      "$value": "#1c1e20",
+      "$description": "Card and panel surfaces, nav bar background"
+    },
+    "Surface Secondary": {
+      "$type": "color",
+      "$value": "#23262a",
+      "$description": "Secondary panels, download panel, glass overlays"
+    },
+    "Text Primary": {
+      "$type": "color",
+      "$value": "#f7f7f8",
+      "$description": "Primary body text, nav labels, card titles"
+    },
+    "Text White": {
+      "$type": "color",
+      "$value": "#ffffff",
+      "$description": "High-emphasis headings, button labels on dark surfaces"
+    },
+    "Text Secondary": {
+      "$type": "color",
+      "$value": "#898a8b",
+      "$description": "Secondary text in light mode"
+    },
+    "Text Tertiary": {
+      "$type": "color",
+      "$value": "#a8a8a8",
+      "$description": "Tertiary labels, muted metadata"
+    },
+    "Lime Accent": {
+      "$type": "color",
+      "$value": "#d1fe17",
+      "$description": "CTA buttons and highlights remain lime in light mode"
+    },
+    "Border Subtle": {
+      "$type": "color",
+      "$value": "#2e3031",
+      "$description": "Dividers and card borders in light mode"
+    },
+    "Magenta Accent": {
+      "$type": "color",
+      "$value": "#ff005b",
+      "$description": "Trending badge, promotional highlight labels"
+    },
+    "Cyan Accent": {
+      "$type": "color",
+      "$value": "#18dcff",
+      "$description": "Occasional highlight, secondary accent in media overlays"
+    },
+    "Dark Ink": {
+      "$type": "color",
+      "$value": "#131517",
+      "$description": "Button text on lime CTA, icon fills on inverted surfaces"
+    },
+    "Page Background Light": {
+      "$type": "color",
+      "$value": "#f7f7f8",
+      "$description": "Light mode page canvas (same token, inverted role)"
+    },
+    "Surface White": {
+      "$type": "color",
+      "$value": "#ffffff",
+      "$description": "Card surfaces in light mode"
+    },
+    "Text Dark": {
+      "$type": "color",
+      "$value": "#131517",
+      "$description": "Primary text in light mode"
+    }
+  },
+  "typography": {
+    "Body Default": {
+      "$type": "typography",
+      "$value": {
+        "fontFamily": "ui-sans-serif",
+        "fontSize": "16px",
+        "fontWeight": 400,
+        "lineHeight": "24px",
+        "letterSpacing": "normal"
+      },
+      "$description": "Primary body copy, nav items, card descriptions"
+    },
+    "Body Medium": {
+      "$type": "typography",
+      "$value": {
+        "fontFamily": "ui-sans-serif",
+        "fontSize": "16px",
+        "fontWeight": 500,
+        "lineHeight": "24px",
+        "letterSpacing": "-1%"
+      },
+      "$description": "Emphasized body text, section intros"
+    },
+    "Label Semibold": {
+      "$type": "typography",
+      "$value": {
+        "fontFamily": "ui-sans-serif",
+        "fontSize": "14px",
+        "fontWeight": 600,
+        "lineHeight": "20px",
+        "letterSpacing": "normal"
+      },
+      "$description": "Nav labels, card titles, button text"
+    },
+    "Label Medium": {
+      "$type": "typography",
+      "$value": {
+        "fontFamily": "ui-sans-serif",
+        "fontSize": "14px",
+        "fontWeight": 500,
+        "lineHeight": "20px",
+        "letterSpacing": "0%"
+      },
+      "$description": "Secondary labels, metadata, tag text"
+    },
+    "Caption Semibold": {
+      "$type": "typography",
+      "$value": {
+        "fontFamily": "ui-sans-serif",
+        "fontSize": "12px",
+        "fontWeight": 600,
+        "lineHeight": "18px",
+        "letterSpacing": "0%"
+      },
+      "$description": "Badge labels, small UI captions"
+    },
+    "Micro Label": {
+      "$type": "typography",
+      "$value": {
+        "fontFamily": "ui-sans-serif",
+        "fontSize": "10px",
+        "fontWeight": 500,
+        "lineHeight": "14px",
+        "letterSpacing": "0.2px"
+      },
+      "$description": "Tiny status labels, category chips"
+    },
+    "Display Heading": {
+      "$type": "typography",
+      "$value": {
+        "fontFamily": "Space Grotesk",
+        "fontSize": "28px",
+        "fontWeight": 700,
+        "lineHeight": "36px",
+        "letterSpacing": "-2%"
+      },
+      "$description": "Section display headings, hero titles"
+    },
+    "Display Caption": {
+      "$type": "typography",
+      "$value": {
+        "fontFamily": "Space Grotesk",
+        "fontSize": "12px",
+        "fontWeight": 700,
+        "lineHeight": "18px",
+        "letterSpacing": "0%"
+      },
+      "$description": "Uppercase badge labels, promo tags in Space Grotesk"
+    },
+    "UI Label Inter": {
+      "$type": "typography",
+      "$value": {
+        "fontFamily": "Inter",
+        "fontSize": "12px",
+        "fontWeight": 500,
+        "lineHeight": "16px",
+        "letterSpacing": "normal"
+      },
+      "$description": "Cookie consent and toast UI labels"
+    }
+  },
+  "spacing": {
+    "space-1": {
+      "$type": "dimension",
+      "$value": "2px"
+    },
+    "space-2": {
+      "$type": "dimension",
+      "$value": "4px"
+    },
+    "space-3": {
+      "$type": "dimension",
+      "$value": "6px"
+    },
+    "space-4": {
+      "$type": "dimension",
+      "$value": "8px"
+    },
+    "space-5": {
+      "$type": "dimension",
+      "$value": "10px"
+    },
+    "space-6": {
+      "$type": "dimension",
+      "$value": "12px"
+    },
+    "space-7": {
+      "$type": "dimension",
+      "$value": "16px"
+    },
+    "space-8": {
+      "$type": "dimension",
+      "$value": "20px"
+    },
+    "space-9": {
+      "$type": "dimension",
+      "$value": "24px"
+    },
+    "space-10": {
+      "$type": "dimension",
+      "$value": "32px"
+    },
+    "space-11": {
+      "$type": "dimension",
+      "$value": "36px"
+    },
+    "space-12": {
+      "$type": "dimension",
+      "$value": "40px"
+    },
+    "space-13": {
+      "$type": "dimension",
+      "$value": "64px"
+    }
+  },
+  "borderRadius": {
+    "radius-sm": {
+      "$type": "dimension",
+      "$value": "4px"
+    },
+    "radius-md": {
+      "$type": "dimension",
+      "$value": "6px"
+    },
+    "radius-card-sm": {
+      "$type": "dimension",
+      "$value": "8px"
+    },
+    "radius-card": {
+      "$type": "dimension",
+      "$value": "12px"
+    },
+    "radius-panel": {
+      "$type": "dimension",
+      "$value": "16px"
+    },
+    "radius-lg": {
+      "$type": "dimension",
+      "$value": "20px"
+    },
+    "radius-xl": {
+      "$type": "dimension",
+      "$value": "24px"
+    },
+    "radius-2xl": {
+      "$type": "dimension",
+      "$value": "32px"
+    },
+    "radius-pill": {
+      "$type": "dimension",
+      "$value": "9999px"
+    }
+  }
+}

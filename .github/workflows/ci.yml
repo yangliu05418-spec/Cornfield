@@ -1,0 +1,110 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version: "1.26.5"
+          cache-dependency-path: backend/go.sum
+      - name: Scan the checked-out source for committed secrets
+        run: go run github.com/zricethezav/gitleaks/v8@v8.30.1 dir --redact --no-banner --log-level warn ..
+      - run: go test ./...
+      - run: go vet ./...
+      - run: go run honnef.co/go/tools/cmd/staticcheck@v0.7.0 ./...
+      - run: go run golang.org/x/vuln/cmd/govulncheck@v1.6.0 ./...
+      - run: go test -race ./...
+      - run: CGO_ENABLED=0 go build ./cmd/...
+      - run: go run ./cmd/modelctl validate
+
+  web:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
+        with:
+          version: 11.5.2
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "24.15"
+          cache: pnpm
+          cache-dependency-path: web/pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm check
+      - run: pnpm typecheck
+      - run: pnpm lint
+      - run: pnpm test
+      - run: pnpm audit --prod --audit-level high --registry=https://registry.npmjs.org/
+      - run: pnpm build
+      - run: pnpm exec playwright install --with-deps chromium
+      - run: pnpm e2e
+      - if: ${{ always() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: playwright-report
+          path: web/output/playwright
+          if-no-files-found: ignore
+          retention-days: 7
+      - run: test -f dist/client/index.html && test -f dist/client/_shell.html
+      - run: '! rg "createServerFn" src'
+
+  images:
+    runs-on: ubuntu-latest
+    needs: [backend, web]
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+      - run: docker build -f backend/Dockerfile --target api -t studio-api .
+      - run: docker build -f backend/Dockerfile --target worker -t studio-worker .
+      - run: docker build -f web/Dockerfile -t studio-web .
+      - run: docker run --rm --entrypoint /bin/sh studio-web -c '! command -v node'
+      - run: docker run --rm studio-web nginx -t
+      - name: Validate monitoring configuration
+        run: |
+          docker run --rm --entrypoint /bin/promtool \
+            -v "$PWD/ops:/etc/prometheus:ro" \
+            prom/prometheus:v3.7.3@sha256:49214755b6153f90a597adcbff0252cc61069f8ab69ce8411285cd4a560e8038 \
+            check config /etc/prometheus/prometheus.yml
+          docker run --rm --entrypoint /bin/amtool \
+            -v "$PWD/ops:/etc/alertmanager:ro" \
+            prom/alertmanager:v0.32.1@sha256:51a825c2a40acc3e338fdd00d622e01ec090f72be2b3ea46be0839cd47a4d286 \
+            check-config /etc/alertmanager/alertmanager.yml
+      - run: bash -n ops/*.sh
+      - run: APP_PUBLIC_URL=https://studio.example DATA_ROOT=/srv/internal-image-studio/data docker compose config --quiet
+      - name: Validate Compose isolation boundaries
+        run: |
+          APP_PUBLIC_URL=https://studio.example DATA_ROOT=/srv/internal-image-studio/data \
+            docker compose --profile '*' config --format json |
+            jq -e '
+              (.services.worker.networks | has("egress")) and
+              (.services.api.networks | has("egress") | not) and
+              (.services.alertmanager.networks | has("egress")) and
+              (.services.alertmanager.profiles == ["alerting"]) and
+              .networks.backend.internal == true and
+              .networks.frontend.internal == true and
+              ([.services.api.volumes[] | select(.target == "/data" and .read_only == true)] | length) == 1 and
+              ([.services.api.volumes[] | select(.target == "/data/uploads" and ((.read_only // false) == false))] | length) == 1 and
+              ([.services.worker.volumes[] | select(.target == "/data" and ((.read_only // false) == false))] | length) == 1
+            '
+      - name: Fresh-database Compose smoke test
+        run: CI=true bash ops/ci-smoke.sh

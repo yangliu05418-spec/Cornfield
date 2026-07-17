@@ -1,0 +1,26 @@
+**
+
+!.dockerignore
+!backend/
+!backend/**
+!web/
+!web/**
+!ops/
+!ops/db-bootstrap.sh
+
+# Re-exclude generated and local-only content underneath the allowed trees.
+web/node_modules/
+web/dist/
+web/output/
+web/.playwright-cli/
+web/.vscode/
+backend/coverage/
+backend/*.exe
+
+# Defense in depth: these patterns must never enter a local or remote builder.
+**/.env
+**/.env.*
+**/*KEY*.txt
+**/secrets/**
+**/*.pem
+**/*.key

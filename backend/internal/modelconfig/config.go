@@ -1,0 +1,304 @@
+package modelconfig
+
+import (
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"os"
+	"sort"
+	"strconv"
+	"strings"
+
+	"gopkg.in/yaml.v3"
+)
+
+type Catalog struct {
+	Revision int     `yaml:"revision" json:"revision"`
+	Models   []Model `yaml:"models" json:"models"`
+	Hash     string  `yaml:"-" json:"hash"`
+}
+
+type Model struct {
+	ID                string       `yaml:"id" json:"id"`
+	DisplayName       string       `yaml:"display_name" json:"display_name"`
+	Provider          string       `yaml:"provider" json:"provider"`
+	ProviderModel     string       `yaml:"provider_model" json:"provider_model"`
+	Enabled           bool         `yaml:"enabled" json:"enabled"`
+	Order             int          `yaml:"order" json:"order"`
+	PromptSuffix      string       `yaml:"prompt_suffix,omitempty" json:"prompt_suffix,omitempty"`
+	RequestParameters []string     `yaml:"request_parameters,omitempty" json:"request_parameters,omitempty"`
+	OutputsPerDraw    int          `yaml:"outputs_per_draw" json:"outputs_per_draw"`
+	Capabilities      Capabilities `yaml:"capabilities" json:"capabilities"`
+	Policy            Policy       `yaml:"policy" json:"policy"`
+}
+
+type Capabilities struct {
+	TextToImage        bool      `yaml:"text_to_image" json:"text_to_image"`
+	ImageToImage       bool      `yaml:"image_to_image" json:"image_to_image"`
+	AspectRatios       []string  `yaml:"aspect_ratios" json:"aspect_ratios"`
+	Resolutions        []string  `yaml:"resolutions" json:"resolutions"`
+	MaxReferenceImages int       `yaml:"max_reference_images" json:"max_reference_images"`
+	MaxReferenceBytes  int64     `yaml:"max_reference_bytes" json:"max_reference_bytes"`
+	DrawCount          DrawCount `yaml:"draw_count" json:"draw_count"`
+}
+
+type DrawCount struct {
+	Min     int `yaml:"min" json:"min"`
+	Max     int `yaml:"max" json:"max"`
+	Default int `yaml:"default" json:"default"`
+}
+
+type Policy struct {
+	SubmitTimeoutSeconds     int      `yaml:"submit_timeout_seconds" json:"submit_timeout_seconds"`
+	GenerationTimeoutSeconds int      `yaml:"generation_timeout_seconds" json:"generation_timeout_seconds"`
+	MaxConcurrency           int      `yaml:"max_concurrency" json:"max_concurrency"`
+	MaxSafeRetries           int      `yaml:"max_safe_retries" json:"max_safe_retries"`
+	BreakerMinRequests       int      `yaml:"breaker_min_requests" json:"breaker_min_requests"`
+	BreakerFailureRatio      float64  `yaml:"breaker_failure_ratio" json:"breaker_failure_ratio"`
+	BreakerCooldownSeconds   int      `yaml:"breaker_cooldown_seconds" json:"breaker_cooldown_seconds"`
+	AllowedOutputHosts       []string `yaml:"allowed_output_hosts" json:"allowed_output_hosts"`
+}
+
+var legacyPolicyJSONKeys = [][2]string{
+	{"SubmitTimeoutSeconds", "submit_timeout_seconds"},
+	{"GenerationTimeoutSeconds", "generation_timeout_seconds"},
+	{"MaxConcurrency", "max_concurrency"},
+	{"MaxSafeRetries", "max_safe_retries"},
+	{"BreakerMinRequests", "breaker_min_requests"},
+	{"BreakerFailureRatio", "breaker_failure_ratio"},
+	{"BreakerCooldownSeconds", "breaker_cooldown_seconds"},
+	{"AllowedOutputHosts", "allowed_output_hosts"},
+}
+
+func (p *Policy) UnmarshalJSON(data []byte) error {
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(data, &fields); err != nil {
+		return err
+	}
+	if err := normalizeLegacyPolicyJSON(fields); err != nil {
+		return err
+	}
+	normalized, err := json.Marshal(fields)
+	if err != nil {
+		return err
+	}
+	type plainPolicy Policy
+	return json.Unmarshal(normalized, (*plainPolicy)(p))
+}
+
+// NormalizeSnapshotJSON canonicalizes the one historical Policy key format
+// without weakening immutable snapshot comparison for any other field.
+func NormalizeSnapshotJSON(data []byte) ([]byte, error) {
+	var snapshot map[string]json.RawMessage
+	if err := json.Unmarshal(data, &snapshot); err != nil {
+		return nil, err
+	}
+	policyData, ok := snapshot["policy"]
+	if !ok {
+		return json.Marshal(snapshot)
+	}
+	var policy map[string]json.RawMessage
+	if err := json.Unmarshal(policyData, &policy); err != nil {
+		return nil, err
+	}
+	if err := normalizeLegacyPolicyJSON(policy); err != nil {
+		return nil, err
+	}
+	normalizedPolicy, err := json.Marshal(policy)
+	if err != nil {
+		return nil, err
+	}
+	snapshot["policy"] = normalizedPolicy
+	return json.Marshal(snapshot)
+}
+
+func normalizeLegacyPolicyJSON(fields map[string]json.RawMessage) error {
+	for _, names := range legacyPolicyJSONKeys {
+		legacyName, currentName := names[0], names[1]
+		legacyValue, legacyExists := fields[legacyName]
+		if !legacyExists {
+			continue
+		}
+		if _, currentExists := fields[currentName]; currentExists {
+			return fmt.Errorf("policy contains both %s and %s", legacyName, currentName)
+		}
+		fields[currentName] = legacyValue
+		delete(fields, legacyName)
+	}
+	return nil
+}
+
+func Load(path string) (*Catalog, error) {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("read model catalog: %w", err)
+	}
+	var catalog Catalog
+	if err := yaml.Unmarshal(b, &catalog); err != nil {
+		return nil, fmt.Errorf("decode model catalog: %w", err)
+	}
+	if err := catalog.Validate(); err != nil {
+		return nil, err
+	}
+	canonical, err := yaml.Marshal(struct {
+		Revision int     `yaml:"revision"`
+		Models   []Model `yaml:"models"`
+	}{Revision: catalog.Revision, Models: catalog.Models})
+	if err != nil {
+		return nil, err
+	}
+	sum := sha256.Sum256(canonical)
+	catalog.Hash = hex.EncodeToString(sum[:])
+	sort.SliceStable(catalog.Models, func(i, j int) bool { return catalog.Models[i].Order < catalog.Models[j].Order })
+	return &catalog, nil
+}
+
+func (c Catalog) Validate() error {
+	if c.Revision < 1 || len(c.Models) == 0 {
+		return errors.New("model catalog requires a positive revision and at least one model")
+	}
+	seen := make(map[string]struct{}, len(c.Models))
+	for _, m := range c.Models {
+		if m.ID == "" || m.DisplayName == "" || m.Provider == "" || m.ProviderModel == "" {
+			return fmt.Errorf("model has missing identity fields: %q", m.ID)
+		}
+		if _, ok := seen[m.ID]; ok {
+			return fmt.Errorf("duplicate model id %q", m.ID)
+		}
+		seen[m.ID] = struct{}{}
+		if m.OutputsPerDraw < 1 || m.OutputsPerDraw > 16 {
+			return fmt.Errorf("model %s has invalid outputs_per_draw", m.ID)
+		}
+		d := m.Capabilities.DrawCount
+		if d.Min < 1 || d.Max > 4 || d.Default < d.Min || d.Default > d.Max {
+			return fmt.Errorf("model %s has invalid draw count capability", m.ID)
+		}
+		if d.Max*m.OutputsPerDraw > 16 {
+			return fmt.Errorf("model %s can exceed the 16-output batch limit", m.ID)
+		}
+		if err := validateCapabilities(m); err != nil {
+			return err
+		}
+		if err := validatePolicy(m); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func validateCapabilities(m Model) error {
+	capabilities := m.Capabilities
+	if !capabilities.TextToImage && !capabilities.ImageToImage {
+		return fmt.Errorf("model %s must support at least one generation mode", m.ID)
+	}
+	if len(capabilities.AspectRatios) == 0 || len(capabilities.Resolutions) == 0 {
+		return fmt.Errorf("model %s requires at least one aspect ratio and resolution", m.ID)
+	}
+	seenRatios := make(map[string]struct{}, len(capabilities.AspectRatios))
+	for _, ratio := range capabilities.AspectRatios {
+		parts := strings.Split(ratio, ":")
+		if len(parts) != 2 {
+			return fmt.Errorf("model %s has invalid aspect ratio %q", m.ID, ratio)
+		}
+		width, widthErr := strconv.Atoi(parts[0])
+		height, heightErr := strconv.Atoi(parts[1])
+		if widthErr != nil || heightErr != nil || width < 1 || height < 1 {
+			return fmt.Errorf("model %s has invalid aspect ratio %q", m.ID, ratio)
+		}
+		if _, exists := seenRatios[ratio]; exists {
+			return fmt.Errorf("model %s has duplicate aspect ratio %q", m.ID, ratio)
+		}
+		seenRatios[ratio] = struct{}{}
+	}
+	if duplicateOrBlank(capabilities.Resolutions) {
+		return fmt.Errorf("model %s has blank or duplicate resolutions", m.ID)
+	}
+	if capabilities.MaxReferenceImages < 0 || capabilities.MaxReferenceImages > 16 {
+		return fmt.Errorf("model %s has invalid max_reference_images", m.ID)
+	}
+	const uploadByteLimit = 25 << 20
+	if capabilities.ImageToImage && (capabilities.MaxReferenceImages == 0 || capabilities.MaxReferenceBytes < 1 || capabilities.MaxReferenceBytes > uploadByteLimit) {
+		return fmt.Errorf("model %s enables image_to_image without valid reference image capacity", m.ID)
+	}
+	if !capabilities.ImageToImage && (capabilities.MaxReferenceImages != 0 || capabilities.MaxReferenceBytes != 0) {
+		return fmt.Errorf("model %s has reference image capacity while image_to_image is disabled", m.ID)
+	}
+	if duplicateOrBlank(m.RequestParameters) {
+		return fmt.Errorf("model %s has blank or duplicate request_parameters", m.ID)
+	}
+
+	parameters := make(map[string]struct{}, len(m.RequestParameters))
+	for _, parameter := range m.RequestParameters {
+		parameters[parameter] = struct{}{}
+	}
+	has := func(parameter string) bool {
+		_, ok := parameters[parameter]
+		return ok
+	}
+	switch m.Provider {
+	case "openrouter":
+		if capabilities.ImageToImage && !has("input_references") {
+			return fmt.Errorf("model %s enables image_to_image without OpenRouter input_references", m.ID)
+		}
+		if len(capabilities.AspectRatios) > 1 && !has("aspect_ratio") {
+			return fmt.Errorf("model %s advertises selectable aspect ratios without OpenRouter aspect_ratio", m.ID)
+		}
+		if len(capabilities.Resolutions) > 1 && !has("resolution") {
+			return fmt.Errorf("model %s advertises selectable resolutions without OpenRouter resolution", m.ID)
+		}
+		if m.OutputsPerDraw > 1 && !has("n") {
+			return fmt.Errorf("model %s produces multiple outputs without OpenRouter n", m.ID)
+		}
+	case "legnext":
+		if len(m.Policy.AllowedOutputHosts) == 0 {
+			return fmt.Errorf("model %s requires an output host allowlist", m.ID)
+		}
+	default:
+		return fmt.Errorf("model %s uses unsupported provider %q", m.ID, m.Provider)
+	}
+	return nil
+}
+
+func validatePolicy(m Model) error {
+	policy := m.Policy
+	if policy.SubmitTimeoutSeconds < 1 || policy.GenerationTimeoutSeconds < 1 || policy.MaxConcurrency < 1 || policy.MaxSafeRetries < 0 {
+		return fmt.Errorf("model %s has invalid timeout, concurrency, or retry policy", m.ID)
+	}
+	if policy.BreakerMinRequests < 1 || policy.BreakerFailureRatio <= 0 || policy.BreakerFailureRatio > 1 || policy.BreakerCooldownSeconds < 1 {
+		return fmt.Errorf("model %s has invalid breaker policy", m.ID)
+	}
+	if duplicateOrBlank(policy.AllowedOutputHosts) {
+		return fmt.Errorf("model %s has blank or duplicate output hosts", m.ID)
+	}
+	for _, host := range policy.AllowedOutputHosts {
+		if host != strings.ToLower(host) || strings.ContainsAny(host, "/:*?#@") || strings.HasPrefix(host, ".") || strings.HasSuffix(host, ".") {
+			return fmt.Errorf("model %s has invalid output host %q", m.ID, host)
+		}
+	}
+	return nil
+}
+
+func duplicateOrBlank(values []string) bool {
+	seen := make(map[string]struct{}, len(values))
+	for _, value := range values {
+		if value == "" || strings.TrimSpace(value) != value {
+			return true
+		}
+		if _, exists := seen[value]; exists {
+			return true
+		}
+		seen[value] = struct{}{}
+	}
+	return false
+}
+
+func (c Catalog) Find(id string) (Model, bool) {
+	for _, model := range c.Models {
+		if model.ID == id && model.Enabled {
+			return model, true
+		}
+	}
+	return Model{}, false
+}

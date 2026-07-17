@@ -1,0 +1,315 @@
+name: internal-image-studio
+
+x-app-env: &app-env
+  APP_ENV: ${APP_ENV:-production}
+  APP_PUBLIC_URL: ${APP_PUBLIC_URL:?set APP_PUBLIC_URL to the public HTTPS origin}
+  MODEL_CONFIG_PATH: /app/config/models.yaml
+  ASSET_ROOT: /data
+  SESSION_COOKIE_SECURE: ${SESSION_COOKIE_SECURE:-true}
+  SESSION_TTL: ${SESSION_TTL:-12h}
+  SESSION_IDLE_TTL: ${SESSION_IDLE_TTL:-2h}
+  PROVIDER_MODE: ${PROVIDER_MODE:-live}
+  LOG_LEVEL: ${LOG_LEVEL:-info}
+  PROVIDER_CALLBACK_SECRET_FILE: /run/secrets/provider_callback_secret
+  PROVIDER_URL_SIGNING_SECRET_FILE: /run/secrets/provider_url_signing_secret
+
+x-default-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "5"
+
+services:
+  postgres:
+    image: postgres:18.4-bookworm@sha256:1961f96e6029a02c3812d7cb329a3b03a3ac2bb067058dec17b0f5596aca9296
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: studio
+      POSTGRES_USER: studio_bootstrap
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_bootstrap_password
+    secrets: [postgres_bootstrap_password]
+    command:
+      [
+        "postgres",
+        "-c",
+        "shared_buffers=1GB",
+        "-c",
+        "effective_cache_size=3GB",
+        "-c",
+        "max_connections=100",
+        "-c",
+        "wal_compression=on",
+      ]
+    volumes: [postgres_data:/var/lib/postgresql/data]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U studio_bootstrap -d studio"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    mem_limit: 4g
+    cpus: 2.0
+    logging: *default-logging
+    networks: [backend]
+
+  db-bootstrap:
+    image: ${TOOLS_IMAGE:-internal-image-studio-tools:local}
+    build: { context: ., dockerfile: backend/Dockerfile, target: tools }
+    command: ["db-bootstrap"]
+    secrets:
+      [
+        postgres_bootstrap_password,
+        postgres_owner_password,
+        postgres_api_password,
+        postgres_worker_password,
+      ]
+    depends_on:
+      postgres: { condition: service_healthy }
+    user: "65532:65532"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    tmpfs: ["/tmp:rw,noexec,nosuid,size=16m"]
+    networks: [backend]
+    restart: "no"
+
+  migrate:
+    image: ${TOOLS_IMAGE:-internal-image-studio-tools:local}
+    build: { context: ., dockerfile: backend/Dockerfile, target: tools }
+    environment:
+      <<: *app-env
+      DATABASE_URL: "postgres://studio_owner@postgres:5432/studio?sslmode=disable"
+      DATABASE_PASSWORD_FILE: /run/secrets/postgres_owner_password
+      MIGRATIONS_DIR: /app/migrations
+    secrets: [postgres_owner_password]
+    volumes: [./backend/migrations:/app/migrations:ro]
+    command: ["migrate"]
+    depends_on:
+      db-bootstrap: { condition: service_completed_successfully }
+    user: "65532:65532"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    tmpfs: ["/tmp:rw,noexec,nosuid,size=16m"]
+    networks: [backend]
+    restart: "no"
+
+  model-apply:
+    image: ${TOOLS_IMAGE:-internal-image-studio-tools:local}
+    build: { context: ., dockerfile: backend/Dockerfile, target: tools }
+    environment:
+      <<: *app-env
+      DATABASE_URL: "postgres://studio_owner@postgres:5432/studio?sslmode=disable"
+      DATABASE_PASSWORD_FILE: /run/secrets/postgres_owner_password
+    secrets: [postgres_owner_password]
+    volumes: [./config:/app/config:ro]
+    command: ["modelctl", "apply"]
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+    user: "65532:65532"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    tmpfs: ["/tmp:rw,noexec,nosuid,size=16m"]
+    networks: [backend]
+    restart: "no"
+
+  web:
+    image: ${WEB_IMAGE:-internal-image-studio-web:local}
+    build: { context: ., dockerfile: web/Dockerfile }
+    restart: unless-stopped
+    ports: ["127.0.0.1:8080:8080"]
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/health"]
+      interval: 15s
+      timeout: 3s
+      retries: 5
+    init: true
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    tmpfs: ["/tmp:rw,noexec,nosuid,size=16m,uid=101,gid=101,mode=0700"]
+    mem_limit: 128m
+    cpus: 0.5
+    logging: *default-logging
+    networks: [frontend]
+
+  api:
+    image: ${API_IMAGE:-internal-image-studio-api:local}
+    build: { context: ., dockerfile: backend/Dockerfile, target: api }
+    restart: unless-stopped
+    environment:
+      <<: *app-env
+      DATABASE_URL: "postgres://studio_api@postgres:5432/studio?sslmode=disable"
+      DATABASE_PASSWORD_FILE: /run/secrets/postgres_api_password
+    secrets:
+      [
+        postgres_api_password,
+        provider_callback_secret,
+        provider_url_signing_secret,
+      ]
+    volumes:
+      - ./config:/app/config:ro
+      # Public-facing API can read immutable assets but can only write the
+      # quarantine/tmp subtree used by streamed uploads.
+      - ${DATA_ROOT:?set DATA_ROOT to /srv/internal-image-studio/data}:/data:ro
+      - ${DATA_ROOT:?set DATA_ROOT to /srv/internal-image-studio/data}/uploads:/data/uploads:rw
+    ports: ["127.0.0.1:8081:8081"]
+    healthcheck:
+      test: ["CMD", "/api", "healthcheck"]
+      interval: 15s
+      timeout: 3s
+      retries: 5
+    depends_on:
+      model-apply: { condition: service_completed_successfully }
+    init: true
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    tmpfs: ["/tmp:rw,noexec,nosuid,size=16m"]
+    stop_grace_period: 30s
+    mem_limit: 768m
+    cpus: 1.5
+    logging: *default-logging
+    networks: [frontend, backend]
+
+  worker:
+    image: ${WORKER_IMAGE:-internal-image-studio-worker:local}
+    build: { context: ., dockerfile: backend/Dockerfile, target: worker }
+    restart: unless-stopped
+    environment:
+      <<: *app-env
+      DATABASE_URL: "postgres://studio_worker@postgres:5432/studio?sslmode=disable"
+      DATABASE_PASSWORD_FILE: /run/secrets/postgres_worker_password
+      LEGNEXT_API_KEY_FILE: /run/secrets/legnext_api_key
+      OPENROUTER_API_KEY_FILE: /run/secrets/openrouter_api_key
+      VIPS_CONCURRENCY: "2"
+      VIPS_DISC_THRESHOLD: "268435456"
+      MALLOC_ARENA_MAX: "2"
+      TMPDIR: /data/uploads/tmp
+    secrets:
+      [
+        postgres_worker_password,
+        legnext_api_key,
+        openrouter_api_key,
+        provider_callback_secret,
+        provider_url_signing_secret,
+      ]
+    volumes:
+      - ./config:/app/config:ro
+      - ${DATA_ROOT:?set DATA_ROOT to /srv/internal-image-studio/data}:/data
+    depends_on:
+      model-apply: { condition: service_completed_successfully }
+    init: true
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    healthcheck:
+      test: ["CMD", "/worker", "healthcheck"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 45s
+    stop_grace_period: 120s
+    mem_limit: 4g
+    cpus: 3.5
+    logging: *default-logging
+    networks: [backend, egress]
+
+  prometheus:
+    image: prom/prometheus:v3.7.3@sha256:49214755b6153f90a597adcbff0252cc61069f8ab69ce8411285cd4a560e8038
+    profiles: [observability]
+    restart: unless-stopped
+    volumes:
+      - ./ops/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./ops/prometheus-rules.yml:/etc/prometheus/prometheus-rules.yml:ro
+      - prometheus_data:/prometheus
+    ports: ["127.0.0.1:9090:9090"]
+    mem_limit: 512m
+    cpus: 0.5
+    logging: *default-logging
+    networks: [backend]
+
+  alertmanager:
+    image: prom/alertmanager:v0.32.1@sha256:51a825c2a40acc3e338fdd00d622e01ec090f72be2b3ea46be0839cd47a4d286
+    profiles: [alerting]
+    restart: unless-stopped
+    command:
+      - --config.file=/etc/alertmanager/alertmanager.yml
+      - --storage.path=/alertmanager
+      - --cluster.listen-address=
+      - --enable-feature=utf8-strict-mode
+    secrets: [alertmanager_webhook_url]
+    volumes:
+      - ./ops/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+      - alertmanager_data:/alertmanager
+    ports: ["127.0.0.1:9093:9093"]
+    healthcheck:
+      test: ["CMD", "/bin/amtool", "--alertmanager.url=http://127.0.0.1:9093", "config", "show"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+    user: "65534:65534"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    tmpfs: ["/tmp:rw,noexec,nosuid,size=16m"]
+    mem_limit: 256m
+    cpus: 0.25
+    logging: *default-logging
+    networks: [backend, egress]
+
+  node-exporter:
+    image: prom/node-exporter:v1.9.1@sha256:d00a542e409ee618a4edc67da14dd48c5da66726bbd5537ab2af9c1dfc442c8a
+    profiles: [observability]
+    restart: unless-stopped
+    command:
+      - --path.rootfs=/host
+      - --collector.filesystem.mount-points-exclude=^/(dev|proc|sys|var/lib/docker/.+|var/lib/containers/.+)($|/)
+    volumes:
+      - /:/host:ro,rslave
+    mem_limit: 128m
+    cpus: 0.25
+    logging: *default-logging
+    networks: [backend]
+
+  grafana:
+    image: grafana/grafana:12.3.1@sha256:2175aaa91c96733d86d31cf270d5310b278654b03f5718c59de12a865380a31f
+    profiles: [observability]
+    restart: unless-stopped
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD__FILE: /run/secrets/grafana_admin_password
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    secrets: [grafana_admin_password]
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./ops/grafana/provisioning:/etc/grafana/provisioning:ro
+    ports: ["127.0.0.1:3001:3000"]
+    mem_limit: 512m
+    cpus: 0.5
+    logging: *default-logging
+    networks: [backend]
+
+secrets:
+  postgres_bootstrap_password: { file: "${POSTGRES_BOOTSTRAP_PASSWORD_SECRET_SOURCE:-./secrets/postgres_bootstrap_password}" }
+  postgres_owner_password: { file: "${POSTGRES_OWNER_PASSWORD_SECRET_SOURCE:-./secrets/postgres_owner_password}" }
+  postgres_api_password: { file: "${POSTGRES_API_PASSWORD_SECRET_SOURCE:-./secrets/postgres_api_password}" }
+  postgres_worker_password: { file: "${POSTGRES_WORKER_PASSWORD_SECRET_SOURCE:-./secrets/postgres_worker_password}" }
+  legnext_api_key: { file: "${LEGNEXT_API_KEY_SECRET_SOURCE:-./secrets/legnext_api_key}" }
+  openrouter_api_key: { file: "${OPENROUTER_API_KEY_SECRET_SOURCE:-./secrets/openrouter_api_key}" }
+  provider_callback_secret: { file: "${PROVIDER_CALLBACK_SECRET_SOURCE:-./secrets/provider_callback_secret}" }
+  provider_url_signing_secret: { file: "${PROVIDER_URL_SIGNING_SECRET_SOURCE:-./secrets/provider_url_signing_secret}" }
+  grafana_admin_password: { file: "${GRAFANA_ADMIN_PASSWORD_SECRET_SOURCE:-./secrets/grafana_admin_password}" }
+  alertmanager_webhook_url: { file: "${ALERTMANAGER_WEBHOOK_URL_SECRET_SOURCE:-./secrets/alertmanager_webhook_url}" }
+
+volumes:
+  postgres_data:
+  prometheus_data:
+  grafana_data:
+  alertmanager_data:
+
+networks:
+  frontend:
+    internal: true
+  backend:
+    internal: true
+  egress:

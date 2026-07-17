@@ -1,0 +1,12 @@
+[Unit]
+Description=Cornfield monthly backup restore verification
+After=docker.service network-online.target
+Requires=docker.service
+
+[Service]
+Type=oneshot
+EnvironmentFile=/etc/internal-image-studio/backup.env
+ExecStart=/opt/internal-image-studio/ops/restore-check.sh
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7

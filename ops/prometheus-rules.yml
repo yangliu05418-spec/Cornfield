@@ -1,0 +1,77 @@
+groups:
+  - name: internal-image-studio
+    rules:
+      - alert: ImageStudioTargetDown
+        expr: up == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Cornfield target {{ $labels.job }} is unavailable"
+      - alert: ImageStudioDataDiskLow
+        expr: |
+          100 * node_filesystem_avail_bytes{fstype!~"tmpfs|overlay|squashfs"}
+            / node_filesystem_size_bytes{fstype!~"tmpfs|overlay|squashfs"} < 20
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Host filesystem {{ $labels.mountpoint }} has less than 20% free space"
+      - alert: ImageStudioDataDiskCritical
+        expr: |
+          100 * node_filesystem_avail_bytes{fstype!~"tmpfs|overlay|squashfs"}
+            / node_filesystem_size_bytes{fstype!~"tmpfs|overlay|squashfs"} < 10
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Host filesystem {{ $labels.mountpoint }} has less than 10% free space"
+      - alert: ImageStudioWorkerHeartbeatMissing
+        expr: absent(image_studio_service_heartbeat_age_seconds{service="worker"})
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Cornfield worker heartbeat is missing"
+      - alert: ImageStudioWorkerHeartbeatStale
+        expr: image_studio_service_heartbeat_age_seconds{service="worker"} > 45
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Cornfield worker heartbeat is stale"
+      - alert: ImageStudioQueueStalled
+        expr: image_studio_queue_oldest_seconds > 120
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "The oldest Cornfield generation has waited more than two minutes"
+      - alert: ImageStudioSubmissionUncertain
+        expr: image_studio_generation_jobs{status="submission_uncertain"} > 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "A provider submission requires manual reconciliation"
+      - alert: ImageStudioProviderBreakerOpen
+        expr: image_studio_provider_breaker_open == 1
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Provider {{ $labels.provider }} circuit breaker is open"
+      - alert: ImageStudioProviderFailures
+        expr: image_studio_provider_attempts_5m{outcome="failed"} >= 5
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Provider {{ $labels.provider }} has repeated failures"
+      - alert: ImageStudioUploadCapacityHigh
+        expr: image_studio_upload_reserved_bytes > 805306368 or image_studio_upload_sessions > 24
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Outstanding upload reservations exceed 75% of the global limit"

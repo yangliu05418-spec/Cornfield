@@ -1,0 +1,473 @@
+import { expect, test } from '@playwright/test'
+import type { Page } from '@playwright/test'
+
+const mockImage = `<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="900" viewBox="0 0 1200 900"><defs><linearGradient id="g" x2="1" y2="1"><stop stop-color="#15191d"/><stop offset=".52" stop-color="#556b3a"/><stop offset="1" stop-color="#d1fe17"/></linearGradient></defs><rect width="1200" height="900" fill="url(#g)"/><circle cx="770" cy="300" r="180" fill="#d1fe17" opacity=".28"/><path d="M0 690 Q330 510 660 700 T1200 620 V900 H0Z" fill="#090b0c" opacity=".76"/></svg>`
+
+test('landing page uses the production static shell', async ({ page }) => {
+  const errors = capturePageErrors(page)
+  await page.setViewportSize({ width: 1440, height: 960 })
+  await page.goto('/')
+
+  await expect(page).toHaveTitle('Cornfield — Private Image Studio')
+  await expect(page.getByRole('heading', { level: 1 })).toContainText(
+    'Make images.',
+  )
+  await expect(
+    page.getByRole('link', { name: 'ENTER STUDIO' }),
+  ).toHaveAttribute('href', '/app/login')
+  const executableInlineScripts = await page
+    .locator('script:not([src])')
+    .evaluateAll(
+      (scripts) => scripts.filter((script) => script.textContent.trim()).length,
+    )
+  expect(executableInlineScripts).toBe(0)
+  expect(errors).toEqual([])
+})
+
+test('desktop studio supports density, preview, and optimistic generation', async ({
+  page,
+}, testInfo) => {
+  const errors = capturePageErrors(page)
+  await page.setViewportSize({ width: 1440, height: 960 })
+  await installStudioMocks(page)
+  await page.goto('/app/create')
+
+  const density = page.getByRole('slider', { name: '调整图片墙缩放' })
+  await expect(density).toHaveValue('2')
+  await page.getByRole('button', { name: '放大图片' }).click()
+  await expect(density).toHaveValue('3')
+
+  const firstCard = page
+    .getByRole('article', { name: '打开生成图片预览' })
+    .first()
+  await firstCard.focus()
+  await firstCard.press('Enter')
+  await expect(page.getByRole('dialog', { name: '图片预览' })).toBeVisible()
+  await page.keyboard.press('Escape')
+  await expect(page.getByRole('dialog', { name: '图片预览' })).toBeHidden()
+
+  await page
+    .getByRole('textbox', { name: '生成提示词' })
+    .fill('A quiet cornfield under a distant ringed planet')
+  await page.getByRole('button', { name: '增加抽卡' }).click()
+  await page.getByRole('button', { name: '生成', exact: true }).click()
+
+  await expect(page.getByText('正在创建', { exact: true })).toHaveCount(2, {
+    timeout: 700,
+  })
+  await expect(page.locator('.generate-button')).toHaveText('提交中…')
+  await expect(page.getByText('排队中', { exact: true })).toHaveCount(2, {
+    timeout: 5_000,
+  })
+  const cancelResponse = page.waitForResponse(
+    (response) =>
+      response.url().endsWith('/cancel') &&
+      response.request().method() === 'POST',
+  )
+  await page.getByRole('button', { name: '取消这次抽卡' }).first().click()
+  expect((await cancelResponse).status()).toBe(202)
+  await expect(
+    page.getByText('已停止等待并会丢弃迟到结果；上游可能已经产生费用'),
+  ).toBeVisible()
+  await page.screenshot({ path: testInfo.outputPath('desktop-studio.png') })
+  expect(errors).toEqual([])
+})
+
+test('a restored temporary-password session cannot enter the studio', async ({
+  page,
+}) => {
+  await installStudioMocks(page, {
+    user: {
+      id: 'temporary-user',
+      username: 'temporary',
+      display_name: 'Temporary',
+      role: 'member',
+      must_change_password: true,
+    },
+  })
+  await page.goto('/app/create')
+  await expect(page).toHaveURL(/\/app\/change-password$/)
+  await expect(
+    page.getByRole('heading', { name: '设置你的新密码' }),
+  ).toBeVisible()
+})
+
+test('a protected API 401 clears the studio and returns to login', async ({
+  page,
+}) => {
+  const studio = await installStudioMocks(page)
+  await page.goto('/app/create')
+  await expect(
+    page.getByRole('article', { name: '打开生成图片预览' }).first(),
+  ).toBeVisible()
+
+  studio.revoke()
+  await page.getByRole('link', { name: '资产' }).click()
+
+  await expect(page).toHaveURL(/\/app\/login$/)
+  await expect(
+    page.getByRole('heading', { name: '回到创作现场' }),
+  ).toBeVisible()
+  await expect(
+    page.getByRole('article', { name: '打开生成图片预览' }),
+  ).toHaveCount(0)
+})
+
+test('loads the next generation page so an older active draw stays cancellable', async ({
+  page,
+}) => {
+  await installStudioMocks(page, {
+    generationPages: {
+      '': {
+        items: [
+          {
+            id: 'finished-batch',
+            model_id: 'nano-banana-pro',
+            prompt: 'finished',
+            aspect_ratio: '1:1',
+            resolution: '1K',
+            draw_count: 1,
+            expected_outputs: 1,
+            completed_outputs: 1,
+            status: 'succeeded',
+            created_at: new Date().toISOString(),
+            jobs: [
+              {
+                id: 'finished-job',
+                draw_index: 0,
+                status: 'succeeded',
+                expected_outputs: 1,
+                outputs: [],
+              },
+            ],
+          },
+        ],
+        next_cursor: 'older',
+      },
+      older: {
+        items: [
+          {
+            id: 'active-batch',
+            model_id: 'nano-banana-pro',
+            prompt: 'older active draw',
+            aspect_ratio: '1:1',
+            resolution: '1K',
+            draw_count: 1,
+            expected_outputs: 1,
+            completed_outputs: 0,
+            status: 'queued',
+            created_at: new Date(Date.now() - 1_000).toISOString(),
+            jobs: [
+              {
+                id: 'active-job',
+                draw_index: 0,
+                status: 'queued',
+                expected_outputs: 1,
+                outputs: [],
+              },
+            ],
+          },
+        ],
+        next_cursor: '',
+      },
+    },
+  })
+  await page.goto('/app/create')
+
+  await expect(page.getByText('older active draw')).toBeVisible()
+  await expect(page.getByRole('button', { name: '取消这次抽卡' })).toBeVisible()
+})
+
+test('retries a lost create response with the same idempotency key', async ({
+  page,
+}) => {
+  const studio = await installStudioMocks(page, {
+    generationPostNetworkFailures: 2,
+  })
+  await page.goto('/app/create')
+  await page
+    .getByRole('textbox', { name: '生成提示词' })
+    .fill('One request across a broken connection')
+  await page.getByRole('button', { name: '生成', exact: true }).click()
+
+  await expect(page.getByText('排队中', { exact: true })).toBeVisible({
+    timeout: 7_000,
+  })
+  expect(studio.postAttempts()).toBe(3)
+  expect(new Set(studio.postKeys()).size).toBe(1)
+  expect(studio.postKeys()[0]).not.toBe('')
+})
+
+test('polling restores a completed asset when no SSE job event arrives', async ({
+  page,
+}) => {
+  const studio = await installStudioMocks(page)
+  await page.goto('/app/create')
+  await expect(page.locator('img[src*="asset=0"]')).toBeVisible()
+
+  studio.prependAsset({
+    id: 'fallback',
+    kind: 'generation',
+    media_type: 'image/webp',
+    width: 1024,
+    height: 1024,
+    byte_size: 1_000,
+    sha256: 'hash-fallback',
+    url: '/mock-image.svg?asset=fallback',
+    thumb_320_url: '/mock-image.svg?asset=fallback&size=320',
+    thumb_640_url: '/mock-image.svg?asset=fallback&size=640',
+    thumb_1280_url: '/mock-image.svg?asset=fallback&size=1280',
+    created_at: new Date().toISOString(),
+  })
+  studio.setGenerations([
+    {
+      id: 'fallback-batch',
+      model_id: 'nano-banana-pro',
+      prompt: 'completed while SSE was unavailable',
+      aspect_ratio: '1:1',
+      resolution: '1K',
+      draw_count: 1,
+      expected_outputs: 1,
+      completed_outputs: 1,
+      status: 'succeeded',
+      created_at: new Date().toISOString(),
+      jobs: [
+        {
+          id: 'fallback-job',
+          draw_index: 0,
+          status: 'succeeded',
+          expected_outputs: 1,
+          outputs: [],
+        },
+      ],
+    },
+  ])
+
+  await expect(page.locator('img[src*="asset=fallback"]')).toBeVisible({
+    timeout: 13_000,
+  })
+})
+
+test.describe('mobile studio', () => {
+  test.use({ viewport: { width: 390, height: 844 }, hasTouch: true })
+
+  test('keeps a rounded, point-free generate action', async ({
+    page,
+  }, testInfo) => {
+    const errors = capturePageErrors(page)
+    await installStudioMocks(page)
+    await page.goto('/app/create')
+
+    const generate = page.locator('.generate-button')
+    await expect(generate).toHaveText('生成')
+    await expect(generate).not.toContainText(/积分|points?|credits?|\d/i)
+
+    const radii = await generate.evaluate((button) => ({
+      button: Number.parseFloat(getComputedStyle(button).borderTopLeftRadius),
+      generator: Number.parseFloat(
+        getComputedStyle(button.closest('.generator')!).borderTopLeftRadius,
+      ),
+    }))
+    expect(radii.button).toBeGreaterThanOrEqual(8)
+    expect(radii.generator).toBeGreaterThanOrEqual(8)
+
+    await page.getByRole('article', { name: '打开生成图片预览' }).first().tap()
+    await expect(page.getByRole('dialog', { name: '图片预览' })).toBeVisible()
+    await page.getByRole('button', { name: '关闭预览' }).click()
+    await expect(page.getByRole('dialog', { name: '图片预览' })).toBeHidden()
+    await page.screenshot({ path: testInfo.outputPath('mobile-studio.png') })
+    expect(errors).toEqual([])
+  })
+})
+
+function capturePageErrors(page: Page) {
+  const errors: string[] = []
+  page.on('console', (message) => {
+    if (message.type() === 'error') errors.push(message.text())
+  })
+  page.on('pageerror', (error) => errors.push(error.message))
+  return errors
+}
+
+async function installStudioMocks(
+  page: Page,
+  options: {
+    user?: {
+      id: string
+      username: string
+      display_name: string
+      role: 'member' | 'admin'
+      must_change_password: boolean
+    }
+    generationPages?: Record<string, { items: unknown[]; next_cursor: string }>
+    generationPostNetworkFailures?: number
+  } = {},
+) {
+  let assets = Array.from({ length: 18 }, (_, index) => ({
+    id: `asset-${index}`,
+    kind: 'generation',
+    media_type: 'image/webp',
+    width: index % 3 === 0 ? 1024 : index % 3 === 1 ? 1280 : 900,
+    height: index % 3 === 0 ? 1024 : index % 3 === 1 ? 720 : 1200,
+    byte_size: 1_000,
+    sha256: `hash-${index}`,
+    url: `/mock-image.svg?asset=${index}`,
+    thumb_320_url: `/mock-image.svg?asset=${index}&size=320`,
+    thumb_640_url: `/mock-image.svg?asset=${index}&size=640`,
+    thumb_1280_url: `/mock-image.svg?asset=${index}&size=1280`,
+    created_at: new Date(Date.now() - index * 1_000).toISOString(),
+  }))
+  let generations: unknown[] = []
+  let revoked = false
+  let postAttempts = 0
+  const postKeys: string[] = []
+
+  await page.route('**/mock-image.svg*', (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: 'image/svg+xml',
+      body: mockImage,
+    }),
+  )
+  await page.route('**/api/v1/**', async (route) => {
+    const request = route.request()
+    const url = new URL(request.url())
+    const { pathname } = url
+    if (revoked) {
+      return json(
+        route,
+        { error: { code: 'UNAUTHORIZED', message: '登录已失效' } },
+        401,
+      )
+    }
+    if (pathname === '/api/v1/auth/me') {
+      return json(route, {
+        user: options.user ?? {
+          id: 'qa-user',
+          username: 'qa',
+          display_name: 'QA',
+          role: 'admin',
+          must_change_password: false,
+        },
+      })
+    }
+    if (pathname === '/api/v1/models') {
+      return json(route, {
+        revision: 'qa-revision',
+        models: [
+          {
+            id: 'nano-banana-pro',
+            display_name: 'Nano Banana Pro',
+            provider: 'openrouter',
+            outputs_per_draw: 1,
+            capabilities: {
+              text_to_image: true,
+              image_to_image: true,
+              aspect_ratios: ['1:1', '3:4', '16:9'],
+              resolutions: ['1K', '2K'],
+              max_reference_images: 4,
+              max_reference_bytes: 26214400,
+              draw_count: { min: 1, max: 4, default: 1 },
+            },
+          },
+        ],
+      })
+    }
+    if (pathname === '/api/v1/assets') {
+      return json(route, { items: assets, next_cursor: '' })
+    }
+    if (pathname === '/api/v1/generations' && request.method() === 'GET') {
+      const configuredPage =
+        options.generationPages?.[url.searchParams.get('cursor') ?? '']
+      return json(
+        route,
+        configuredPage ?? { items: generations, next_cursor: '' },
+      )
+    }
+    if (pathname === '/api/v1/generations' && request.method() === 'POST') {
+      postAttempts++
+      postKeys.push(request.headers()['idempotency-key'] ?? '')
+      if (postAttempts <= (options.generationPostNetworkFailures ?? 0)) {
+        return route.abort('connectionreset')
+      }
+      const input = request.postDataJSON() as {
+        model_id: string
+        prompt: string
+        aspect_ratio: string
+        resolution: string
+        draw_count: number
+      }
+      await new Promise((resolve) => setTimeout(resolve, 2_000))
+      const batch = {
+        id: 'batch-qa',
+        model_id: input.model_id,
+        prompt: input.prompt,
+        aspect_ratio: input.aspect_ratio,
+        resolution: input.resolution,
+        draw_count: input.draw_count,
+        expected_outputs: input.draw_count,
+        completed_outputs: 0,
+        status: 'queued',
+        created_at: new Date().toISOString(),
+        jobs: Array.from({ length: input.draw_count }, (_, index) => ({
+          id: `job-qa-${index}`,
+          draw_index: index,
+          status: 'queued',
+          expected_outputs: 1,
+          outputs: [],
+        })),
+      }
+      generations = [batch]
+      return json(route, batch, 201)
+    }
+    if (pathname.endsWith('/cancel') && request.method() === 'POST') {
+      return json(
+        route,
+        {
+          status: 'cancelling',
+          cancel_mode: 'discard_result_only',
+          cost_may_have_been_incurred: true,
+        },
+        202,
+      )
+    }
+    if (pathname === '/api/v1/events') {
+      return route.fulfill({
+        status: 200,
+        contentType: 'text/event-stream',
+        headers: { 'cache-control': 'no-cache' },
+        body: ': connected\n\n',
+      })
+    }
+    return json(
+      route,
+      { error: { code: 'E2E_UNMOCKED', message: pathname } },
+      404,
+    )
+  })
+  return {
+    revoke: () => {
+      revoked = true
+    },
+    setGenerations: (items: unknown[]) => {
+      generations = items
+    },
+    prependAsset: (asset: (typeof assets)[number]) => {
+      assets = [asset, ...assets]
+    },
+    postAttempts: () => postAttempts,
+    postKeys: () => [...postKeys],
+  }
+}
+
+function json(
+  route: Parameters<Parameters<Page['route']>[1]>[0],
+  body: unknown,
+  status = 200,
+) {
+  return route.fulfill({
+    status,
+    contentType: 'application/json',
+    body: JSON.stringify(body),
+  })
+}

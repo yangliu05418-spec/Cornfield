@@ -1,0 +1,16 @@
+{
+  "short_name": "Cornfield",
+  "name": "Cornfield Private Image Studio",
+  "icons": [
+    {
+      "src": "cornfield-mark.svg",
+      "type": "image/svg+xml",
+      "sizes": "any",
+      "purpose": "any maskable"
+    }
+  ],
+  "start_url": "/",
+  "display": "standalone",
+  "theme_color": "#0f1113",
+  "background_color": "#0f1113"
+}

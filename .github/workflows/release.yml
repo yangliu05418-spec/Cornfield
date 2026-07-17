@@ -1,0 +1,570 @@
+name: release-images
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+# Jobs opt in to only the token scopes they need. In particular, untrusted build
+# inputs and scanners never receive a token that can write packages.
+permissions: {}
+
+concurrency:
+  group: release-images-${{ github.sha }}
+  cancel-in-progress: false
+
+env:
+  REGISTRY: ghcr.io
+  TRIVY_VERSION: v0.72.0
+  OCI_LAYOUT_TAG: release
+  SBOM_GENERATOR: docker/buildkit-syft-scanner:stable-1@sha256:79e7b013cbec16bbb436f312819a49a4a57752b2270c1a9332ae1a10fcc82a68
+
+jobs:
+  build-scan:
+    name: Build and scan immutable OCI archives
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    permissions:
+      actions: read
+      contents: read
+    defaults:
+      run:
+        shell: bash
+
+    steps:
+      - name: Check out the release commit
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          fetch-tags: true
+          persist-credentials: false
+
+      - name: Require this commit on main with successful CI
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          git show-ref --verify --quiet refs/remotes/origin/main || {
+            echo "origin/main was not fetched" >&2
+            exit 1
+          }
+          git merge-base --is-ancestor "$GITHUB_SHA" refs/remotes/origin/main || {
+            echo "Release commit is not reachable from origin/main" >&2
+            exit 1
+          }
+
+          successful_runs="$(
+            gh api \
+              --method GET \
+              -H 'Accept: application/vnd.github+json' \
+              -H 'X-GitHub-Api-Version: 2022-11-28' \
+              "/repos/${GITHUB_REPOSITORY}/actions/workflows/ci.yml/runs" \
+              -f head_sha="$GITHUB_SHA" \
+              -f status=completed \
+              -f per_page=100 \
+              --jq '[.workflow_runs[] | select(.event == "push" and .head_branch == "main" and .conclusion == "success")] | length'
+          )"
+          [[ "$successful_runs" =~ ^[0-9]+$ ]] && (( successful_runs > 0 )) || {
+            echo "No successful main-branch CI run exists for ${GITHUB_SHA}" >&2
+            exit 1
+          }
+
+      - name: Establish immutable build inputs
+        run: |
+          set -euo pipefail
+          [[ "$GITHUB_SHA" =~ ^[0-9a-f]{40}$ ]]
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+
+          epoch="$(git show -s --format=%ct HEAD)"
+          {
+            echo "SOURCE_DATE_EPOCH=${epoch}"
+            echo "API_ARCHIVE=${RUNNER_TEMP}/cornfield-api.oci.tar"
+            echo "WORKER_ARCHIVE=${RUNNER_TEMP}/cornfield-worker.oci.tar"
+            echo "TOOLS_ARCHIVE=${RUNNER_TEMP}/cornfield-tools.oci.tar"
+            echo "WEB_ARCHIVE=${RUNNER_TEMP}/cornfield-web.oci.tar"
+          } >> "$GITHUB_ENV"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4
+        with:
+          version: v0.35.0
+          driver: docker-container
+          driver-opts: image=moby/buildkit:v0.31.2@sha256:2f5adac4ecd194d9f8c10b7b5d7bceb5186853db1b26e5abd3a657af0b7e26ec
+
+      - name: Set up ORAS
+        uses: oras-project/setup-oras@1d808f7d7f6995cc68b7bf507bfe5c5446e1dc9d # v2.0.1
+        with:
+          url: https://github.com/oras-project/oras/releases/download/v1.3.3/oras_1.3.3_linux_amd64.tar.gz
+          checksum: 9ce999f8d2de03fc03968b29d743077a58783e545e5eaa53917ca177352d0e59
+
+      # Build once into OCI archives. The exact, scanned object graphs are copied
+      # to GHCR by the next job, avoiding a scan-then-rebuild TOCTOU gap.
+      - name: Build API OCI archive
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7
+        with:
+          context: .
+          file: backend/Dockerfile
+          target: api
+          platforms: linux/amd64
+          pull: true
+          tags: cornfield-api:${{ env.OCI_LAYOUT_TAG }}
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.version=${{ github.sha }}
+          build-args: SOURCE_DATE_EPOCH=${{ env.SOURCE_DATE_EPOCH }}
+          outputs: type=oci,dest=${{ env.API_ARCHIVE }},rewrite-timestamp=true
+          provenance: mode=max
+          sbom: generator=${{ env.SBOM_GENERATOR }}
+          cache-from: type=gha,scope=cornfield-backend
+          cache-to: type=gha,mode=max,scope=cornfield-backend
+          github-token: ""
+
+      - name: Build Worker OCI archive
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7
+        with:
+          context: .
+          file: backend/Dockerfile
+          target: worker
+          platforms: linux/amd64
+          pull: true
+          tags: cornfield-worker:${{ env.OCI_LAYOUT_TAG }}
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.version=${{ github.sha }}
+          build-args: SOURCE_DATE_EPOCH=${{ env.SOURCE_DATE_EPOCH }}
+          outputs: type=oci,dest=${{ env.WORKER_ARCHIVE }},rewrite-timestamp=true
+          provenance: mode=max
+          sbom: generator=${{ env.SBOM_GENERATOR }}
+          cache-from: type=gha,scope=cornfield-backend
+          cache-to: type=gha,mode=max,scope=cornfield-backend
+          github-token: ""
+
+      - name: Build Tools OCI archive
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7
+        with:
+          context: .
+          file: backend/Dockerfile
+          target: tools
+          platforms: linux/amd64
+          pull: true
+          tags: cornfield-tools:${{ env.OCI_LAYOUT_TAG }}
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.version=${{ github.sha }}
+          build-args: SOURCE_DATE_EPOCH=${{ env.SOURCE_DATE_EPOCH }}
+          outputs: type=oci,dest=${{ env.TOOLS_ARCHIVE }},rewrite-timestamp=true
+          provenance: mode=max
+          sbom: generator=${{ env.SBOM_GENERATOR }}
+          cache-from: type=gha,scope=cornfield-backend
+          cache-to: type=gha,mode=max,scope=cornfield-backend
+          github-token: ""
+
+      - name: Build Web OCI archive
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7
+        with:
+          context: .
+          file: web/Dockerfile
+          platforms: linux/amd64
+          pull: true
+          tags: cornfield-web:${{ env.OCI_LAYOUT_TAG }}
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.version=${{ github.sha }}
+          build-args: SOURCE_DATE_EPOCH=${{ env.SOURCE_DATE_EPOCH }}
+          outputs: type=oci,dest=${{ env.WEB_ARCHIVE }},rewrite-timestamp=true
+          provenance: mode=max
+          sbom: generator=${{ env.SBOM_GENERATOR }}
+          cache-from: type=gha,scope=cornfield-web
+          cache-to: type=gha,mode=max,scope=cornfield-web
+          github-token: ""
+
+      - name: Validate local OCI references
+        run: |
+          set -euo pipefail
+          for archive in \
+            "$API_ARCHIVE:api" \
+            "$WORKER_ARCHIVE:worker" \
+            "$TOOLS_ARCHIVE:tools" \
+            "$WEB_ARCHIVE:web"; do
+            path="${archive%:*}"
+            component="${archive##*:}"
+            test -s "$path"
+            digest="$(oras resolve --oci-layout "${path}:${OCI_LAYOUT_TAG}")"
+            [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]] || {
+              echo "Invalid ${component} OCI digest" >&2
+              exit 1
+            }
+          done
+
+      - name: Verify BuildKit SBOM and provenance attestations
+        run: |
+          set -euo pipefail
+
+          verify_attestations() {
+            local archive="$1"
+            local component="$2"
+            local found_sbom=false
+            local found_provenance=false
+            local attestation_digest layer_digest predicate_type
+
+            while IFS= read -r attestation_digest; do
+              [[ "$attestation_digest" =~ ^sha256:[0-9a-f]{64}$ ]] || continue
+              while IFS= read -r layer_digest; do
+                [[ "$layer_digest" =~ ^sha256:[0-9a-f]{64}$ ]] || continue
+                predicate_type="$(
+                  oras blob fetch --oci-layout --output - "${archive}@${layer_digest}" |
+                    jq -r '.predicateType // empty'
+                )"
+                case "$predicate_type" in
+                  https://spdx.dev/Document*) found_sbom=true ;;
+                  https://slsa.dev/provenance/*) found_provenance=true ;;
+                esac
+              done < <(
+                oras manifest fetch --oci-layout "${archive}@${attestation_digest}" |
+                  jq -r '.layers[]?.digest // empty'
+              )
+            done < <(
+              oras manifest fetch --oci-layout "${archive}:${OCI_LAYOUT_TAG}" |
+                jq -r '.manifests[]? |
+                  select(.annotations["vnd.docker.reference.type"] == "attestation-manifest") |
+                  .digest'
+            )
+
+            if [[ "$found_sbom" != true || "$found_provenance" != true ]]; then
+              echo "${component} OCI archive is missing its BuildKit SBOM or provenance attestation" >&2
+              exit 1
+            fi
+          }
+
+          verify_attestations "$API_ARCHIVE" api
+          verify_attestations "$WORKER_ARCHIVE" worker
+          verify_attestations "$TOOLS_ARCHIVE" tools
+          verify_attestations "$WEB_ARCHIVE" web
+
+      # The vulnerability gate runs before any job has packages:write. Unfixed
+      # findings are excluded; fixed HIGH/CRITICAL findings block publication.
+      - name: Scan API image
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        env:
+          TRIVY_PLATFORM: linux/amd64
+        with:
+          version: ${{ env.TRIVY_VERSION }}
+          scan-type: image
+          input: ${{ env.API_ARCHIVE }}
+          scanners: vuln
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: "1"
+          format: table
+          timeout: 15m
+
+      - name: Scan Worker image
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        env:
+          TRIVY_PLATFORM: linux/amd64
+        with:
+          version: ${{ env.TRIVY_VERSION }}
+          scan-type: image
+          input: ${{ env.WORKER_ARCHIVE }}
+          scanners: vuln
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: "1"
+          format: table
+          timeout: 15m
+
+      - name: Scan Tools image
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        env:
+          TRIVY_PLATFORM: linux/amd64
+        with:
+          version: ${{ env.TRIVY_VERSION }}
+          scan-type: image
+          input: ${{ env.TOOLS_ARCHIVE }}
+          scanners: vuln
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: "1"
+          format: table
+          timeout: 15m
+
+      - name: Scan Web image
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        env:
+          TRIVY_PLATFORM: linux/amd64
+        with:
+          version: ${{ env.TRIVY_VERSION }}
+          scan-type: image
+          input: ${{ env.WEB_ARCHIVE }}
+          scanners: vuln
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: "1"
+          format: table
+          timeout: 15m
+
+      - name: Seal scanned OCI archives
+        run: |
+          set -euo pipefail
+          scanned_dir="$RUNNER_TEMP/cornfield-scanned-oci"
+          mkdir -p "$scanned_dir"
+          mv "$API_ARCHIVE" "$scanned_dir/api.oci.tar"
+          mv "$WORKER_ARCHIVE" "$scanned_dir/worker.oci.tar"
+          mv "$TOOLS_ARCHIVE" "$scanned_dir/tools.oci.tar"
+          mv "$WEB_ARCHIVE" "$scanned_dir/web.oci.tar"
+
+          : > "$scanned_dir/ROOT_DIGESTS"
+          for component in api worker tools web; do
+            digest="$(oras resolve --oci-layout "$scanned_dir/${component}.oci.tar:${OCI_LAYOUT_TAG}")"
+            [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+            printf '%s %s\n' "$component" "$digest" >> "$scanned_dir/ROOT_DIGESTS"
+          done
+
+          (
+            cd "$scanned_dir"
+            sha256sum api.oci.tar worker.oci.tar tools.oci.tar web.oci.tar ROOT_DIGESTS > SHA256SUMS
+          )
+          echo "SCANNED_DIR=${scanned_dir}" >> "$GITHUB_ENV"
+
+      - name: Upload scanned OCI archives for publication
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: cornfield-scanned-oci-${{ github.sha }}-${{ github.run_id }}
+          path: ${{ env.SCANNED_DIR }}
+          if-no-files-found: error
+          retention-days: 1
+          compression-level: 0
+
+  publish:
+    name: Publish scanned images and release manifest
+    needs: build-scan
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      packages: write
+    defaults:
+      run:
+        shell: bash
+
+    steps:
+      - name: Establish immutable image coordinates
+        run: |
+          set -euo pipefail
+          [[ "$GITHUB_SHA" =~ ^[0-9a-f]{40}$ ]]
+          owner="${GITHUB_REPOSITORY_OWNER,,}"
+          namespace="${REGISTRY}/${owner}/cornfield"
+          scanned_dir="$RUNNER_TEMP/cornfield-scanned-oci"
+          {
+            echo "API_IMAGE=${namespace}-api"
+            echo "WORKER_IMAGE=${namespace}-worker"
+            echo "TOOLS_IMAGE=${namespace}-tools"
+            echo "WEB_IMAGE=${namespace}-web"
+            echo "SCANNED_DIR=${scanned_dir}"
+          } >> "$GITHUB_ENV"
+
+      - name: Download the gated OCI archives
+        uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53 # v6
+        with:
+          name: cornfield-scanned-oci-${{ github.sha }}-${{ github.run_id }}
+          path: ${{ env.SCANNED_DIR }}
+
+      - name: Set up ORAS
+        uses: oras-project/setup-oras@1d808f7d7f6995cc68b7bf507bfe5c5446e1dc9d # v2.0.1
+        with:
+          url: https://github.com/oras-project/oras/releases/download/v1.3.3/oras_1.3.3_linux_amd64.tar.gz
+          checksum: 9ce999f8d2de03fc03968b29d743077a58783e545e5eaa53917ca177352d0e59
+
+      - name: Verify the gated archives
+        run: |
+          set -euo pipefail
+          cd "$SCANNED_DIR"
+          sha256sum -c SHA256SUMS
+          test "$(wc -l < ROOT_DIGESTS)" -eq 4
+
+          for component in api worker tools web; do
+            expected="$(awk -v name="$component" '$1 == name {print $2}' ROOT_DIGESTS)"
+            actual="$(oras resolve --oci-layout "${component}.oci.tar:${OCI_LAYOUT_TAG}")"
+            [[ "$expected" =~ ^sha256:[0-9a-f]{64}$ ]]
+            test "$actual" = "$expected"
+          done
+
+      - name: Log in to GHCR
+        uses: docker/login-action@af1e73f918a031802d376d3c8bbc3fe56130a9b0 # v4
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Publish the scanned OCI object graphs
+        run: |
+          set -euo pipefail
+
+          assert_destination_immutable() {
+            local component="$1"
+            local image="$2"
+            local source_ref="${SCANNED_DIR}/${component}.oci.tar:${OCI_LAYOUT_TAG}"
+            local destination_ref="${image}:${GITHUB_SHA}"
+            local local_digest existing_digest
+
+            local_digest="$(oras resolve --oci-layout "$source_ref")"
+            if existing_digest="$(oras resolve "$destination_ref" 2>/dev/null)"; then
+              if [[ "$existing_digest" != "$local_digest" ]]; then
+                echo "Refusing to overwrite immutable tag ${destination_ref}" >&2
+                exit 1
+              fi
+            fi
+          }
+
+          publish() {
+            local component="$1"
+            local image="$2"
+            local source_ref="${SCANNED_DIR}/${component}.oci.tar:${OCI_LAYOUT_TAG}"
+            local destination_ref="${image}:${GITHUB_SHA}"
+            local local_digest remote_digest
+
+            local_digest="$(oras resolve --oci-layout "$source_ref")"
+            if remote_digest="$(oras resolve "$destination_ref" 2>/dev/null)"; then
+              test "$remote_digest" = "$local_digest"
+              return
+            fi
+            oras cp --recursive --from-oci-layout "$source_ref" "$destination_ref"
+            remote_digest="$(oras resolve "$destination_ref")"
+
+            if [[ "$local_digest" != "$remote_digest" ]]; then
+              echo "Published digest does not match the scanned OCI graph for ${image}" >&2
+              exit 1
+            fi
+          }
+
+          # Check all destinations before the first write, so a conflicting prior
+          # release cannot leave a partially updated four-image release set.
+          assert_destination_immutable api "$API_IMAGE"
+          assert_destination_immutable worker "$WORKER_IMAGE"
+          assert_destination_immutable tools "$TOOLS_IMAGE"
+          assert_destination_immutable web "$WEB_IMAGE"
+
+          publish api "$API_IMAGE"
+          publish worker "$WORKER_IMAGE"
+          publish tools "$TOOLS_IMAGE"
+          publish web "$WEB_IMAGE"
+
+      - name: Create deployment digest manifest
+        run: |
+          set -euo pipefail
+          manifest_dir="$RUNNER_TEMP/cornfield-release"
+          mkdir -p "$manifest_dir"
+
+          verified_digest() {
+            local component="$1"
+            local image="$2"
+            local expected remote count
+
+            count="$(awk -v name="$component" '$1 == name {count++} END {print count+0}' "$SCANNED_DIR/ROOT_DIGESTS")"
+            test "$count" -eq 1
+            expected="$(awk -v name="$component" '$1 == name {print $2}' "$SCANNED_DIR/ROOT_DIGESTS")"
+            remote="$(oras resolve "${image}:${GITHUB_SHA}")"
+            [[ "$expected" =~ ^sha256:[0-9a-f]{64}$ ]]
+            test "$remote" = "$expected" || {
+              echo "Published ${component} tag no longer matches the scanned OCI graph" >&2
+              exit 1
+            }
+            # The immutable, scanned artifact is the manifest source of truth;
+            # the registry lookup above is only a consistency assertion.
+            printf '%s' "$expected"
+          }
+
+          api_digest="$(verified_digest api "$API_IMAGE")"
+          worker_digest="$(verified_digest worker "$WORKER_IMAGE")"
+          tools_digest="$(verified_digest tools "$TOOLS_IMAGE")"
+          web_digest="$(verified_digest web "$WEB_IMAGE")"
+
+          for digest in "$api_digest" "$worker_digest" "$tools_digest" "$web_digest"; do
+            [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]] || {
+              echo "Registry returned an invalid image digest" >&2
+              exit 1
+            }
+          done
+
+          printf '%s\n' \
+            "RELEASE_COMMIT=${GITHUB_SHA}" \
+            "API_IMAGE=${API_IMAGE}@${api_digest}" \
+            "WORKER_IMAGE=${WORKER_IMAGE}@${worker_digest}" \
+            "TOOLS_IMAGE=${TOOLS_IMAGE}@${tools_digest}" \
+            "WEB_IMAGE=${WEB_IMAGE}@${web_digest}" \
+            > "$manifest_dir/digests.env"
+
+          validate_image_variable() {
+            local name="$1"
+            local line value count
+            count="$(grep -c "^${name}=" "$manifest_dir/digests.env")"
+            test "$count" -eq 1
+            line="$(grep "^${name}=" "$manifest_dir/digests.env")"
+            value="${line#*=}"
+            [[ "$value" =~ ^ghcr\.io/[a-z0-9][a-z0-9._/-]*@sha256:[0-9a-f]{64}$ ]] || {
+              echo "Invalid immutable reference for ${name}" >&2
+              exit 1
+            }
+          }
+
+          validate_image_variable API_IMAGE
+          validate_image_variable WORKER_IMAGE
+          validate_image_variable TOOLS_IMAGE
+          validate_image_variable WEB_IMAGE
+
+          jq -n \
+            --arg repository "$GITHUB_REPOSITORY" \
+            --arg commit "$GITHUB_SHA" \
+            --arg ref "$GITHUB_REF" \
+            --arg run_id "$GITHUB_RUN_ID" \
+            --arg run_attempt "$GITHUB_RUN_ATTEMPT" \
+            --arg trivy_version "$TRIVY_VERSION" \
+            --arg api_image "$API_IMAGE" \
+            --arg api_digest "$api_digest" \
+            --arg worker_image "$WORKER_IMAGE" \
+            --arg worker_digest "$worker_digest" \
+            --arg tools_image "$TOOLS_IMAGE" \
+            --arg tools_digest "$tools_digest" \
+            --arg web_image "$WEB_IMAGE" \
+            --arg web_digest "$web_digest" \
+            '{
+              schema_version: 1,
+              repository: $repository,
+              commit: $commit,
+              source_ref: $ref,
+              workflow_run: {id: $run_id, attempt: $run_attempt},
+              platform: "linux/amd64",
+              security_gate: {
+                scanner: "trivy",
+                version: $trivy_version,
+                severities: ["HIGH", "CRITICAL"],
+                ignore_unfixed: true
+              },
+              build_attestations: {sbom: "spdx", provenance: "mode=max"},
+              images: {
+                api: {repository: $api_image, digest: $api_digest, reference: ($api_image + "@" + $api_digest)},
+                worker: {repository: $worker_image, digest: $worker_digest, reference: ($worker_image + "@" + $worker_digest)},
+                tools: {repository: $tools_image, digest: $tools_digest, reference: ($tools_image + "@" + $tools_digest)},
+                web: {repository: $web_image, digest: $web_digest, reference: ($web_image + "@" + $web_digest)}
+              }
+            }' > "$manifest_dir/manifest.json"
+
+          (
+            cd "$manifest_dir"
+            sha256sum digests.env manifest.json > SHA256SUMS
+          )
+          echo "MANIFEST_DIR=${manifest_dir}" >> "$GITHUB_ENV"
+
+      - name: Upload immutable digest manifest
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: cornfield-image-digests-${{ github.sha }}
+          path: ${{ env.MANIFEST_DIR }}
+          if-no-files-found: error
+          retention-days: 90
+          compression-level: 0

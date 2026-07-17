@@ -1,0 +1,92 @@
+:root {
+  /* Colors */
+  --color-page-background: #0f1113;
+  --color-surface-primary: #1c1e20;
+  --color-surface-secondary: #23262a;
+  --color-text-primary: #f7f7f8;
+  --color-text-white: #ffffff;
+  --color-text-secondary: #898a8b;
+  --color-text-tertiary: #a8a8a8;
+  --color-lime-accent: #d1fe17;
+  --color-border-subtle: #2e3031;
+  --color-magenta-accent: #ff005b;
+  --color-cyan-accent: #18dcff;
+  --color-dark-ink: #131517;
+  --color-page-background-light: #f7f7f8;
+  --color-surface-white: #ffffff;
+  --color-text-dark: #131517;
+  --color-lime-accent: #d1fe17;
+  --color-text-secondary: #898a8b;
+  --color-border-subtle: #2e3031;
+
+  /* Typography */
+  --font-body-default-family: ui-sans-serif;
+  --font-body-default-size: 16px;
+  --font-body-default-weight: 400;
+  --font-body-default-line-height: 24px;
+  --font-body-medium-family: ui-sans-serif;
+  --font-body-medium-size: 16px;
+  --font-body-medium-weight: 500;
+  --font-body-medium-line-height: 24px;
+  --font-body-medium-letter-spacing: -1%;
+  --font-label-semibold-family: ui-sans-serif;
+  --font-label-semibold-size: 14px;
+  --font-label-semibold-weight: 600;
+  --font-label-semibold-line-height: 20px;
+  --font-label-medium-family: ui-sans-serif;
+  --font-label-medium-size: 14px;
+  --font-label-medium-weight: 500;
+  --font-label-medium-line-height: 20px;
+  --font-label-medium-letter-spacing: 0%;
+  --font-caption-semibold-family: ui-sans-serif;
+  --font-caption-semibold-size: 12px;
+  --font-caption-semibold-weight: 600;
+  --font-caption-semibold-line-height: 18px;
+  --font-caption-semibold-letter-spacing: 0%;
+  --font-micro-label-family: ui-sans-serif;
+  --font-micro-label-size: 10px;
+  --font-micro-label-weight: 500;
+  --font-micro-label-line-height: 14px;
+  --font-micro-label-letter-spacing: 0.2px;
+  --font-display-heading-family: Space Grotesk;
+  --font-display-heading-size: 28px;
+  --font-display-heading-weight: 700;
+  --font-display-heading-line-height: 36px;
+  --font-display-heading-letter-spacing: -2%;
+  --font-display-caption-family: Space Grotesk;
+  --font-display-caption-size: 12px;
+  --font-display-caption-weight: 700;
+  --font-display-caption-line-height: 18px;
+  --font-display-caption-letter-spacing: 0%;
+  --font-ui-label-inter-family: Inter;
+  --font-ui-label-inter-size: 12px;
+  --font-ui-label-inter-weight: 500;
+  --font-ui-label-inter-line-height: 16px;
+
+  /* Spacing */
+  --spacing-space-1: 2px;
+  --spacing-space-2: 4px;
+  --spacing-space-3: 6px;
+  --spacing-space-4: 8px;
+  --spacing-space-5: 10px;
+  --spacing-space-6: 12px;
+  --spacing-space-7: 16px;
+  --spacing-space-8: 20px;
+  --spacing-space-9: 24px;
+  --spacing-space-10: 32px;
+  --spacing-space-11: 36px;
+  --spacing-space-12: 40px;
+  --spacing-space-13: 64px;
+
+  /* Border Radius */
+  --radius-radius-sm: 4px;
+  --radius-radius-md: 6px;
+  --radius-radius-card-sm: 8px;
+  --radius-radius-card: 12px;
+  --radius-radius-panel: 16px;
+  --radius-radius-lg: 20px;
+  --radius-radius-xl: 24px;
+  --radius-radius-2xl: 32px;
+  --radius-radius-pill: 9999px;
+
+}

@@ -53,10 +53,10 @@ mark_worker_restart_required() {
   directory="$(worker_marker_directory)"
   marker="$(worker_marker_path)"
   if test -e "${marker}" || test -L "${marker}"; then
-    test -f "${marker}" && test ! -L "${marker}" && test "$(stat -c '%u:%a' "${marker}")" = "$(id -u):600" || {
+    if ! { test -f "${marker}" && test ! -L "${marker}" && test "$(stat -c '%u:%a' "${marker}")" = "$(id -u):600"; }; then
       echo "worker restart marker is unsafe" >&2
       return 2
-    }
+    fi
     return 0
   fi
   temporary="$(mktemp "${directory}/.worker-restart-required.XXXXXX")"
@@ -73,10 +73,10 @@ recover_worker_if_required() {
     return 0
   fi
   prepare_worker_marker_directory
-  test -f "${marker}" && test ! -L "${marker}" && test "$(stat -c '%u:%a' "${marker}")" = "$(id -u):600" || {
+  if ! { test -f "${marker}" && test ! -L "${marker}" && test "$(stat -c '%u:%a' "${marker}")" = "$(id -u):600"; }; then
     echo "worker restart marker is unsafe" >&2
     return 2
-  }
+  fi
   mapfile -t marker_fields < "${marker}"
   test "${#marker_fields[@]}" = "2" || {
     echo "worker restart marker is malformed" >&2
@@ -148,10 +148,10 @@ if test "${BASH_SOURCE[0]}" = "$0"; then
   if test "${recovery_status}" = "0"; then
     lock_file="${database_directory}/.maintenance.lock"
     if test -e "${lock_file}" || test -L "${lock_file}"; then
-      test -f "${lock_file}" && test ! -L "${lock_file}" || {
+      if ! { test -f "${lock_file}" && test ! -L "${lock_file}"; }; then
         echo "maintenance lock path is unsafe" >&2
         recovery_status=2
-      }
+      fi
     fi
   fi
   if test "${recovery_status}" = "0"; then

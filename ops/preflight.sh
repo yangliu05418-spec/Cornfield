@@ -20,7 +20,9 @@ require_root_owned_path "${studio_root}" STUDIO_ROOT || fail "STUDIO_ROOT and ev
 
 check_trusted_file() {
   path="$1"
-  test -f "${path}" && test ! -L "${path}" || fail "${path} must be a regular file"
+  if ! { test -f "${path}" && test ! -L "${path}"; }; then
+    fail "${path} must be a regular file"
+  fi
   mode="$(stat -c '%a' "${path}")"
   if test "$(stat -c '%u' "${path}")" != "0" || (( (8#${mode} & 0022) != 0 )); then
     fail "${path} must be root-owned and not group/world writable"
@@ -30,14 +32,18 @@ check_trusted_file() {
 check_trusted_file .env
 check_trusted_file compose.yaml
 for tree in ops config; do
-  test -d "${tree}" && test ! -L "${tree}" || fail "${tree} must be a regular directory"
+  if ! { test -d "${tree}" && test ! -L "${tree}"; }; then
+    fail "${tree} must be a regular directory"
+  fi
   unsafe_trusted_entry="$(find "${tree}" -xdev \( ! -uid 0 -o -perm /022 -o \( ! -type d ! -type f \) \) -print -quit)"
   test -z "${unsafe_trusted_entry}" || fail "root maintenance trust boundary contains an unsafe entry: ${unsafe_trusted_entry}"
 done
 non_executable_script="$(find ops -xdev -type f -name '*.sh' ! -perm -u=x -print -quit)"
 test -z "${non_executable_script}" || fail "maintenance script is not executable: ${non_executable_script}"
 for override in compose.override.yaml compose.override.yml docker-compose.override.yaml docker-compose.override.yml; do
-  test ! -e "${override}" && test ! -L "${override}" || fail "unsupported automatic Compose override is present: ${override}"
+  if ! { test ! -e "${override}" && test ! -L "${override}"; }; then
+    fail "unsupported automatic Compose override is present: ${override}"
+  fi
 done
 
 data_root="$(sed -n 's/^DATA_ROOT=//p' .env | tail -n 1)"
@@ -191,7 +197,9 @@ test -w "${node_exporter_textfile_dir}" || fail "node-exporter textfile director
 for metric_file in cornfield_backup.prom cornfield_restore_check.prom; do
   metric_path="${node_exporter_textfile_dir}/${metric_file}"
   if test -e "${metric_path}" || test -L "${metric_path}"; then
-    test -f "${metric_path}" && test ! -L "${metric_path}" || fail "${metric_path} must be a regular file"
+    if ! { test -f "${metric_path}" && test ! -L "${metric_path}"; }; then
+      fail "${metric_path} must be a regular file"
+    fi
     test "$(stat -c '%u:%g:%a' "${metric_path}")" = "0:0:644" || \
       fail "${metric_path} must be owned by root:root with mode 0644"
   fi
@@ -200,7 +208,9 @@ done
 # systemd reads a separate root-only environment file. It is part of the
 # production backup boundary, not an optional post-deploy convenience.
 backup_environment_file=/etc/internal-image-studio/backup.env
-test -f "${backup_environment_file}" && test ! -L "${backup_environment_file}" || fail "${backup_environment_file} must be a regular file"
+if ! { test -f "${backup_environment_file}" && test ! -L "${backup_environment_file}"; }; then
+  fail "${backup_environment_file} must be a regular file"
+fi
 test "$(stat -c '%u:%g:%a' "${backup_environment_file}")" = "0:0:600" || \
   fail "${backup_environment_file} must be owned by root:root with mode 0600"
 backup_textfile_dir="$(sed -n 's#^NODE_EXPORTER_TEXTFILE_DIR=##p' "${backup_environment_file}" | tail -n 1)"
@@ -242,7 +252,9 @@ for unit in \
   internal-image-studio-restore-check.timer; do
   installed_unit="/etc/systemd/system/${unit}"
   reviewed_unit="${studio_root}/ops/systemd/${unit}"
-  test -f "${installed_unit}" && test ! -L "${installed_unit}" || fail "${installed_unit} must be an installed regular file"
+  if ! { test -f "${installed_unit}" && test ! -L "${installed_unit}"; }; then
+    fail "${installed_unit} must be an installed regular file"
+  fi
   test "$(stat -c '%u:%g:%a' "${installed_unit}")" = "0:0:644" || fail "${installed_unit} must be root:root 0644"
   cmp -s "${reviewed_unit}" "${installed_unit}" || fail "${installed_unit} differs from the reviewed repository unit"
 done

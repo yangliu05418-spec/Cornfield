@@ -85,10 +85,10 @@ for command_name in docker hostname jq openssl restic timeout; do
 done
 lock_file="${database_directory}/.maintenance.lock"
 if test -e "${lock_file}" || test -L "${lock_file}"; then
-  test -f "${lock_file}" && test ! -L "${lock_file}" || {
+  if ! { test -f "${lock_file}" && test ! -L "${lock_file}"; }; then
     echo "maintenance lock path is unsafe" >&2
     exit 2
-  }
+  fi
 fi
 exec 9>"${lock_file}"
 chmod 0600 "${lock_file}"
@@ -120,10 +120,10 @@ test "${restore_device}" != "${data_device}" || {
 }
 
 check_root="${restore_check_root}/${container}"
-test ! -e "${check_root}" && test ! -L "${check_root}" || {
+if ! { test ! -e "${check_root}" && test ! -L "${check_root}"; }; then
   echo "restore-check invocation directory already exists" >&2
   exit 1
-}
+fi
 write_restore_check_marker "${container}" "${check_root}"
 install -d -m 0700 "${check_root}"
 restore_target="${check_root}/snapshot"

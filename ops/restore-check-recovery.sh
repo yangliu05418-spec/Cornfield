@@ -64,10 +64,10 @@ recover_restore_check_if_required() {
   if ! test -e "${marker}" && ! test -L "${marker}"; then
     return 0
   fi
-  test -f "${marker}" && test ! -L "${marker}" && test "$(stat -c '%u:%a' "${marker}")" = "$(id -u):600" || {
+  if ! { test -f "${marker}" && test ! -L "${marker}" && test "$(stat -c '%u:%a' "${marker}")" = "$(id -u):600"; }; then
     echo "restore-check recovery marker is unsafe" >&2
     return 2
-  }
+  fi
   mapfile -t fields < "${marker}"
   test "${#fields[@]}" = "2" || {
     echo "restore-check recovery marker is malformed" >&2
@@ -127,10 +127,10 @@ if test "${BASH_SOURCE[0]}" = "$0"; then
   if test "${recovery_status}" = "0"; then
     lock_file="${database_directory}/.maintenance.lock"
     if test -e "${lock_file}" || test -L "${lock_file}"; then
-      test -f "${lock_file}" && test ! -L "${lock_file}" || {
+      if ! { test -f "${lock_file}" && test ! -L "${lock_file}"; }; then
         echo "maintenance lock path is unsafe" >&2
         recovery_status=2
-      }
+      fi
     fi
   fi
   if test "${recovery_status}" = "0"; then

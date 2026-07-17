@@ -122,10 +122,10 @@ for command_name in hostname jq openssl restic; do
 done
 lock_file="${database_directory}/.maintenance.lock"
 if test -e "${lock_file}" || test -L "${lock_file}"; then
-  test -f "${lock_file}" && test ! -L "${lock_file}" || {
+  if ! { test -f "${lock_file}" && test ! -L "${lock_file}"; }; then
     echo "maintenance lock path is unsafe" >&2
     exit 2
-  }
+  fi
 fi
 exec 9>"${lock_file}"
 chmod 0600 "${lock_file}"
@@ -152,10 +152,10 @@ studio_compose() {
 # is safe to act on only after this process owns the shared maintenance lock.
 recover_worker_if_required
 worker_container="$(studio_compose ps --all -q worker)"
-test -n "${worker_container}" && test "$(printf '%s\n' "${worker_container}" | wc -l)" = "1" || {
+if ! { test -n "${worker_container}" && test "$(printf '%s\n' "${worker_container}" | wc -l)" = "1"; }; then
   echo "backup requires exactly one existing Worker container" >&2
   exit 1
-}
+fi
 
 worker_state() {
   docker inspect --format '{{.State.Status}}' "${worker_container}"

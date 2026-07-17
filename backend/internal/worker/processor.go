@@ -1735,6 +1735,7 @@ var allowedAttemptUsageKeys = map[string]struct{}{
 	"output_tokens":           {},
 	"points":                  {},
 	"prompt_tokens":           {},
+	"reference_count":         {},
 	"reasoning_tokens":        {},
 	"total_cost":              {},
 	"total_tokens":            {},

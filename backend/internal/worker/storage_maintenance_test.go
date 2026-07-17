@@ -33,6 +33,19 @@ func TestContentStorageKeyValidation(t *testing.T) {
 	}
 }
 
+func TestThumbnailTempPathKeepsWebPSuffixAndCleanupIdentity(t *testing.T) {
+	temp := thumbnailTempPath(t.TempDir(), "320")
+	if filepath.Ext(temp) != ".webp" {
+		t.Fatalf("thumbnail temp extension = %q, want .webp", filepath.Ext(temp))
+	}
+	if !isThumbnailFilename(filepath.Base(temp)) {
+		t.Fatalf("thumbnail temp file is not recognized for crash cleanup: %s", temp)
+	}
+	if isThumbnailFilename(".thumb-320-not-a-uuid.part.webp") {
+		t.Fatal("unsafe thumbnail temp filename was accepted")
+	}
+}
+
 func TestOrphanScanAndDeleteIsConservative(t *testing.T) {
 	root := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(root, "assets"), 0o750); err != nil {

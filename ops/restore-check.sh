@@ -148,6 +148,8 @@ runtime_privileges="$(docker exec "${container}" psql -X --no-password -U studio
       AND has_table_privilege('studio_api','users','SELECT,INSERT,UPDATE')
       AND NOT has_table_privilege('studio_api','users','DELETE')
       AND NOT has_table_privilege('studio_api','river_job','SELECT')
+      AND has_column_privilege('studio_api','assets','lock_guard','UPDATE')
+      AND NOT has_column_privilege('studio_api','assets','purge_pending','UPDATE')
       AND NOT has_table_privilege('studio_worker','users','SELECT')
       AND has_column_privilege('studio_worker','user_sessions','expires_at','SELECT')
       AND NOT has_column_privilege('studio_worker','user_sessions','token_hash','SELECT')

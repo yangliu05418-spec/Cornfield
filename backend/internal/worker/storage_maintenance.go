@@ -12,6 +12,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/google/uuid"
 )
 
 const (
@@ -418,6 +420,20 @@ func isOriginalFilename(name string) bool {
 }
 
 func isThumbnailFilename(name string) bool {
-	return name == "thumb-320.webp" || name == "thumb-640.webp" || name == "thumb-1280.webp" ||
-		name == "thumb-320.webp.part" || name == "thumb-640.webp.part" || name == "thumb-1280.webp.part"
+	switch name {
+	case "thumb-320.webp", "thumb-640.webp", "thumb-1280.webp",
+		"thumb-320.webp.part", "thumb-640.webp.part", "thumb-1280.webp.part":
+		return true
+	}
+	const suffix = ".part.webp"
+	for _, size := range []string{"320", "640", "1280"} {
+		prefix := ".thumb-" + size + "-"
+		if !strings.HasPrefix(name, prefix) || !strings.HasSuffix(name, suffix) {
+			continue
+		}
+		identifier := strings.TrimSuffix(strings.TrimPrefix(name, prefix), suffix)
+		parsed, err := uuid.Parse(identifier)
+		return err == nil && parsed.String() == identifier
+	}
+	return false
 }

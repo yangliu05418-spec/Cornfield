@@ -1647,7 +1647,7 @@ func (w *GenerateWorker) makeThumbnails(ctx context.Context, key string) {
 		if _, err := os.Stat(final); err == nil {
 			continue
 		}
-		temp := final + ".part"
+		temp := thumbnailTempPath(filepath.Dir(original), size)
 		thumbCtx, cancelThumb := context.WithTimeout(ctx, 60*time.Second)
 		command := exec.CommandContext(thumbCtx, "vipsthumbnail", original, "--size", size+"x", "--output", temp+"[Q=82,strip]")
 		command.Env = append(os.Environ(), "VIPS_CONCURRENCY=2", "VIPS_DISC_THRESHOLD=268435456", "MALLOC_ARENA_MAX=2")
@@ -1665,6 +1665,13 @@ func (w *GenerateWorker) makeThumbnails(ctx context.Context, key string) {
 			_ = os.Remove(temp)
 		}
 	}
+}
+
+func thumbnailTempPath(directory, size string) string {
+	// libvips selects the encoder from the final suffix. Keep .webp last while
+	// retaining a unique, recognizable partial name for atomic publication and
+	// crash cleanup.
+	return filepath.Join(directory, fmt.Sprintf(".thumb-%s-%s.part.webp", size, uuid.NewString()))
 }
 
 func (w *GenerateWorker) recordAttempt(ctx context.Context, item generationRecord, operation string, duration time.Duration, attemptErr error, usage map[string]any, telemetry provider.Telemetry) {

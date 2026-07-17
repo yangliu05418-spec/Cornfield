@@ -312,7 +312,12 @@ volumes:
 
 networks:
   frontend:
-    internal: true
+    # Host Nginx reaches Web/API through loopback-published ports. An
+    # internal network suppresses those mappings entirely, so keep this as a
+    # regular bridge and default every published port to loopback.
+    driver: bridge
+    driver_opts:
+      com.docker.network.bridge.host_binding_ipv4: "127.0.0.1"
   backend:
     internal: true
   egress:

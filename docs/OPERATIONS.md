@@ -10,7 +10,7 @@
 - `modelctl validate`、`modelctl apply` 使用同一份 `config/models.yaml`，API readiness 返回的 `model_revision` 与本次发布预期一致。
 - GitHub release workflow 已为目标 commit 生成并扫描 API、Worker、Tools、Web 四个镜像；Tools 镜像使用与服务端同主/小版本的、digest 固定的 `postgres:18.4-bookworm` 工具链，不能退回 Debian 默认 PostgreSQL 15 client。下载的 `cornfield-image-digests-<commit>` 通过 `sha256sum -c SHA256SUMS`，`RELEASE_COMMIT` 与待部署 commit 一致，`.env` 中四个 `*_IMAGE` 均来自该 artifact 且按 `@sha256:` 固定，`RELEASE_REQUIRE_DIGESTS=true`。
 - 宿主 Nginx、站点配置和 TLS 证书/私钥已先安装；`NGINX_SITE_CONFIG` 指向的已启用文件与仓库审查版本逐字一致并出现在 `nginx -T`，`NGINX_WORKER_USER` 与主配置的 `user` 一致。以 root 执行 `STUDIO_ROOT=/opt/internal-image-studio ops/preflight.sh` 并通过。随后 `docker compose ps` 中 Web、API、Worker、PostgreSQL 均 healthy，`docker compose ps -a db-bootstrap migrate model-apply` 显示三个一次性 job 成功退出。
-- Nginx 的 `/_protected_assets/` 保持 `internal`，PostgreSQL 不映射宿主端口；Worker 同时连接 internal `backend` 与 `egress`，API 不连接 `egress`。
+- Nginx 的 `/_protected_assets/` 保持 `internal`；Compose 的 `frontend` 是宿主可达的普通 bridge，但 Web/API 端口与该网络的默认 host binding 都固定为 `127.0.0.1`。PostgreSQL 只连接 internal `backend` 且不映射宿主端口；Worker 同时连接 internal `backend` 与 `egress`，API 不连接命名的 `egress` 网络，也不持有 Provider key。
 - 从宿主 Nginx 访问落地页和创作页，确认 CSP 控制台无阻断、SPA 可交互、墙面 inline geometry 生效。Web 构建必须把 TanStack bootstrap 外置为同源脚本；`preflight.sh` 会拒绝 `script-src 'unsafe-inline'`。
 - Provider callback 与签名图片 URL 不出现在 Nginx/API access log；真实 Provider canary、最近一次备份和恢复演练均有记录。Prometheus 规则已接入并实际触发过外部 receiver；没有可送达且已演练的 receiver 时不得宣布生产上线。
 

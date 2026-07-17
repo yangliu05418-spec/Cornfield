@@ -107,7 +107,10 @@ jobs:
               (.services.alertmanager.networks | has("egress")) and
               (.services.alertmanager.profiles == ["alerting"]) and
               .networks.backend.internal == true and
-              .networks.frontend.internal == true and
+              ((.networks.frontend.internal // false) == false) and
+              .networks.frontend.driver_opts["com.docker.network.bridge.host_binding_ipv4"] == "127.0.0.1" and
+              ([.services.web.ports[] | select(.host_ip == "127.0.0.1" and .published == "8080" and .target == 8080)] | length) == 1 and
+              ([.services.api.ports[] | select(.host_ip == "127.0.0.1" and .published == "8081" and .target == 8081)] | length) == 1 and
               ([.services.api.volumes[] | select(.target == "/data" and .read_only == true)] | length) == 1 and
               ([.services.api.volumes[] | select(.target == "/data/uploads" and ((.read_only // false) == false))] | length) == 1 and
               ([.services.worker.volumes[] | select(.target == "/data" and ((.read_only // false) == false))] | length) == 1

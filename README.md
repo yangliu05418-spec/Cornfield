@@ -107,4 +107,4 @@ curl -fsS http://127.0.0.1:9093/-/ready
 - 上游 POST 超时且无法确认接受时进入 `submission_uncertain`，不会自动重复计费。
 - 对不能真正取消的上游，用户主动取消会尽快进入 `cancelled`。未取消任务到达生成 deadline 时，Worker 会先做一次认证 final poll，尽量恢复刚完成的已付费结果；若远端仍未终止且取消未被接受，任务进入 `failed`。两种场景都可通过 `upstream_active_until` 在远端终态或“原 generation deadline + 有界观察宽限”前继续占用用户/Provider/模型并发；宽限通常等于模型生成 timeout，最多 1 小时。Worker 只做后台观察并丢弃取消任务的迟到结果；支持真实取消且已接受取消的上游不会保留该租约。
 - API key、密码、base64 图片和文件系统绝对路径禁止进入日志。
-- Worker 通过独立 egress 网络访问 Provider；PostgreSQL 始终只连接 internal backend 网络。
+- 宿主 Nginx 通过仅绑定 `127.0.0.1` 的端口访问 Web/API，因此 `frontend` 必须是宿主可达的普通 bridge；默认 host binding 也固定为 loopback。Worker 通过独立 egress 网络访问 Provider；PostgreSQL 始终只连接 internal backend 网络且不发布端口。

@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"flag"
@@ -93,9 +92,8 @@ func main() {
 }
 
 func capabilitySnapshotMatches(stored, expected []byte) bool {
-	normalizedStored, storedErr := modelconfig.NormalizeSnapshotJSON(stored)
-	normalizedExpected, expectedErr := modelconfig.NormalizeSnapshotJSON(expected)
-	return storedErr == nil && expectedErr == nil && bytes.Equal(normalizedStored, normalizedExpected)
+	matches, err := modelconfig.SnapshotJSONEqual(stored, expected)
+	return err == nil && matches
 }
 
 func currentModelIDs(models []modelconfig.Model) ([]string, error) {

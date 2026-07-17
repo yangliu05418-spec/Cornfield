@@ -29,7 +29,7 @@ func TestPolicyJSONUsesSnakeCaseAndAcceptsLegacySnapshots(t *testing.T) {
 	}
 }
 
-func TestNormalizeSnapshotJSONOnlyAliasesLegacyPolicyKeys(t *testing.T) {
+func TestNormalizeSnapshotJSONCanonicalizesNestedObjectsAndLegacyPolicyKeys(t *testing.T) {
 	legacy := []byte(`{"id":"model","unknown":{"nested":{"z":1,"a":2},"keep":true},"policy":{"GenerationTimeoutSeconds":900}}`)
 	current := []byte(`{"policy":{"generation_timeout_seconds":900},"unknown":{"keep":true,"nested":{"a":2,"z":1}},"id":"model"}`)
 	normalizedLegacy, err := NormalizeSnapshotJSON(legacy)
@@ -46,6 +46,27 @@ func TestNormalizeSnapshotJSONOnlyAliasesLegacyPolicyKeys(t *testing.T) {
 	conflict := []byte(`{"policy":{"GenerationTimeoutSeconds":900,"generation_timeout_seconds":300}}`)
 	if _, err := NormalizeSnapshotJSON(conflict); err == nil {
 		t.Fatal("conflicting policy aliases were accepted")
+	}
+}
+
+func TestSnapshotJSONEqualUsesJSONBSemantics(t *testing.T) {
+	left := []byte(`{"ratio":1e-7,"limit":26214400,"values":[1,2],"policy":{"GenerationTimeoutSeconds":900}}`)
+	right := []byte(`{"policy":{"generation_timeout_seconds":900},"values":[1.0,2.0],"limit":26214400.0,"ratio":0.0000001}`)
+	equal, err := SnapshotJSONEqual(left, right)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !equal {
+		t.Fatal("jsonb-equivalent numeric representations did not match")
+	}
+
+	changedArray := []byte(`{"ratio":0.0000001,"limit":26214400,"values":[2,1],"policy":{"generation_timeout_seconds":900}}`)
+	equal, err = SnapshotJSONEqual(left, changedArray)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if equal {
+		t.Fatal("array order change was accepted")
 	}
 }
 

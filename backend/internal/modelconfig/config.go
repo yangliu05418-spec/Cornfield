@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math/big"
 	"os"
 	"sort"
 	"strconv"
@@ -119,16 +120,93 @@ func NormalizeSnapshotJSON(data []byte) ([]byte, error) {
 }
 
 func canonicalizeSnapshotJSON(data []byte) ([]byte, error) {
+	snapshot, err := decodeSnapshotJSON(data)
+	if err != nil {
+		return nil, err
+	}
+	// PostgreSQL jsonb does not preserve object-key order at any nesting
+	// level. Re-encoding a generic JSON value recursively sorts every object
+	// while retaining arrays, unknown fields, and numeric tokens.
+	return json.Marshal(snapshot)
+}
+
+// SnapshotJSONEqual compares immutable capability snapshots with PostgreSQL
+// jsonb semantics: object key order and numeric notation are insignificant,
+// while types, unknown fields, and array order remain significant.
+func SnapshotJSONEqual(left, right []byte) (bool, error) {
+	normalizedLeft, err := NormalizeSnapshotJSON(left)
+	if err != nil {
+		return false, err
+	}
+	normalizedRight, err := NormalizeSnapshotJSON(right)
+	if err != nil {
+		return false, err
+	}
+	leftValue, err := decodeSnapshotJSON(normalizedLeft)
+	if err != nil {
+		return false, err
+	}
+	rightValue, err := decodeSnapshotJSON(normalizedRight)
+	if err != nil {
+		return false, err
+	}
+	return snapshotValuesEqual(leftValue, rightValue), nil
+}
+
+func decodeSnapshotJSON(data []byte) (any, error) {
 	decoder := json.NewDecoder(bytes.NewReader(data))
 	decoder.UseNumber()
 	var snapshot any
 	if err := decoder.Decode(&snapshot); err != nil {
 		return nil, err
 	}
-	// PostgreSQL jsonb does not preserve object-key order at any nesting
-	// level. Re-encoding a generic JSON value recursively sorts every object
-	// while retaining arrays, unknown fields, and exact numeric tokens.
-	return json.Marshal(snapshot)
+	return snapshot, nil
+}
+
+func snapshotValuesEqual(left, right any) bool {
+	switch leftValue := left.(type) {
+	case nil:
+		return right == nil
+	case bool:
+		rightValue, ok := right.(bool)
+		return ok && leftValue == rightValue
+	case string:
+		rightValue, ok := right.(string)
+		return ok && leftValue == rightValue
+	case json.Number:
+		rightValue, ok := right.(json.Number)
+		if !ok {
+			return false
+		}
+		leftNumber, leftOK := new(big.Rat).SetString(leftValue.String())
+		rightNumber, rightOK := new(big.Rat).SetString(rightValue.String())
+		return leftOK && rightOK && leftNumber.Cmp(rightNumber) == 0
+	case []any:
+		rightValue, ok := right.([]any)
+		if !ok || len(leftValue) != len(rightValue) {
+			return false
+		}
+		for index := range leftValue {
+			if !snapshotValuesEqual(leftValue[index], rightValue[index]) {
+				return false
+			}
+		}
+		return true
+	case map[string]any:
+		rightValue, ok := right.(map[string]any)
+		if !ok || len(leftValue) != len(rightValue) {
+			return false
+		}
+		for key, leftField := range leftValue {
+			rightField, exists := rightValue[key]
+			if !exists || !snapshotValuesEqual(leftField, rightField) {
+				return false
+			}
+		}
+		return true
+	default:
+		return false
+	}
 }
 
 func normalizeLegacyPolicyJSON(fields map[string]json.RawMessage) error {

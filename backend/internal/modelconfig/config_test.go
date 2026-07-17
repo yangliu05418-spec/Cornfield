@@ -75,7 +75,7 @@ func TestProductionCatalogIsValid(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load production catalog: %v", err)
 	}
-	if len(catalog.Models) != 2 || catalog.Hash == "" {
+	if len(catalog.Models) != 8 || catalog.Hash == "" {
 		t.Fatalf("unexpected catalog: %+v", catalog)
 	}
 }

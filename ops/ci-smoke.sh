@@ -167,7 +167,7 @@ reference_asset_id="$(jq -er '.asset_id' "${upload_status_json}")"
 generation_json="${tmp_dir}/generation.json"
 request_json="$(jq -nc \
   --arg revision "${revision}" --arg asset "${reference_asset_id}" \
-  '{model_id:"openrouter-gpt-image-1",capability_revision:$revision,prompt:"A quiet cornfield at blue hour",aspect_ratio:"1:1",resolution:"1K",draw_count:1,input_asset_ids:[$asset]}')"
+  '{model_id:"openrouter-gemini-3-1-flash-lite-image",capability_revision:$revision,prompt:"A quiet cornfield at blue hour",aspect_ratio:"1:1",resolution:"1K",draw_count:1,input_asset_ids:[$asset]}')"
 curl --fail-with-body --silent --show-error --cookie "${cookie_jar}" \
   --header "X-CSRF-Token: ${csrf_token}" --header 'Content-Type: application/json' \
   --header 'Idempotency-Key: ci-smoke-image-to-image-v1' --data "${request_json}" \

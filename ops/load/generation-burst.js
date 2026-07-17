@@ -27,7 +27,7 @@ if (sessionCookies.length < requiredSessions) {
 
 const baseURL = loadBaseURL();
 const modelRevision = requiredEnv("MODEL_REVISION");
-const modelID = __ENV.MODEL_ID || "openrouter-gpt-image-1";
+const modelID = __ENV.MODEL_ID || "openrouter-gemini-3-1-flash-lite-image";
 const aspectRatio = __ENV.ASPECT_RATIO || "1:1";
 const resolution = __ENV.RESOLUTION || "1K";
 const batchCreated = new Rate("batch_created");

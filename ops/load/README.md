@@ -17,7 +17,7 @@ CSRF=["csrf-1","csrf-2"]
 
 默认场景为 100 RPS、持续 10 秒、每次 1 draw，门槛为创建成功率 `>99%`、创建接口 p95 `<250ms`、HTTP 失败率 `<1%` 且无 dropped iteration。它必须指向 `PROVIDER_MODE=mock` 的隔离部署。
 
-应用按用户限制 burst 4；要真实覆盖 1,000 次事务化批次创建，默认场景至少需要 250 组不同用户的 session/CSRF。脚本会在数量不足时拒绝启动，避免大量 `429` 被误解成容量问题。`MODEL_REVISION` 从 `GET /api/v1/models` 的 `revision` 取得；默认模型是 `openrouter-gpt-image-1`。
+应用按用户限制 burst 4；要真实覆盖 1,000 次事务化批次创建，默认场景至少需要 250 组不同用户的 session/CSRF。脚本会在数量不足时拒绝启动，避免大量 `429` 被误解成容量问题。`MODEL_REVISION` 从 `GET /api/v1/models` 的 `revision` 取得；默认模型是 `openrouter-gemini-3-1-flash-lite-image`。
 
 ```bash
 export ALLOW_LOAD_TEST=true

@@ -37,10 +37,17 @@ remove_ci_tmp_dir() {
 }
 
 cleanup() {
+  local status=$?
+  if (( status != 0 )); then
+    echo "ci-smoke: failure diagnostics" >&2
+    docker compose ps --all >&2 || true
+    docker compose logs --no-color --tail=300 >&2 || true
+  fi
   docker compose down --volumes --remove-orphans >/dev/null 2>&1 || true
   remove_ci_tmp_dir "${tmp_dir}" cornfield-ci-http
   remove_ci_tmp_dir "${secret_root}" cornfield-ci-secrets
   remove_ci_tmp_dir "${DATA_ROOT}" cornfield-ci-data
+  return "${status}"
 }
 trap cleanup EXIT
 

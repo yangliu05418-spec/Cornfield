@@ -40,7 +40,10 @@ services:
         "-c",
         "wal_compression=on",
       ]
-    volumes: [postgres_data:/var/lib/postgresql/data]
+    # PostgreSQL 18 stores PGDATA below /var/lib/postgresql/<major>/docker.
+    # Mount the parent declared by the official image so data survives
+    # container recreation and remains compatible with pg_upgrade --link.
+    volumes: [postgres_data:/var/lib/postgresql]
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U studio_bootstrap -d studio"]
       interval: 5s

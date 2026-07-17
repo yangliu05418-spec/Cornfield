@@ -65,7 +65,7 @@ restored_assets="${restore_target}${data_root}/assets"
 test -d "${restored_assets}"
 
 docker run -d --rm --name "${container}" --memory 4g --cpus 2 --pids-limit 512 \
-  --mount "type=bind,src=${postgres_data},dst=/var/lib/postgresql/data" \
+  --mount "type=bind,src=${postgres_data},dst=/var/lib/postgresql" \
   -e POSTGRES_DB=studio -e POSTGRES_USER=studio_bootstrap -e POSTGRES_PASSWORD="${password}" \
   "${postgres_image}" >/dev/null
 

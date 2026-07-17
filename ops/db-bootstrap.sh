@@ -16,10 +16,11 @@ read_secret() {
   printf '%s' "${value}"
 }
 
-export PGPASSWORD="$(read_secret /run/secrets/postgres_bootstrap_password)"
-export STUDIO_OWNER_PASSWORD="$(read_secret /run/secrets/postgres_owner_password)"
-export STUDIO_API_PASSWORD="$(read_secret /run/secrets/postgres_api_password)"
-export STUDIO_WORKER_PASSWORD="$(read_secret /run/secrets/postgres_worker_password)"
+PGPASSWORD="$(read_secret /run/secrets/postgres_bootstrap_password)"
+STUDIO_OWNER_PASSWORD="$(read_secret /run/secrets/postgres_owner_password)"
+STUDIO_API_PASSWORD="$(read_secret /run/secrets/postgres_api_password)"
+STUDIO_WORKER_PASSWORD="$(read_secret /run/secrets/postgres_worker_password)"
+export PGPASSWORD STUDIO_OWNER_PASSWORD STUDIO_API_PASSWORD STUDIO_WORKER_PASSWORD
 
 bootstrap_role=studio_bootstrap
 if ! psql -X --no-password --host=postgres --port=5432 --username="${bootstrap_role}" --dbname=studio --quiet --tuples-only --command='SELECT 1' >/dev/null 2>&1; then

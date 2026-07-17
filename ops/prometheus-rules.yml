@@ -8,6 +8,20 @@ groups:
           severity: critical
         annotations:
           summary: "Cornfield target {{ $labels.job }} is unavailable"
+      - alert: ImageStudioAPIReadinessFailed
+        expr: image_studio_api_ready == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Cornfield API readiness checks are failing"
+      - alert: ImageStudioAPIReadinessMetricMissing
+        expr: absent(image_studio_api_ready)
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Cornfield API readiness metric is missing"
       - alert: ImageStudioDataDiskLow
         expr: |
           100 * node_filesystem_avail_bytes{fstype!~"tmpfs|overlay|squashfs"}
@@ -55,19 +69,42 @@ groups:
         annotations:
           summary: "A provider submission requires manual reconciliation"
       - alert: ImageStudioProviderBreakerOpen
-        expr: image_studio_provider_breaker_open == 1
+        expr: |
+          (image_studio_provider_breaker_open == 1)
+            and on(provider) (image_studio_provider_enabled == 1)
         for: 1m
         labels:
           severity: warning
         annotations:
           summary: "Provider {{ $labels.provider }} circuit breaker is open"
       - alert: ImageStudioProviderFailures
-        expr: image_studio_provider_attempts_5m{outcome="failed"} >= 5
+        expr: |
+          (image_studio_provider_attempts_5m{outcome="failed"} >= 5)
+            and on(provider) (image_studio_provider_enabled == 1)
         for: 2m
         labels:
           severity: warning
         annotations:
           summary: "Provider {{ $labels.provider }} has repeated failures"
+      - alert: ImageStudioProviderPaused
+        expr: |
+          (image_studio_provider_state{state="paused"} == 1)
+            and on(provider) (image_studio_provider_enabled == 1)
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Enabled provider {{ $labels.provider }} is paused"
+      - alert: ImageStudioProviderMetricsMissing
+        expr: |
+          absent(image_studio_provider_state)
+            or absent(image_studio_provider_enabled)
+            or absent(image_studio_provider_breaker_open)
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Cornfield provider health metrics are missing"
       - alert: ImageStudioUploadCapacityHigh
         expr: image_studio_upload_reserved_bytes > 805306368 or image_studio_upload_sessions > 24
         for: 5m
@@ -75,3 +112,31 @@ groups:
           severity: warning
         annotations:
           summary: "Outstanding upload reservations exceed 75% of the global limit"
+      - alert: ImageStudioBackupLastRunFailed
+        expr: image_studio_backup_last_run_success == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "The most recent Cornfield backup failed"
+      - alert: ImageStudioBackupStale
+        expr: absent(image_studio_backup_last_success_timestamp_seconds) or time() - image_studio_backup_last_success_timestamp_seconds > 93600
+        for: 15m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Cornfield has no successful backup in the last 26 hours"
+      - alert: ImageStudioRestoreCheckLastRunFailed
+        expr: image_studio_restore_check_last_run_success == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "The most recent Cornfield restore verification failed"
+      - alert: ImageStudioRestoreCheckStale
+        expr: absent(image_studio_restore_check_last_success_timestamp_seconds) or time() - image_studio_restore_check_last_success_timestamp_seconds > 3024000
+        for: 15m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Cornfield has no successful restore verification in the last 35 days"

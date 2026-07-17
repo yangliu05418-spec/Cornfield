@@ -178,7 +178,10 @@ services:
   worker:
     image: ${WORKER_IMAGE:-internal-image-studio-worker:local}
     build: { context: ., dockerfile: backend/Dockerfile, target: worker }
-    restart: unless-stopped
+    # Backup uses an explicit stop window. `always` lets Docker recover the
+    # Worker after a host/daemon restart; systemd ExecStopPost covers a killed
+    # backup process while the daemon itself remains up.
+    restart: always
     environment:
       <<: *app-env
       DATABASE_URL: "postgres://studio_worker@postgres:5432/studio?sslmode=disable"
@@ -268,8 +271,10 @@ services:
     command:
       - --path.rootfs=/host
       - --collector.filesystem.mount-points-exclude=^/(dev|proc|sys|var/lib/docker/.+|var/lib/containers/.+)($|/)
+      - --collector.textfile.directory=/textfile
     volumes:
       - /:/host:ro,rslave
+      - ${NODE_EXPORTER_TEXTFILE_DIR:-/var/lib/node_exporter/textfile_collector}:/textfile:ro
     mem_limit: 128m
     cpus: 0.25
     logging: *default-logging

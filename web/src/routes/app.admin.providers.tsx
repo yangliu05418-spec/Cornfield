@@ -1,6 +1,6 @@
 import { createFileRoute } from '@tanstack/react-router'
-import { useQuery } from '@tanstack/react-query'
-import { Activity, AlertTriangle, CheckCircle2 } from 'lucide-react'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { Activity, AlertTriangle, CheckCircle2, RotateCcw } from 'lucide-react'
 
 import { AdminTabs, AppShell } from '#/components/app-shell'
 import { api } from '#/lib/api'
@@ -21,11 +21,29 @@ type Provider = {
 }
 
 function ProvidersPage() {
+  const client = useQueryClient()
   const result = useQuery({
     queryKey: ['admin', 'providers'],
     queryFn: () => api<{ items: Provider[] }>('/api/v1/admin/providers'),
     refetchInterval: 15_000,
   })
+  const resume = useMutation({
+    mutationFn: (providerID: string) =>
+      api<{ id: string; state: string; resumed: boolean }>(
+        `/api/v1/admin/providers/${encodeURIComponent(providerID)}/resume`,
+        { method: 'POST' },
+      ),
+    onSuccess: () =>
+      client.invalidateQueries({ queryKey: ['admin', 'providers'] }),
+  })
+
+  function confirmResume(provider: Provider) {
+    const confirmed = window.confirm(
+      `确认恢复 ${provider.display_name}？请先确认 API Key、权限或额度问题已经解决。恢复后可能产生新的上游费用。`,
+    )
+    if (confirmed) resume.mutate(provider.id)
+  }
+
   return (
     <AppShell>
       <main className="admin-page">
@@ -76,6 +94,27 @@ function ProvidersPage() {
                   <dd>{provider.last_error_code ?? 'NONE'}</dd>
                 </div>
               </dl>
+              {provider.state === 'paused' && provider.enabled && (
+                <div className="provider-action">
+                  <p>暂停状态不会被健康探针自动解除。</p>
+                  <button
+                    type="button"
+                    className="provider-resume-button"
+                    disabled={resume.isPending}
+                    onClick={() => confirmResume(provider)}
+                  >
+                    <RotateCcw size={13} />
+                    {resume.isPending && resume.variables === provider.id
+                      ? '正在恢复…'
+                      : '确认问题已解决并恢复'}
+                  </button>
+                  {resume.isError && resume.variables === provider.id && (
+                    <p className="provider-action-error" role="alert">
+                      {resume.error.message}
+                    </p>
+                  )}
+                </div>
+              )}
             </article>
           ))}
         </div>

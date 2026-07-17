@@ -1,7 +1,12 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+# shellcheck source=ops/path-safety.sh
+source "${script_dir}/path-safety.sh"
+
 studio_root="${STUDIO_ROOT:-/opt/internal-image-studio}"
+require_canonical_directory "${studio_root}" STUDIO_ROOT
 cd "${studio_root}"
 
 fail() {
@@ -10,7 +15,31 @@ fail() {
 }
 
 test "$(id -u)" = "0" || fail "run preflight as root so runtime identities and the active Nginx process can be verified"
-test -f .env || fail ".env is missing"
+test "${script_dir}" = "${studio_root}/ops" || fail "preflight must run from STUDIO_ROOT/ops"
+require_root_owned_path "${studio_root}" STUDIO_ROOT || fail "STUDIO_ROOT and every parent must be root-owned and not group/world writable"
+
+check_trusted_file() {
+  path="$1"
+  test -f "${path}" && test ! -L "${path}" || fail "${path} must be a regular file"
+  mode="$(stat -c '%a' "${path}")"
+  if test "$(stat -c '%u' "${path}")" != "0" || (( (8#${mode} & 0022) != 0 )); then
+    fail "${path} must be root-owned and not group/world writable"
+  fi
+}
+
+check_trusted_file .env
+check_trusted_file compose.yaml
+for tree in ops config; do
+  test -d "${tree}" && test ! -L "${tree}" || fail "${tree} must be a regular directory"
+  unsafe_trusted_entry="$(find "${tree}" -xdev \( ! -uid 0 -o -perm /022 -o \( ! -type d ! -type f \) \) -print -quit)"
+  test -z "${unsafe_trusted_entry}" || fail "root maintenance trust boundary contains an unsafe entry: ${unsafe_trusted_entry}"
+done
+non_executable_script="$(find ops -xdev -type f -name '*.sh' ! -perm -u=x -print -quit)"
+test -z "${non_executable_script}" || fail "maintenance script is not executable: ${non_executable_script}"
+for override in compose.override.yaml compose.override.yml docker-compose.override.yaml docker-compose.override.yml; do
+  test ! -e "${override}" && test ! -L "${override}" || fail "unsupported automatic Compose override is present: ${override}"
+done
+
 data_root="$(sed -n 's/^DATA_ROOT=//p' .env | tail -n 1)"
 public_url="$(sed -n 's/^APP_PUBLIC_URL=//p' .env | tail -n 1)"
 app_env="$(sed -n 's/^APP_ENV=//p' .env | tail -n 1)"
@@ -21,10 +50,7 @@ test "${app_env}" = "production" || fail "APP_ENV must be production"
 test "${provider_mode}" = "live" || fail "PROVIDER_MODE must be live"
 test "${cookie_secure}" = "true" || fail "SESSION_COOKIE_SECURE must be true"
 
-case "${data_root}" in
-  /*) ;;
-  *) fail "DATA_ROOT must be an absolute host path" ;;
-esac
+require_canonical_directory "${data_root}" DATA_ROOT || fail "DATA_ROOT must be an existing canonical directory without symlink components"
 case "${public_url}" in
   https://*) ;;
   *) fail "APP_PUBLIC_URL must use HTTPS" ;;
@@ -123,17 +149,113 @@ legnext_key_path="$(secret_source LEGNEXT_API_KEY_SECRET_SOURCE secrets/legnext_
 openrouter_key_path="$(secret_source OPENROUTER_API_KEY_SECRET_SOURCE secrets/openrouter_api_key)"
 provider_callback_path="$(secret_source PROVIDER_CALLBACK_SECRET_SOURCE secrets/provider_callback_secret)"
 provider_url_signing_path="$(secret_source PROVIDER_URL_SIGNING_SECRET_SOURCE secrets/provider_url_signing_secret)"
-for path in "${legnext_key_path}" "${openrouter_key_path}" "${provider_callback_path}" "${provider_url_signing_path}"; do
+
+check_raw_secret() {
+  path="$1"
+  minimum_length="$2"
   check_secret_mode "${path}"
+  awk -v minimum_length="${minimum_length}" \
+    'NR == 1 && length($0) >= minimum_length && $0 !~ /[[:space:]]/ { valid=1 } END { exit !(NR == 1 && valid) }' \
+    "${path}" || fail "${path} must contain exactly one raw value of at least ${minimum_length} characters without whitespace"
+}
+
+for path in "${legnext_key_path}" "${openrouter_key_path}"; do
+  check_raw_secret "${path}" 16
 done
-test "$(wc -c < "${provider_callback_path}")" -ge 32 || fail "provider callback secret must be at least 32 bytes"
-test "$(wc -c < "${provider_url_signing_path}")" -ge 32 || fail "provider URL signing secret must be at least 32 bytes"
+for path in "${provider_callback_path}" "${provider_url_signing_path}"; do
+  check_raw_secret "${path}" 32
+done
 
 compose_profiles="$(printenv COMPOSE_PROFILES 2>/dev/null || true)"
 if test -z "${compose_profiles}"; then
   compose_profiles="$(sed -n 's/^COMPOSE_PROFILES=//p' .env | tail -n 1)"
 fi
 compose_profiles="$(printf '%s' "${compose_profiles}" | tr -d '[:space:]')"
+
+node_exporter_textfile_dir="$(printenv NODE_EXPORTER_TEXTFILE_DIR 2>/dev/null || true)"
+if test -z "${node_exporter_textfile_dir}"; then
+  node_exporter_textfile_dir="$(sed -n 's#^NODE_EXPORTER_TEXTFILE_DIR=##p' .env | tail -n 1)"
+fi
+node_exporter_textfile_dir="${node_exporter_textfile_dir:-/var/lib/node_exporter/textfile_collector}"
+case "${node_exporter_textfile_dir}" in
+  /) fail "NODE_EXPORTER_TEXTFILE_DIR must not be the filesystem root" ;;
+  /*) ;;
+  *) fail "NODE_EXPORTER_TEXTFILE_DIR must be an absolute host path" ;;
+esac
+[[ "${node_exporter_textfile_dir}" != *[[:space:]:]* ]] || fail "NODE_EXPORTER_TEXTFILE_DIR must not contain whitespace or ':'"
+test -d "${node_exporter_textfile_dir}" || fail "node-exporter textfile directory is missing: ${node_exporter_textfile_dir}"
+test ! -L "${node_exporter_textfile_dir}" || fail "node-exporter textfile directory must not be a symlink"
+test "$(stat -c '%u:%g:%a' "${node_exporter_textfile_dir}")" = "0:0:755" || \
+  fail "node-exporter textfile directory must be owned by root:root with mode 0755"
+test -w "${node_exporter_textfile_dir}" || fail "node-exporter textfile directory is not writable"
+for metric_file in cornfield_backup.prom cornfield_restore_check.prom; do
+  metric_path="${node_exporter_textfile_dir}/${metric_file}"
+  if test -e "${metric_path}" || test -L "${metric_path}"; then
+    test -f "${metric_path}" && test ! -L "${metric_path}" || fail "${metric_path} must be a regular file"
+    test "$(stat -c '%u:%g:%a' "${metric_path}")" = "0:0:644" || \
+      fail "${metric_path} must be owned by root:root with mode 0644"
+  fi
+done
+
+# systemd reads a separate root-only environment file. It is part of the
+# production backup boundary, not an optional post-deploy convenience.
+backup_environment_file=/etc/internal-image-studio/backup.env
+test -f "${backup_environment_file}" && test ! -L "${backup_environment_file}" || fail "${backup_environment_file} must be a regular file"
+test "$(stat -c '%u:%g:%a' "${backup_environment_file}")" = "0:0:600" || \
+  fail "${backup_environment_file} must be owned by root:root with mode 0600"
+backup_textfile_dir="$(sed -n 's#^NODE_EXPORTER_TEXTFILE_DIR=##p' "${backup_environment_file}" | tail -n 1)"
+backup_textfile_dir="${backup_textfile_dir:-/var/lib/node_exporter/textfile_collector}"
+test "${backup_textfile_dir}" = "${node_exporter_textfile_dir}" || \
+  fail "NODE_EXPORTER_TEXTFILE_DIR differs between .env and ${backup_environment_file}"
+backup_data_root="$(sed -n 's#^DATA_ROOT=##p' "${backup_environment_file}" | tail -n 1)"
+test "${backup_data_root}" = "${data_root}" || fail "DATA_ROOT differs between .env and ${backup_environment_file}"
+backup_stage="$(sed -n 's#^BACKUP_STAGE=##p' "${backup_environment_file}" | tail -n 1)"
+restore_check_root="$(sed -n 's#^RESTORE_CHECK_ROOT=##p' "${backup_environment_file}" | tail -n 1)"
+require_canonical_directory "${backup_stage}" BACKUP_STAGE || fail "BACKUP_STAGE must be canonical and contain no symlink components"
+test "$(stat -c '%u:%g:%a' "${backup_stage}")" = "0:0:700" || fail "BACKUP_STAGE must be root:root 0700"
+require_canonical_directory "${backup_stage}/database" BACKUP_DATABASE_DIRECTORY || fail "BACKUP_STAGE/database must already exist and be canonical"
+test "$(stat -c '%u:%g:%a' "${backup_stage}/database")" = "0:0:700" || \
+  fail "BACKUP_STAGE/database must be owned by root:root with mode 0700"
+require_canonical_directory "${restore_check_root}" RESTORE_CHECK_ROOT || fail "RESTORE_CHECK_ROOT must be canonical and contain no symlink components"
+restore_check_mode="$(stat -c '%a' "${restore_check_root}")"
+if test "$(stat -c '%u:%g' "${restore_check_root}")" != "0:0" || (( (8#${restore_check_mode} & 0022) != 0 )); then
+  fail "RESTORE_CHECK_ROOT must be root:root and not group/world writable"
+fi
+
+command -v systemctl >/dev/null 2>&1 || fail "systemctl is required for backup and restore recovery"
+command -v systemd-analyze >/dev/null 2>&1 || fail "systemd-analyze is required to validate maintenance units"
+for command_name in flock hostname jq openssl restic timeout; do
+  command -v "${command_name}" >/dev/null 2>&1 || fail "${command_name} is required for backup and restore operations"
+done
+backup_worker_marker_dir="$(sed -n 's#^BACKUP_WORKER_MARKER_DIR=##p' "${backup_environment_file}" | tail -n 1)"
+backup_worker_marker_dir="${backup_worker_marker_dir:-/var/lib/internal-image-studio}"
+test "${backup_worker_marker_dir}" = "/var/lib/internal-image-studio" || fail "BACKUP_WORKER_MARKER_DIR must use the systemd StateDirectory"
+if test -e "${backup_worker_marker_dir}" || test -L "${backup_worker_marker_dir}"; then
+  require_canonical_directory "${backup_worker_marker_dir}" BACKUP_WORKER_MARKER_DIR || fail "BACKUP_WORKER_MARKER_DIR is unsafe"
+  test "$(stat -c '%u:%g:%a' "${backup_worker_marker_dir}")" = "0:0:700" || fail "BACKUP_WORKER_MARKER_DIR must be root:root 0700"
+fi
+for unit in \
+  internal-image-studio-backup.service \
+  internal-image-studio-backup.timer \
+  internal-image-studio-maintenance-recovery.service \
+  internal-image-studio-restore-check.service \
+  internal-image-studio-restore-check.timer; do
+  installed_unit="/etc/systemd/system/${unit}"
+  reviewed_unit="${studio_root}/ops/systemd/${unit}"
+  test -f "${installed_unit}" && test ! -L "${installed_unit}" || fail "${installed_unit} must be an installed regular file"
+  test "$(stat -c '%u:%g:%a' "${installed_unit}")" = "0:0:644" || fail "${installed_unit} must be root:root 0644"
+  cmp -s "${reviewed_unit}" "${installed_unit}" || fail "${installed_unit} differs from the reviewed repository unit"
+done
+systemd-analyze verify \
+  /etc/systemd/system/internal-image-studio-backup.service \
+  /etc/systemd/system/internal-image-studio-backup.timer \
+  /etc/systemd/system/internal-image-studio-maintenance-recovery.service \
+  /etc/systemd/system/internal-image-studio-restore-check.service \
+  /etc/systemd/system/internal-image-studio-restore-check.timer >/dev/null || fail "maintenance systemd units are invalid"
+systemctl is-enabled --quiet internal-image-studio-backup.timer || fail "backup timer must be enabled"
+systemctl is-enabled --quiet internal-image-studio-restore-check.timer || fail "restore-check timer must be enabled"
+systemctl is-enabled --quiet internal-image-studio-maintenance-recovery.service || fail "boot maintenance recovery service must be enabled"
+
 case ",${compose_profiles}," in
   *,observability,*)
     grafana_admin_path="$(secret_source GRAFANA_ADMIN_PASSWORD_SECRET_SOURCE secrets/grafana_admin_password)"
@@ -218,4 +340,5 @@ for pid in ${nginx_worker_pids}; do
 done
 
 docker compose config --quiet
+docker compose --profile observability config --quiet
 echo "preflight passed"

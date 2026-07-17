@@ -3,6 +3,7 @@ package httpapi
 import (
 	"context"
 	"fmt"
+	"io"
 	"net/http"
 	"strconv"
 	"sync"
@@ -51,6 +52,10 @@ func (m *httpMetrics) record(method string, status int, duration time.Duration) 
 
 func (s *Server) writeMetrics(parent context.Context, w http.ResponseWriter) {
 	w.Header().Set("Content-Type", "text/plain; version=0.0.4")
+	readinessCtx, cancelReadiness := context.WithTimeout(parent, time.Second)
+	writeAPIReadinessMetric(w, s.checkReadiness(readinessCtx) == nil)
+	cancelReadiness()
+
 	s.metricsData.mu.Lock()
 	requests := make(map[httpMetricKey]uint64, len(s.metricsData.requests))
 	for key, value := range s.metricsData.requests {
@@ -157,6 +162,11 @@ func (s *Server) writeMetrics(parent context.Context, w http.ResponseWriter) {
 	fmt.Fprintln(w, "# TYPE image_studio_db_connections gauge")
 	fmt.Fprintf(w, "image_studio_db_connections{state=\"acquired\"} %d\n", stats.AcquiredConns())
 	fmt.Fprintf(w, "image_studio_db_connections{state=\"idle\"} %d\n", stats.IdleConns())
+}
+
+func writeAPIReadinessMetric(w io.Writer, ready bool) {
+	fmt.Fprintln(w, "# TYPE image_studio_api_ready gauge")
+	fmt.Fprintf(w, "image_studio_api_ready %d\n", boolMetric(ready))
 }
 
 func boolMetric(value bool) int {

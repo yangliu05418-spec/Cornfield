@@ -1835,8 +1835,10 @@ func breakerExemptError(err error) bool {
 		return true
 	}
 	switch providerErr.Telemetry.HTTPStatus {
-	case http.StatusBadRequest, http.StatusForbidden, http.StatusRequestEntityTooLarge, http.StatusUnprocessableEntity:
+	case http.StatusBadRequest, http.StatusRequestEntityTooLarge, http.StatusUnprocessableEntity:
 		return true
+	case http.StatusForbidden:
+		return !providerErr.PauseProvider
 	default:
 		return false
 	}

@@ -1,0 +1,127 @@
+rule_files:
+  - prometheus-rules.yml
+
+evaluation_interval: 1m
+
+tests:
+  - name: API readiness failure is observable while metrics remain available
+    interval: 1m
+    input_series:
+      - series: image_studio_api_ready
+        values: "0x3"
+    alert_rule_test:
+      - eval_time: 2m
+        alertname: ImageStudioAPIReadinessFailed
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+            exp_annotations:
+              summary: Cornfield API readiness checks are failing
+
+  - name: API readiness metric disappearance is detected
+    interval: 1m
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: ImageStudioAPIReadinessMetricMissing
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+            exp_annotations:
+              summary: Cornfield API readiness metric is missing
+
+  - name: Enabled paused provider is critical
+    interval: 1m
+    input_series:
+      - series: 'image_studio_provider_state{provider="legnext",state="paused"}'
+        values: "1x3"
+      - series: 'image_studio_provider_enabled{provider="legnext"}'
+        values: "1x3"
+      - series: 'image_studio_provider_breaker_open{provider="legnext"}'
+        values: "0x3"
+    alert_rule_test:
+      - eval_time: 2m
+        alertname: ImageStudioProviderPaused
+        exp_alerts:
+          - exp_labels:
+              provider: legnext
+              severity: critical
+              state: paused
+            exp_annotations:
+              summary: Enabled provider legnext is paused
+
+  - name: Planned disabled provider does not page
+    interval: 1m
+    input_series:
+      - series: 'image_studio_provider_state{provider="legnext",state="paused"}'
+        values: "1x4"
+      - series: 'image_studio_provider_enabled{provider="legnext"}'
+        values: "0x4"
+      - series: 'image_studio_provider_breaker_open{provider="legnext"}'
+        values: "1x4"
+      - series: 'image_studio_provider_attempts_5m{provider="legnext",outcome="failed"}'
+        values: "6x4"
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: ImageStudioProviderPaused
+        exp_alerts: []
+      - eval_time: 3m
+        alertname: ImageStudioProviderBreakerOpen
+        exp_alerts: []
+      - eval_time: 3m
+        alertname: ImageStudioProviderFailures
+        exp_alerts: []
+
+  - name: Provider health metric disappearance is detected
+    interval: 1m
+    input_series:
+      - series: 'image_studio_provider_enabled{provider="openrouter"}'
+        values: "1x4"
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: ImageStudioProviderMetricsMissing
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+            exp_annotations:
+              summary: Cornfield provider health metrics are missing
+
+  - name: Maintenance job failures are critical
+    interval: 1m
+    input_series:
+      - series: image_studio_backup_last_run_success
+        values: "0x3"
+      - series: image_studio_restore_check_last_run_success
+        values: "0x3"
+    alert_rule_test:
+      - eval_time: 2m
+        alertname: ImageStudioBackupLastRunFailed
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+            exp_annotations:
+              summary: The most recent Cornfield backup failed
+      - eval_time: 2m
+        alertname: ImageStudioRestoreCheckLastRunFailed
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+            exp_annotations:
+              summary: The most recent Cornfield restore verification failed
+
+  - name: Missing maintenance success timestamps are critical
+    interval: 1m
+    alert_rule_test:
+      - eval_time: 16m
+        alertname: ImageStudioBackupStale
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+            exp_annotations:
+              summary: Cornfield has no successful backup in the last 26 hours
+      - eval_time: 16m
+        alertname: ImageStudioRestoreCheckStale
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+            exp_annotations:
+              summary: Cornfield has no successful restore verification in the last 35 days

@@ -22,13 +22,14 @@ jobs:
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
+          fetch-depth: 0
           persist-credentials: false
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
           go-version: "1.26.5"
           cache-dependency-path: backend/go.sum
-      - name: Scan the checked-out source for committed secrets
-        run: go run github.com/zricethezav/gitleaks/v8@v8.30.1 dir --redact --no-banner --log-level warn ..
+      - name: Scan the full Git history for committed secrets
+        run: go run github.com/zricethezav/gitleaks/v8@v8.30.1 git --redact --no-banner --log-level warn ..
       - run: go test ./...
       - run: go vet ./...
       - run: go run honnef.co/go/tools/cmd/staticcheck@v0.7.0 ./...
@@ -91,11 +92,18 @@ jobs:
             -v "$PWD/ops:/etc/prometheus:ro" \
             prom/prometheus:v3.7.3@sha256:49214755b6153f90a597adcbff0252cc61069f8ab69ce8411285cd4a560e8038 \
             check config /etc/prometheus/prometheus.yml
+          docker run --rm --workdir /etc/prometheus --entrypoint /bin/promtool \
+            -v "$PWD/ops:/etc/prometheus:ro" \
+            prom/prometheus:v3.7.3@sha256:49214755b6153f90a597adcbff0252cc61069f8ab69ce8411285cd4a560e8038 \
+            test rules prometheus-rules.test.yml
           docker run --rm --entrypoint /bin/amtool \
             -v "$PWD/ops:/etc/alertmanager:ro" \
             prom/alertmanager:v0.32.1@sha256:51a825c2a40acc3e338fdd00d622e01ec090f72be2b3ea46be0839cd47a4d286 \
             check-config /etc/alertmanager/alertmanager.yml
       - run: bash -n ops/*.sh
+      - run: shellcheck ops/*.sh
+      - run: bash ops/textfile-metrics.test.sh
+      - run: bash ops/maintenance-safety.test.sh
       - run: APP_PUBLIC_URL=https://studio.example DATA_ROOT=/srv/internal-image-studio/data docker compose config --quiet
       - name: Validate Compose isolation boundaries
         run: |
@@ -103,6 +111,7 @@ jobs:
             docker compose --profile '*' config --format json |
             jq -e '
               (.services.worker.networks | has("egress")) and
+              (.services.worker.restart == "always") and
               (.services.api.networks | has("egress") | not) and
               (.services.alertmanager.networks | has("egress")) and
               (.services.alertmanager.profiles == ["alerting"]) and

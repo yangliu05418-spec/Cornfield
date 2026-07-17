@@ -108,6 +108,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /api/v1/admin/users/{id}/revoke-sessions", s.requireAdmin(s.requireCSRF(http.HandlerFunc(s.revokeSessions))))
 	mux.Handle("GET /api/v1/admin/models", s.requireAdmin(http.HandlerFunc(s.adminModels)))
 	mux.Handle("GET /api/v1/admin/providers", s.requireAdmin(http.HandlerFunc(s.providers)))
+	mux.Handle("POST /api/v1/admin/providers/{id}/resume", s.requireAdmin(s.requireCSRF(http.HandlerFunc(s.resumeProvider))))
 	mux.Handle("POST /api/v1/admin/jobs/{id}/reconcile-submission", s.requireAdmin(s.requireCSRF(http.HandlerFunc(s.reconcileSubmission))))
 	mux.HandleFunc("POST /api/v1/provider-callbacks/legnext/{jobID}/{signature}", s.legnextCallback)
 	return s.requestMiddleware(mux)
@@ -219,26 +220,35 @@ func (s *Server) live(w http.ResponseWriter, r *http.Request) {
 func (s *Server) ready(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), time.Second)
 	defer cancel()
-	if err := s.db.Ping(ctx); err != nil {
-		writeError(w, http.StatusServiceUnavailable, "DATABASE_UNAVAILABLE", "数据库尚未就绪", true, r)
+	if failure := s.checkReadiness(ctx); failure != nil {
+		writeError(w, http.StatusServiceUnavailable, failure.code, failure.message, true, r)
 		return
 	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ready", "model_revision": s.catalog.Hash})
+}
+
+type readinessFailure struct {
+	code    string
+	message string
+}
+
+func (s *Server) checkReadiness(ctx context.Context) *readinessFailure {
+	if err := s.db.Ping(ctx); err != nil {
+		return &readinessFailure{code: "DATABASE_UNAVAILABLE", message: "数据库尚未就绪"}
+	}
 	if _, err := storageFreePercent(s.cfg.AssetRoot); err != nil {
-		writeError(w, http.StatusServiceUnavailable, "STORAGE_UNAVAILABLE", "存储尚未就绪", true, r)
-		return
+		return &readinessFailure{code: "STORAGE_UNAVAILABLE", message: "存储尚未就绪"}
 	}
 	var appliedModels int
 	if err := s.db.QueryRow(ctx, `SELECT count(*) FROM models WHERE current_revision=$1`, s.catalog.Hash).Scan(&appliedModels); err != nil || appliedModels != len(s.catalog.Models) {
-		writeError(w, http.StatusServiceUnavailable, "MODEL_CONFIG_NOT_APPLIED", "模型配置尚未应用", true, r)
-		return
+		return &readinessFailure{code: "MODEL_CONFIG_NOT_APPLIED", message: "模型配置尚未应用"}
 	}
 	var appliedSnapshots int
 	if err := s.db.QueryRow(ctx, `SELECT count(*) FROM models m JOIN model_capability_versions v
 		ON v.model_id=m.id AND v.revision=m.current_revision WHERE m.current_revision=$1`, s.catalog.Hash).Scan(&appliedSnapshots); err != nil || appliedSnapshots != len(s.catalog.Models) {
-		writeError(w, http.StatusServiceUnavailable, "MODEL_SNAPSHOT_NOT_APPLIED", "模型能力快照尚未完整应用", true, r)
-		return
+		return &readinessFailure{code: "MODEL_SNAPSHOT_NOT_APPLIED", message: "模型能力快照尚未完整应用"}
 	}
-	writeJSON(w, http.StatusOK, map[string]string{"status": "ready", "model_revision": s.catalog.Hash})
+	return nil
 }
 
 func (s *Server) metrics(w http.ResponseWriter, r *http.Request) {

@@ -36,7 +36,7 @@ CI 还会执行 `go test -race`、纯 Go 二进制构建、生产镜像构建、
 
 ## Docker Compose 部署
 
-1. 将仓库部署到 `/opt/internal-image-studio`，复制 `.env.example` 为 `.env`，设置真实 HTTPS URL。`DATA_ROOT` 固定为 `/srv/internal-image-studio/data`，必须与宿主 Nginx 和备份配置一致。生产部署从 GitHub release workflow 下载 `cornfield-image-digests-<commit>`，校验其中的 `SHA256SUMS` 和 `RELEASE_COMMIT`，再把 `digests.env` 的四个 `*_IMAGE` 引用写入 `.env`；它们必须全部使用 `@sha256:` 固定。
+1. 将已通过 CI 的版本部署到 `/opt/internal-image-studio`，在创建运行时 secret 前把该目录、所有父目录、`ops/`、`config/`、`compose.yaml` 和 `.env` 固定为 `root` 持有且组/其他用户不可写；禁止从普通用户可写的 checkout 直接以 root 运行维护脚本。复制 `.env.example` 为 `.env`，设置真实 HTTPS URL。`DATA_ROOT` 固定为 `/srv/internal-image-studio/data`，必须与宿主 Nginx 和备份配置一致。生产部署从 GitHub release workflow 下载 `cornfield-image-digests-<commit>`，校验其中的 `SHA256SUMS` 和 `RELEASE_COMMIT`，再把 `digests.env` 的四个 `*_IMAGE` 引用写入 `.env`；它们必须全部使用 `@sha256:` 固定。
 2. 创建以下文件；每个文件只放一行 secret 本身，不要带引号：
    - `secrets/postgres_bootstrap_password`
    - `secrets/postgres_owner_password`
@@ -73,8 +73,9 @@ CI 还会执行 `go test -race`、纯 Go 二进制构建、生产镜像构建、
    ```
 
    正式资产目录/文件由 Worker 以 GID `65532` 和只读组权限写入；Nginx 不加入该组会让 `X-Accel-Redirect` 返回 `403`。Compose 将 API 的整个 `/data` 挂为只读，仅用嵌套挂载开放 `/data/uploads` 写权限；只有 Worker 能写完整数据树，不要把 API 的父挂载改成可写。上传目录使用 `0700`，因此加入共享组不会让 Nginx 读取 quarantine。`APP_PUBLIC_URL` 必须是标准 `443` 端口、无账号、路径、query 或 fragment 的 bare HTTPS origin，其 host 必须与配置中的 `server_name` 完全一致。Callback 与 Provider asset location 必须保持关闭 access log；`/_protected_assets/` 必须保持 `internal`。
-5. 在 `.env` 中设置 `RELEASE_REQUIRE_DIGESTS=true`。以 root 运行 `chmod +x ops/*.sh && STUDIO_ROOT=/opt/internal-image-studio ops/preflight.sh`；preflight 会验证 UID/GID/mode、以 UID `65532` 实测目录可写、检查完整资产树权限、确认 Nginx worker 的账号与当前进程都已继承 GID `65532`，并要求 `NGINX_SITE_CONFIG` 指向的文件与仓库审查版本逐字一致且确实出现在 `nginx -T` 的活动配置中。它还会读取 TLS 文件并执行完整配置测试，因此必须在第 4 步安装、重启 Nginx 后运行。通过后执行 `docker compose pull` 与 `docker compose up -d --no-build`。检查会拒绝未固定 digest 的四个应用镜像、缺失或权限错误的 secret、错误的 HTTPS origin/Nginx/TLS 配置，以及允许内联脚本的 CSP。`db-bootstrap`、migration 和 model apply 必须成功退出后，API/Worker 才会启动。
-6. 创建首个管理员：
+5. 先完成备份边界：将 `/var/backups/internal-image-studio` 及其 `database` 子目录都创建为 `root:root 0700`，创建 `root:root 0755` 的 `/var/lib/node_exporter/textfile_collector`，并把 `RESTORE_CHECK_ROOT` 挂载为独立于系统盘和数据盘、`root:root` 且组/其他用户不可写的真实目录。三个路径及其父组件都不能是 symlink。按 [运维手册](docs/OPERATIONS.md#备份) 创建 `root:root 0600` 的 `/etc/internal-image-studio/backup.env`，再执行 `install -o root -g root -m 0644 ops/systemd/* /etc/systemd/system/ && systemctl daemon-reload && systemctl enable internal-image-studio-maintenance-recovery.service internal-image-studio-backup.timer internal-image-studio-restore-check.timer`；先启动一次 maintenance recovery，再在首次部署完成并手工演练成功后启动 timer。preflight 会逐字比对全部 unit、验证 boot recovery 与两个 timer 已启用，并把这些条件视为生产必需项。
+6. 在 `.env` 中设置 `RELEASE_REQUIRE_DIGESTS=true`。以 root 设置 `chmod 0755 ops/*.sh` 后运行 `STUDIO_ROOT=/opt/internal-image-studio ops/preflight.sh`；preflight 还会拒绝非 root 持有、组/其他用户可写、symlink 或不可执行的维护代码/Compose 配置，验证 UID/GID/mode、规范的数据/备份/恢复路径、以 UID `65532` 实测目录可写、检查完整资产树权限、确认 Nginx worker 的账号与当前进程都已继承 GID `65532`，并要求 `NGINX_SITE_CONFIG` 指向的文件与仓库审查版本逐字一致且确实出现在 `nginx -T` 的活动配置中。它还会读取 TLS 文件、备份环境和 node-exporter textfile 目录并执行完整配置测试，因此必须在第 4、5 步完成后运行。通过后执行 `docker compose pull` 与 `docker compose up -d --no-build`。检查会拒绝未固定 digest 的四个应用镜像、缺失或权限错误的 secret、错误的 HTTPS origin/Nginx/TLS 配置，以及允许内联脚本的 CSP。`db-bootstrap`、migration 和 model apply 必须成功退出后，API/Worker 才会启动。
+7. 创建首个管理员：
 
 ```bash
 read -r -s -p "Admin password: " CORNFIELD_ADMIN_PASSWORD; printf '\n'
@@ -88,6 +89,8 @@ unset CORNFIELD_ADMIN_PASSWORD
 ```bash
 docker compose --profile observability up -d
 ```
+
+node-exporter 会从宿主 textfile 目录读取备份与恢复演练的原子结果指标；首次启用监控后应各手动成功执行一次 systemd service，避免“从未成功”的时效告警保持触发。
 
 仅启用 observability profile 会评估规则但不会向外发送通知。配置并演练外部 HTTPS receiver 后，再启用告警：
 

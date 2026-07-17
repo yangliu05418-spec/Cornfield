@@ -315,6 +315,7 @@ func TestBreakerExemptErrorClassification(t *testing.T) {
 	}
 	for _, err := range []error{
 		errors.New("transport failed"),
+		&provider.Error{Code: "PROVIDER_HTTP_403", PauseProvider: true, Telemetry: provider.Telemetry{HTTPStatus: 403}},
 		&provider.Error{Code: "PROVIDER_HTTP_429", Retryable: true, Telemetry: provider.Telemetry{HTTPStatus: 429}},
 		&provider.Error{Code: "PROVIDER_HTTP_500", Retryable: true, Telemetry: provider.Telemetry{HTTPStatus: 500}},
 	} {

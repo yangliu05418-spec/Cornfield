@@ -177,3 +177,22 @@ func TestLegnextForbiddenIsPerRequestContentPolicyFailure(t *testing.T) {
 		t.Fatalf("403 classification = %+v", providerErr)
 	}
 }
+
+func TestLegnextForbiddenPermissionFailurePausesProvider(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusForbidden)
+		_, _ = w.Write([]byte(`{"code":403,"message":"Sensitive content detected or permission denied"}`))
+	}))
+	defer server.Close()
+	adapter := NewLegnext("test-key")
+	adapter.BaseURL = server.URL
+	adapter.Client = server.Client()
+	_, err := adapter.Submit(context.Background(), CanonicalRequest{Prompt: "test", AspectRatio: "1:1"})
+	var providerErr *Error
+	if !errors.As(err, &providerErr) {
+		t.Fatalf("Submit error = %v", err)
+	}
+	if providerErr.Code != "PROVIDER_HTTP_403" || !providerErr.PauseProvider || providerErr.Retryable {
+		t.Fatalf("403 classification = %+v", providerErr)
+	}
+}

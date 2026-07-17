@@ -33,3 +33,23 @@ func TestDecodeJSONAcceptsTrailingWhitespace(t *testing.T) {
 		t.Fatalf("name = %q", payload.Name)
 	}
 }
+
+func TestWriteAPIReadinessMetric(t *testing.T) {
+	for _, test := range []struct {
+		name  string
+		ready bool
+		value string
+	}{
+		{name: "ready", ready: true, value: "1"},
+		{name: "not ready", ready: false, value: "0"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			var output strings.Builder
+			writeAPIReadinessMetric(&output, test.ready)
+			want := "# TYPE image_studio_api_ready gauge\nimage_studio_api_ready " + test.value + "\n"
+			if output.String() != want {
+				t.Fatalf("metric output = %q, want %q", output.String(), want)
+			}
+		})
+	}
+}

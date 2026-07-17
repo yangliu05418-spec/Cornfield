@@ -1,12 +1,19 @@
 [Unit]
 Description=Internal Image Studio backup
-After=docker.service network-online.target
+After=docker.service network-online.target internal-image-studio-maintenance-recovery.service
 Requires=docker.service
+Wants=internal-image-studio-maintenance-recovery.service
 
 [Service]
 Type=oneshot
 EnvironmentFile=/etc/internal-image-studio/backup.env
+Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+StateDirectory=internal-image-studio
+StateDirectoryMode=0700
 ExecStart=/opt/internal-image-studio/ops/backup.sh
+ExecStopPost=/opt/internal-image-studio/ops/backup-worker-recovery.sh
+TimeoutStartSec=2h
+TimeoutStopSec=8m
 Nice=10
 IOSchedulingClass=best-effort
 IOSchedulingPriority=7

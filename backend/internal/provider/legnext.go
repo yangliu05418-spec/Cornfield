@@ -141,11 +141,29 @@ func (l *Legnext) Cancel(context.Context, Submission) (CancelResult, error) {
 
 func legnextHTTPError(res *http.Response, duringSubmit bool, secrets ...string) error {
 	if res.StatusCode == http.StatusForbidden {
-		_, _ = io.Copy(io.Discard, io.LimitReader(res.Body, 64<<10))
+		var envelope struct {
+			Message    string `json:"message"`
+			RawMessage string `json:"raw_message"`
+		}
+		body, _ := io.ReadAll(io.LimitReader(res.Body, 64<<10))
+		_ = json.Unmarshal(body, &envelope)
+		message := strings.ToLower(strings.TrimSpace(envelope.Message + " " + envelope.RawMessage))
+		sensitive := strings.Contains(message, "sensitive content") || strings.Contains(message, "content policy")
+		if sensitive && !strings.Contains(message, "permission") {
+			return &Error{
+				Code:      "CONTENT_POLICY_REJECTED",
+				Message:   "Legnext rejected the request under its content policy",
+				Telemetry: responseTelemetryExcluding(res, secrets),
+			}
+		}
+		// Legnext also uses 403 for permission failures. Treat an unknown 403 as
+		// provider-wide until an authenticated operator confirms otherwise; a
+		// false content-policy classification would keep draining the queue.
 		return &Error{
-			Code:      "CONTENT_POLICY_REJECTED",
-			Message:   "Legnext rejected the request under its content policy",
-			Telemetry: responseTelemetryExcluding(res, secrets),
+			Code:          "PROVIDER_HTTP_403",
+			Message:       "provider returned HTTP 403",
+			PauseProvider: true,
+			Telemetry:     responseTelemetryExcluding(res, secrets),
 		}
 	}
 	if duringSubmit {

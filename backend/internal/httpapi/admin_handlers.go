@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -292,6 +293,75 @@ func (s *Server) providers(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"items": items})
+}
+
+func (s *Server) resumeProvider(w http.ResponseWriter, r *http.Request) {
+	providerID := strings.TrimSpace(r.PathValue("id"))
+	if !validProviderID(providerID) {
+		writeError(w, http.StatusBadRequest, "PROVIDER_ID_INVALID", "上游编号不正确", false, r)
+		return
+	}
+
+	tx, err := s.db.Begin(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "PROVIDER_RESUME_FAILED", "上游恢复失败", true, r)
+		return
+	}
+	defer tx.Rollback(r.Context())
+
+	var enabled bool
+	var state string
+	var previousErrorCode *string
+	err = tx.QueryRow(r.Context(), `SELECT enabled,state,last_error_code FROM providers WHERE id=$1 FOR UPDATE`, providerID).
+		Scan(&enabled, &state, &previousErrorCode)
+	if isNotFound(err) {
+		writeError(w, http.StatusNotFound, "PROVIDER_NOT_FOUND", "上游不存在", false, r)
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "PROVIDER_RESUME_FAILED", "上游恢复失败", true, r)
+		return
+	}
+	if !enabled {
+		writeError(w, http.StatusConflict, "PROVIDER_DISABLED", "已停用的上游不能恢复", false, r)
+		return
+	}
+	if state != "paused" {
+		writeError(w, http.StatusConflict, "PROVIDER_NOT_PAUSED", "上游当前没有暂停", false, r)
+		return
+	}
+
+	if _, err = tx.Exec(r.Context(), `UPDATE providers SET state='degraded',breaker_open_until=NULL,
+		last_error_code=NULL,last_error_at=NULL,updated_at=now() WHERE id=$1`, providerID); err != nil {
+		writeError(w, http.StatusInternalServerError, "PROVIDER_RESUME_FAILED", "上游恢复失败", true, r)
+		return
+	}
+	metadata := map[string]any{"previous_state": state}
+	if previousErrorCode != nil {
+		metadata["previous_error_code"] = *previousErrorCode
+	}
+	actor := currentSession(r)
+	if err = insertAudit(r.Context(), tx, actor.UserID, "provider.resume", "provider", providerID, requestIDFromContext(r), metadata); err != nil {
+		writeError(w, http.StatusInternalServerError, "AUDIT_WRITE_FAILED", "上游恢复审计记录失败", true, r)
+		return
+	}
+	if err = tx.Commit(r.Context()); err != nil {
+		writeError(w, http.StatusInternalServerError, "PROVIDER_RESUME_FAILED", "上游恢复失败", true, r)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"id": providerID, "state": "degraded", "resumed": true})
+}
+
+func validProviderID(value string) bool {
+	if value == "" || len(value) > 64 {
+		return false
+	}
+	for _, char := range value {
+		if (char < 'a' || char > 'z') && (char < '0' || char > '9') && char != '-' && char != '_' {
+			return false
+		}
+	}
+	return true
 }
 
 func temporaryPassword() (string, error) {

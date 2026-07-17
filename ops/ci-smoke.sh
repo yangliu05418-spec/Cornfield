@@ -14,7 +14,8 @@ export APP_ENV=development
 export APP_PUBLIC_URL=http://127.0.0.1:8080
 export SESSION_COOKIE_SECURE=false
 export PROVIDER_MODE=mock
-export DATA_ROOT="$(mktemp -d /tmp/cornfield-ci-data.XXXXXX)"
+DATA_ROOT="$(mktemp -d /tmp/cornfield-ci-data.XXXXXX)"
+export DATA_ROOT
 secret_root="$(mktemp -d /tmp/cornfield-ci-secrets.XXXXXX)"
 export POSTGRES_BOOTSTRAP_PASSWORD_SECRET_SOURCE="${secret_root}/postgres_bootstrap_password"
 export POSTGRES_OWNER_PASSWORD_SECRET_SOURCE="${secret_root}/postgres_owner_password"
@@ -95,7 +96,7 @@ ownership_hardening="$(docker compose exec -T postgres psql -U studio_bootstrap 
   "SELECT (SELECT pg_get_userbyid(datdba) FROM pg_database WHERE datname='studio')='studio_owner' AND NOT EXISTS(SELECT 1 FROM pg_roles WHERE rolname='studio')")"
 test "${ownership_hardening}" = "t"
 runtime_privileges="$(docker compose exec -T postgres psql -U studio_bootstrap -d studio -Atc \
-  "SELECT has_schema_privilege('studio_api','public','USAGE') AND NOT has_schema_privilege('studio_api','public','CREATE') AND NOT has_table_privilege('studio_api','river_job','SELECT') AND has_column_privilege('studio_api','assets','lock_guard','UPDATE') AND NOT has_column_privilege('studio_api','assets','purge_pending','UPDATE') AND has_column_privilege('studio_worker','user_sessions','expires_at','SELECT') AND NOT has_column_privilege('studio_worker','user_sessions','token_hash','SELECT') AND has_table_privilege('studio_worker','river_job','SELECT') AND has_table_privilege('studio_worker','river_job','INSERT') AND has_table_privilege('studio_worker','river_job','UPDATE') AND has_table_privilege('studio_worker','river_job','DELETE')")"
+  "SELECT has_schema_privilege('studio_api','public','USAGE') AND NOT has_schema_privilege('studio_api','public','CREATE') AND NOT has_table_privilege('studio_api','river_job','SELECT') AND has_column_privilege('studio_api','assets','lock_guard','UPDATE') AND NOT has_column_privilege('studio_api','assets','purge_pending','UPDATE') AND has_column_privilege('studio_api','providers','state','UPDATE') AND NOT has_column_privilege('studio_api','providers','enabled','UPDATE') AND has_column_privilege('studio_worker','user_sessions','expires_at','SELECT') AND NOT has_column_privilege('studio_worker','user_sessions','token_hash','SELECT') AND has_table_privilege('studio_worker','river_job','SELECT') AND has_table_privilege('studio_worker','river_job','INSERT') AND has_table_privilege('studio_worker','river_job','UPDATE') AND has_table_privilege('studio_worker','river_job','DELETE')")"
 test "${runtime_privileges}" = "t"
 
 admin_password='ci-smoke-password-123456'
@@ -111,6 +112,23 @@ curl --fail-with-body --silent --show-error \
   --data "{\"username\":\"ci-admin\",\"password\":\"${admin_password}\"}" \
   http://127.0.0.1:8081/api/v1/auth/login > "${login_json}"
 csrf_token="$(jq -er '.csrf_token' "${login_json}")"
+
+# A fail-closed provider pause must survive healthy balance/key probes and may
+# only be cleared by the authenticated, CSRF-protected, audited admin action.
+docker compose exec -T postgres psql -U studio_bootstrap -d studio -v ON_ERROR_STOP=1 -c \
+  "UPDATE providers SET state='paused',last_error_code='CI_PERMISSION_DENIED',last_error_at=now() WHERE id='legnext'" >/dev/null
+providers_json="${tmp_dir}/providers.json"
+curl --fail-with-body --silent --show-error --cookie "${cookie_jar}" \
+  http://127.0.0.1:8081/api/v1/admin/providers > "${providers_json}"
+jq -e '.items[] | select(.id == "legnext") | .state == "paused" and .last_error_code == "CI_PERMISSION_DENIED"' "${providers_json}" >/dev/null
+resume_json="${tmp_dir}/provider-resume.json"
+curl --fail-with-body --silent --show-error --cookie "${cookie_jar}" \
+  --header "X-CSRF-Token: ${csrf_token}" --request POST \
+  http://127.0.0.1:8081/api/v1/admin/providers/legnext/resume > "${resume_json}"
+jq -e '.id == "legnext" and .state == "degraded" and .resumed == true' "${resume_json}" >/dev/null
+resume_audit_count="$(docker compose exec -T postgres psql -U studio_bootstrap -d studio -Atc \
+  "SELECT count(*) FROM audit_logs WHERE action='provider.resume' AND target_type='provider' AND target_id='legnext'")"
+test "${resume_audit_count}" = "1"
 
 models_json="${tmp_dir}/models.json"
 curl --fail-with-body --silent --show-error --cookie "${cookie_jar}" \

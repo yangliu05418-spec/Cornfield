@@ -1,0 +1,17 @@
+[Unit]
+Description=Recover interrupted Cornfield maintenance operations
+After=local-fs.target docker.service network-online.target
+Requires=docker.service
+Before=internal-image-studio-backup.service internal-image-studio-restore-check.service
+
+[Service]
+Type=oneshot
+EnvironmentFile=/etc/internal-image-studio/backup.env
+Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+StateDirectory=internal-image-studio
+StateDirectoryMode=0700
+ExecStart=/opt/internal-image-studio/ops/maintenance-recovery.sh
+TimeoutStartSec=10m
+
+[Install]
+WantedBy=multi-user.target

@@ -26,3 +26,23 @@ func TestProviderHealthState(t *testing.T) {
 		})
 	}
 }
+
+func TestNextProviderProbeTransitionPreservesPausedStateAndReason(t *testing.T) {
+	transition := nextProviderProbeTransition(
+		"paused",
+		"PROVIDER_HTTP_403",
+		true,
+		false,
+		provider.Health{Healthy: true},
+	)
+	if transition.State != "paused" || transition.ErrorCode != "PROVIDER_HTTP_403" || !transition.PreserveError {
+		t.Fatalf("transition = %+v", transition)
+	}
+}
+
+func TestNextProviderProbeTransitionKeepsBreakerDegraded(t *testing.T) {
+	transition := nextProviderProbeTransition("degraded", "", true, true, provider.Health{Healthy: true})
+	if transition.State != "degraded" || transition.ErrorCode != "" || transition.PreserveError {
+		t.Fatalf("transition = %+v", transition)
+	}
+}

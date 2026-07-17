@@ -21,7 +21,7 @@ type OpenRouter struct {
 }
 
 func NewOpenRouter(apiKey, publicURL string) *OpenRouter {
-	return &OpenRouter{APIKey: apiKey, PublicURL: publicURL, BaseURL: "https://openrouter.ai", Client: newHTTPClient(5 * time.Minute)}
+	return &OpenRouter{APIKey: apiKey, PublicURL: publicURL, BaseURL: "https://openrouter.ai", Client: newHTTPClient(5*time.Minute, 4*time.Minute)}
 }
 
 func (o *OpenRouter) Submit(ctx context.Context, input CanonicalRequest) (Submission, error) {

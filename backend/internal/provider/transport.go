@@ -6,7 +6,7 @@ import (
 	"time"
 )
 
-func newHTTPClient(timeout time.Duration) *http.Client {
+func newHTTPClient(timeout, responseHeaderTimeout time.Duration) *http.Client {
 	transport := http.DefaultTransport.(*http.Transport).Clone()
 	// Provider API keys are bearer credentials. Never inherit an ambient proxy
 	// or follow a redirect that could move those headers outside the audited
@@ -18,7 +18,7 @@ func newHTTPClient(timeout time.Duration) *http.Client {
 	transport.MaxConnsPerHost = 8
 	transport.IdleConnTimeout = 90 * time.Second
 	transport.TLSHandshakeTimeout = 10 * time.Second
-	transport.ResponseHeaderTimeout = 30 * time.Second
+	transport.ResponseHeaderTimeout = responseHeaderTimeout
 	transport.ExpectContinueTimeout = time.Second
 	transport.TLSClientConfig = &tls.Config{MinVersion: tls.VersionTLS12}
 	return &http.Client{

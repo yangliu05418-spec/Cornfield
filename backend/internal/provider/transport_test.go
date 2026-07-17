@@ -9,7 +9,7 @@ import (
 
 func TestProviderHTTPClientIgnoresProxyAndRedirects(t *testing.T) {
 	t.Setenv("HTTPS_PROXY", "http://attacker.invalid:8080")
-	client := newHTTPClient(time.Second)
+	client := newHTTPClient(time.Second, 30*time.Second)
 	transport, ok := client.Transport.(*http.Transport)
 	if !ok {
 		t.Fatalf("transport type = %T", client.Transport)
@@ -22,5 +22,16 @@ func TestProviderHTTPClientIgnoresProxyAndRedirects(t *testing.T) {
 	}
 	if err := client.CheckRedirect(&http.Request{}, nil); err != http.ErrUseLastResponse {
 		t.Fatalf("redirect policy = %v", err)
+	}
+}
+
+func TestOpenRouterAllowsLongSynchronousImageResponses(t *testing.T) {
+	client := NewOpenRouter("test-key", "").Client
+	transport, ok := client.Transport.(*http.Transport)
+	if !ok {
+		t.Fatalf("transport type = %T", client.Transport)
+	}
+	if transport.ResponseHeaderTimeout != 4*time.Minute {
+		t.Fatalf("response header timeout = %v", transport.ResponseHeaderTimeout)
 	}
 }

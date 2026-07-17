@@ -18,7 +18,7 @@ type Legnext struct {
 }
 
 func NewLegnext(apiKey string) *Legnext {
-	return &Legnext{APIKey: apiKey, BaseURL: "https://api.legnext.ai", Client: newHTTPClient(45 * time.Second)}
+	return &Legnext{APIKey: apiKey, BaseURL: "https://api.legnext.ai", Client: newHTTPClient(45*time.Second, 30*time.Second)}
 }
 
 type legnextTask struct {

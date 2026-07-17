@@ -32,7 +32,7 @@ models:
       allowed_output_hosts: ["cdn.legnext.ai", "cdn.midjourney.com", "img.playjoy3d.com"]
 
   - id: openrouter-gemini-3-1-flash-lite-image
-    display_name: "Google: Nano Banana 2 Lite (Gemini 3.1 Flash Lite Image)"
+    display_name: "Google: Nano Banana 2 Lite"
     provider: openrouter
     provider_model: google/gemini-3.1-flash-lite-image
     enabled: true
@@ -61,7 +61,7 @@ models:
       allowed_output_hosts: []
 
   - id: openrouter-gemini-3-1-flash-image
-    display_name: "Google: Nano Banana 2 (Gemini 3.1 Flash Image)"
+    display_name: "Nano Banana 2"
     provider: openrouter
     provider_model: google/gemini-3.1-flash-image
     enabled: true
@@ -79,7 +79,7 @@ models:
     policy: { submit_timeout_seconds: 300, generation_timeout_seconds: 360, max_concurrency: 4, max_safe_retries: 2, breaker_min_requests: 10, breaker_failure_ratio: 0.5, breaker_cooldown_seconds: 30, allowed_output_hosts: [] }
 
   - id: openrouter-gemini-3-pro-image
-    display_name: "Google: Nano Banana Pro (Gemini 3 Pro Image)"
+    display_name: "Nano Banana Pro"
     provider: openrouter
     provider_model: google/gemini-3-pro-image
     enabled: true

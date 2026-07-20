@@ -31,6 +31,6 @@ FROM postgres:18.4-bookworm@sha256:1961f96e6029a02c3812d7cb329a3b03a3ac2bb067058
 RUN useradd --uid 65532 --no-create-home --shell /usr/sbin/nologin studio
 COPY --from=build /out/migrate /out/modelctl /out/adminctl /usr/local/bin/
 COPY ops/db-bootstrap.sh /usr/local/bin/db-bootstrap
-RUN chmod 0755 /usr/local/bin/db-bootstrap
+RUN chmod 0755 /usr/local/bin/db-bootstrap && rm /usr/local/bin/gosu
 WORKDIR /app
 USER 65532:65532

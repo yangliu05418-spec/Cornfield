@@ -3,7 +3,9 @@ import type { Page } from '@playwright/test'
 
 const mockImage = `<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="900" viewBox="0 0 1200 900"><defs><linearGradient id="g" x2="1" y2="1"><stop stop-color="#15191d"/><stop offset=".52" stop-color="#556b3a"/><stop offset="1" stop-color="#d1fe17"/></linearGradient></defs><rect width="1200" height="900" fill="url(#g)"/><circle cx="770" cy="300" r="180" fill="#d1fe17" opacity=".28"/><path d="M0 690 Q330 510 660 700 T1200 620 V900 H0Z" fill="#090b0c" opacity=".76"/></svg>`
 
-test('landing page uses the production static shell', async ({ page }) => {
+test('landing page uses the production static shell', async ({
+  page,
+}, testInfo) => {
   const errors = capturePageErrors(page)
   await page.setViewportSize({ width: 1440, height: 960 })
   await page.goto('/')
@@ -21,6 +23,7 @@ test('landing page uses the production static shell', async ({ page }) => {
       (scripts) => scripts.filter((script) => script.textContent.trim()).length,
     )
   expect(executableInlineScripts).toBe(0)
+  await page.screenshot({ path: testInfo.outputPath('landing.png') })
   expect(errors).toEqual([])
 })
 
@@ -321,6 +324,30 @@ test('Midjourney stays one draw with four outputs and versioned parameters', asy
   )
 })
 
+test('asset workspace creates folders, moves assets, and archives without deleting', async ({
+  page,
+}, testInfo) => {
+  await installStudioMocks(page)
+  await page.goto('/app/assets')
+
+  await expect(page.getByRole('heading', { name: '资产工作台' })).toBeVisible()
+  await page.getByRole('button', { name: '新建文件夹' }).click()
+  await page.getByLabel('名称').fill('Campaign A')
+  await page.getByRole('button', { name: '保存', exact: true }).click()
+  await expect(page.getByRole('button', { name: /Campaign A/ })).toBeVisible()
+
+  const move = page.getByRole('combobox', { name: '移动到文件夹' }).first()
+  await move.selectOption({ label: 'Campaign A' })
+  await expect(move).toHaveValue('folder-1')
+  await page.screenshot({ path: testInfo.outputPath('asset-workspace.png') })
+
+  await page.getByRole('button', { name: '归档', exact: true }).first().click()
+  await page.getByRole('button', { name: '已归档', exact: true }).click()
+  await expect(
+    page.getByRole('button', { name: '取消归档' }).first(),
+  ).toBeVisible()
+})
+
 test.describe('mobile studio', () => {
   test.use({ viewport: { width: 390, height: 844 }, hasTouch: true })
 
@@ -392,6 +419,12 @@ async function installStudioMocks(
     created_at: new Date(Date.now() - index * 1_000).toISOString(),
   }))
   let generations: unknown[] = []
+  let folders: {
+    id: string
+    name: string
+    asset_count: number
+    created_at: string
+  }[] = []
   let revoked = false
   let postAttempts = 0
   const postKeys: string[] = []
@@ -448,7 +481,67 @@ async function installStudioMocks(
       })
     }
     if (pathname === '/api/v1/assets') {
-      return json(route, { items: assets, next_cursor: '' })
+      const view = url.searchParams.get('view') ?? 'active'
+      const folderID = url.searchParams.get('folder_id')
+      const visible = assets.filter((asset) => {
+        const organized = asset as typeof asset & {
+          folder_id?: string
+          archived_at?: string
+        }
+        const inView =
+          view === 'all' ||
+          (view === 'active' && !organized.archived_at) ||
+          (view === 'archived' && !!organized.archived_at)
+        return inView && (!folderID || organized.folder_id === folderID)
+      })
+      return json(route, { items: visible, next_cursor: '' })
+    }
+    if (pathname === '/api/v1/asset-folders' && request.method() === 'GET') {
+      return json(route, { items: folders })
+    }
+    if (pathname === '/api/v1/asset-folders' && request.method() === 'POST') {
+      const input = request.postDataJSON() as { name: string }
+      const folder = {
+        id: `folder-${folders.length + 1}`,
+        name: input.name,
+        asset_count: 0,
+        created_at: new Date().toISOString(),
+      }
+      folders = [...folders, folder]
+      return json(route, folder, 201)
+    }
+    if (pathname.endsWith('/organization') && request.method() === 'PATCH') {
+      const assetID = pathname.split('/').at(-2)
+      const input = request.postDataJSON() as {
+        folder_id?: string | null
+        archived?: boolean
+      }
+      assets = assets.map((asset) =>
+        asset.id === assetID
+          ? {
+              ...asset,
+              ...(input.folder_id !== undefined
+                ? { folder_id: input.folder_id ?? undefined }
+                : {}),
+              ...(input.archived !== undefined
+                ? {
+                    archived_at: input.archived
+                      ? new Date().toISOString()
+                      : undefined,
+                  }
+                : {}),
+            }
+          : asset,
+      )
+      folders = folders.map((folder) => ({
+        ...folder,
+        asset_count: assets.filter(
+          (asset) =>
+            (asset as typeof asset & { folder_id?: string }).folder_id ===
+            folder.id,
+        ).length,
+      }))
+      return route.fulfill({ status: 204 })
     }
     if (pathname === '/api/v1/generations' && request.method() === 'GET') {
       const configuredPage =

@@ -20,6 +20,6 @@ secrets/*
 web/node_modules/
 web/.output/
 web/dist/
-web/output/playwright/
+web/output/
 backend/bin/
 backend/coverage.out

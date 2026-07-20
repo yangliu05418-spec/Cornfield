@@ -35,6 +35,8 @@ type assetResponse struct {
 	BatchID          *uuid.UUID `json:"batch_id,omitempty"`
 	JobID            *uuid.UUID `json:"job_id,omitempty"`
 	OutputIndex      *int       `json:"output_index,omitempty"`
+	FolderID         *uuid.UUID `json:"folder_id,omitempty"`
+	ArchivedAt       *time.Time `json:"archived_at,omitempty"`
 }
 
 const (
@@ -228,13 +230,32 @@ func (s *Server) listAssets(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "INVALID_CURSOR", "分页游标无效", false, r)
 		return
 	}
-	rows, err := s.db.Query(r.Context(), `SELECT a.id,a.kind,a.media_type,a.original_filename,a.width,a.height,a.byte_size,a.sha256,a.created_at,o.job_id,o.output_index,j.batch_id
+	view := r.URL.Query().Get("view")
+	if view == "" {
+		view = "active"
+	}
+	if !slicesString([]string{"active", "archived", "all"}, view) {
+		writeError(w, http.StatusBadRequest, "INVALID_ASSET_VIEW", "资产视图无效", false, r)
+		return
+	}
+	var folderID *uuid.UUID
+	if raw := r.URL.Query().Get("folder_id"); raw != "" {
+		parsed, parseErr := uuid.Parse(raw)
+		if parseErr != nil {
+			writeError(w, http.StatusBadRequest, "INVALID_FOLDER", "文件夹参数无效", false, r)
+			return
+		}
+		folderID = &parsed
+	}
+	rows, err := s.db.Query(r.Context(), `SELECT a.id,a.kind,a.media_type,a.original_filename,a.width,a.height,a.byte_size,a.sha256,a.created_at,o.job_id,o.output_index,j.batch_id,a.folder_id,a.archived_at
 		FROM assets a
 		LEFT JOIN generation_outputs o ON o.asset_id=a.id
 		LEFT JOIN generation_jobs j ON j.id=o.job_id
 		WHERE a.owner_user_id=$1 AND a.purged_at IS NULL AND a.purge_pending=false
 		  AND ($2::timestamptz IS NULL OR (a.created_at,a.id)<($2,$3::uuid))
-		ORDER BY a.created_at DESC,a.id DESC LIMIT $4`, sess.UserID, cursorTime, cursorID, limit)
+		  AND ($4='all' OR ($4='active' AND a.archived_at IS NULL) OR ($4='archived' AND a.archived_at IS NOT NULL))
+		  AND ($5::uuid IS NULL OR a.folder_id=$5)
+		ORDER BY a.created_at DESC,a.id DESC LIMIT $6`, sess.UserID, cursorTime, cursorID, view, folderID, limit)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "DATABASE_ERROR", "读取资产失败", true, r)
 		return
@@ -244,7 +265,7 @@ func (s *Server) listAssets(w http.ResponseWriter, r *http.Request) {
 	for rows.Next() {
 		var item assetResponse
 		var createdAt time.Time
-		if err := rows.Scan(&item.ID, &item.Kind, &item.MediaType, &item.OriginalFilename, &item.Width, &item.Height, &item.ByteSize, &item.SHA256, &createdAt, &item.JobID, &item.OutputIndex, &item.BatchID); err != nil {
+		if err := rows.Scan(&item.ID, &item.Kind, &item.MediaType, &item.OriginalFilename, &item.Width, &item.Height, &item.ByteSize, &item.SHA256, &createdAt, &item.JobID, &item.OutputIndex, &item.BatchID, &item.FolderID, &item.ArchivedAt); err != nil {
 			writeError(w, http.StatusInternalServerError, "DATABASE_ERROR", "读取资产失败", true, r)
 			return
 		}
@@ -344,9 +365,9 @@ func (s *Server) loadAsset(r *http.Request, id uuid.UUID) (assetResponse, string
 	var item assetResponse
 	var key string
 	var createdAt time.Time
-	err := s.db.QueryRow(r.Context(), `SELECT a.id,a.kind,a.media_type,a.original_filename,a.width,a.height,a.byte_size,a.sha256,a.storage_key,a.created_at,o.job_id,o.output_index,j.batch_id
+	err := s.db.QueryRow(r.Context(), `SELECT a.id,a.kind,a.media_type,a.original_filename,a.width,a.height,a.byte_size,a.sha256,a.storage_key,a.created_at,o.job_id,o.output_index,j.batch_id,a.folder_id,a.archived_at
 		FROM assets a LEFT JOIN generation_outputs o ON o.asset_id=a.id LEFT JOIN generation_jobs j ON j.id=o.job_id
-		WHERE a.id=$1 AND a.purged_at IS NULL AND a.purge_pending=false AND (a.owner_user_id=$2 OR $3='admin')`, id, sess.UserID, sess.Role).Scan(&item.ID, &item.Kind, &item.MediaType, &item.OriginalFilename, &item.Width, &item.Height, &item.ByteSize, &item.SHA256, &key, &createdAt, &item.JobID, &item.OutputIndex, &item.BatchID)
+		WHERE a.id=$1 AND a.purged_at IS NULL AND a.purge_pending=false AND (a.owner_user_id=$2 OR $3='admin')`, id, sess.UserID, sess.Role).Scan(&item.ID, &item.Kind, &item.MediaType, &item.OriginalFilename, &item.Width, &item.Height, &item.ByteSize, &item.SHA256, &key, &createdAt, &item.JobID, &item.OutputIndex, &item.BatchID, &item.FolderID, &item.ArchivedAt)
 	item.CreatedAt = createdAt.Format(time.RFC3339Nano)
 	item.setURLs()
 	return item, key, err

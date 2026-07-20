@@ -41,6 +41,15 @@ export type Asset = {
   thumb_640_url: string
   thumb_1280_url: string
   created_at: string
+  folder_id?: string
+  archived_at?: string
+}
+
+export type AssetFolder = {
+  id: string
+  name: string
+  asset_count: number
+  created_at: string
 }
 
 export type AssetPage = {

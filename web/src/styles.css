@@ -237,29 +237,32 @@ a {
   grid-template-columns: 1fr 1fr 2fr 1fr;
   gap: 32px;
   align-items: end;
-  margin-top: auto;
-  padding-top: 50px;
-  font-size: 10px;
-  line-height: 1.35;
+  margin-top: clamp(38px, 6vh, 76px);
+  padding-top: 0;
+  font-size: 12px;
+  line-height: 1.5;
   text-transform: uppercase;
 }
 .landing-meta p {
   margin: 0;
-  max-width: 300px;
+  max-width: 360px;
 }
 .landing-enter {
   display: flex;
   justify-content: space-between;
   align-items: center;
+  min-height: 52px;
+  border-top: 1px solid rgba(231, 222, 209, 0.2);
   border-bottom: 1px solid var(--landing-lime);
-  padding: 0 0 8px;
+  padding: 0 4px;
+  font-size: 13px;
   transition:
     color 0.18s ease,
     padding 0.18s ease;
 }
 .landing-enter:hover {
   color: var(--landing-lime);
-  padding-left: 5px;
+  padding: 0 0 0 8px;
 }
 .landing-field {
   min-height: 94vh;
@@ -1523,6 +1526,17 @@ select {
 }
 .asset-grid article {
   min-width: 0;
+  transition:
+    transform 190ms ease,
+    opacity 190ms ease;
+}
+.asset-grid article[draggable='true'] {
+  cursor: grab;
+}
+.asset-grid article[draggable='true']:active {
+  cursor: grabbing;
+  opacity: 0.72;
+  transform: scale(0.985);
 }
 .asset-image {
   aspect-ratio: 1;
@@ -1567,6 +1581,142 @@ select {
   color: #6f7174;
   font-family: 'IBM Plex Mono', monospace;
   font-size: 8px;
+}
+.asset-workspace {
+  display: grid;
+  grid-template-columns: 210px minmax(0, 1fr);
+  gap: 32px;
+  align-items: start;
+}
+.folder-sidebar {
+  position: sticky;
+  top: 0;
+  display: grid;
+  gap: 4px;
+  padding: 11px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: #17191b;
+}
+.asset-view-switch {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 3px;
+  margin-bottom: 12px;
+  padding: 3px;
+  border-radius: 9px;
+  background: #111315;
+}
+.asset-view-switch button {
+  min-height: 29px;
+  padding: 0 5px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: #6f7274;
+  font-size: 9px;
+}
+.asset-view-switch button[data-active='true'] {
+  background: #292c2e;
+  color: #e8e9e7;
+}
+.folder-heading {
+  min-height: 30px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 7px;
+  color: #64676a;
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 8px;
+  text-transform: uppercase;
+}
+.folder-heading button,
+.folder-row-wrap > div button {
+  width: 26px;
+  height: 26px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: #76797b;
+}
+.folder-heading button:hover,
+.folder-row-wrap > div button:hover {
+  background: #292c2e;
+  color: var(--text);
+}
+.folder-row-wrap {
+  position: relative;
+}
+.folder-row {
+  width: 100%;
+  min-height: 36px;
+  display: grid;
+  grid-template-columns: 16px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 7px;
+  padding: 0 8px;
+  border: 1px solid transparent;
+  border-radius: 9px;
+  background: transparent;
+  color: #929597;
+  text-align: left;
+  font-size: 10px;
+}
+.folder-row span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.folder-row small {
+  color: #55585a;
+  font-size: 8px;
+}
+.folder-row:hover,
+.folder-row[data-active='true'] {
+  border-color: #333638;
+  background: #232628;
+  color: #f0f1ef;
+}
+.folder-row-wrap > div {
+  position: absolute;
+  top: 5px;
+  right: 4px;
+  display: none;
+  gap: 1px;
+  padding-left: 8px;
+  background: linear-gradient(90deg, transparent, #232628 24%);
+}
+.folder-row-wrap:hover > div,
+.folder-row-wrap:focus-within > div {
+  display: flex;
+}
+.asset-collection {
+  min-width: 0;
+}
+.asset-card-meta {
+  align-items: center;
+  gap: 8px;
+}
+.asset-card-meta label {
+  min-width: 0;
+  flex: 1;
+  margin: 0;
+}
+.asset-card-meta select {
+  width: 100%;
+  max-width: 110px;
+  border: 0;
+  background: transparent;
+  color: #777a7d;
+  font-size: 8px;
+  text-overflow: ellipsis;
+}
+.folder-modal form {
+  margin-top: 22px;
 }
 .asset-grid article p {
   margin: 0;
@@ -1917,6 +2067,10 @@ select {
     grid-template-columns: 1fr 1fr;
     gap: 20px;
   }
+  .landing-enter {
+    grid-column: 1 / -1;
+    margin-top: 4px;
+  }
   .landing-meta p:nth-child(3) {
     display: none;
   }
@@ -2045,6 +2199,16 @@ select {
     align-items: start;
     flex-direction: column;
     gap: 20px;
+  }
+  .asset-workspace {
+    grid-template-columns: 1fr;
+    gap: 16px;
+  }
+  .folder-sidebar {
+    position: static;
+  }
+  .folder-row-wrap > div {
+    display: flex;
   }
   .search-box {
     width: 100%;

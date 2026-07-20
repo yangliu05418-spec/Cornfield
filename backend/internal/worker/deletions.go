@@ -192,6 +192,7 @@ func (p *DeletionProcessor) deleteUser(ctx context.Context, userID uuid.UUID) er
 	for _, statement := range []string{
 		`DELETE FROM upload_sessions WHERE owner_user_id=$1`,
 		`DELETE FROM generation_batches WHERE owner_user_id=$1`,
+		`DELETE FROM asset_folders WHERE owner_user_id=$1`,
 		`DELETE FROM generation_rate_limits WHERE owner_user_id=$1`,
 		`DELETE FROM job_events WHERE owner_user_id=$1`,
 		`DELETE FROM user_sessions WHERE user_id=$1`,

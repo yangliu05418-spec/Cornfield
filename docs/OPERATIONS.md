@@ -257,6 +257,36 @@ curl -fsS http://127.0.0.1:9090/api/v1/query?query=image_studio_restore_check_la
 ### 回滚
 
 - 单机 Compose 没有零停机 HA；回滚会造成短暂不可用。先停止 Worker 接收新执行并记录所有 active/uncertain job，再用上一版已验证的 `digests.env` 原子替换四个镜像引用，执行 `docker compose pull` 与 `docker compose up -d --no-build`。API、Worker、Tools、Web 必须来自同一 release commit，禁止混用 tag 或本地镜像。
+
+### 真实 Provider 发布矩阵
+
+真实 Provider 测试不进入普通 CI。新 release 健康后，使用 digest 固定的 Tools 镜像运行 `canaryctl`；它只通过登录、CSRF、上传、生成、轮询和资产组织 API 工作，不直接修改业务表。报告按 case 原子落盘，同一命令可安全续跑。测试产物进入 Intern2 的 `Canary <release>` 文件夹并归档。
+
+```bash
+canary_root=/srv/internal-image-studio/canary
+release_sha='<full-release-sha>'
+install -d -o 65532 -g 65532 -m 0700 "${canary_root}"
+install -o 65532 -g 65532 -m 0400 /dev/null "${canary_root}/intern2-password"
+read -r -s -p 'Intern2 password: ' canary_password
+printf '%s' "${canary_password}" > "${canary_root}/intern2-password"
+unset canary_password
+
+docker run --rm --user 65532:65532 --network host \
+  --entrypoint canaryctl \
+  -v "${canary_root}:/canary:rw" \
+  -v "/opt/internal-image-studio/config:/app/config:ro" \
+  "${TOOLS_IMAGE}" \
+  --base-url https://corn.kumadrama.com \
+  --username Intern2 \
+  --password-file /canary/intern2-password \
+  --release "${release_sha}" \
+  --model-config /app/config/models.yaml \
+  --report "/canary/canary-${release_sha}.json"
+
+rm -- "${canary_root}/intern2-password"
+```
+
+运行前必须确认 `TOOLS_IMAGE` 为本次 release manifest 中的 digest 引用。密码文件不得放入 release 目录、Git、`.env`、命令行参数或日志。任一模型连续三次出现同一错误码时 runner 会停止该模型并保存游标；修复并发布后使用相同 report 路径继续。矩阵完成后核查不存在 `submitting` 遗留或新的 `submission_uncertain`，并把报告与 release manifest 一起保留。
 - 不自动回滚 PostgreSQL。数据库 migration 必须保持向后兼容；如果本次 migration 不兼容旧应用，必须在发布前准备并演练 forward-fix 或经评审的恢复方案，否则禁止发布。
 - migration `009_cancelled_upstream_lease` 增加的 nullable 列对旧二进制是结构兼容的，但旧 Worker 不会把 `upstream_active_until` 计入并发或继续观察。只要存在 `upstream_active_until > now()` 的记录，就禁止回滚到不支持该租约的 Worker；应等待租约自然释放或发布 forward-fix，不能手工清空字段。
 - 不删除 `model_capability_versions`。已入队任务通过 batch 的 `capability_revision` 使用不可变快照；回滚当前 catalog 时仍需运行对应版本的 `modelctl apply` 并等待 readiness 通过。

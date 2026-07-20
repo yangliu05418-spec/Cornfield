@@ -73,6 +73,7 @@ type generationRecord struct {
 	ModelID             string
 	ProviderID          string
 	ModelSnapshot       modelconfig.Model
+	Options             provider.GenerationOptions
 	AttemptCount        int
 	GenerationDeadline  *time.Time
 	UpstreamActiveUntil *time.Time
@@ -456,13 +457,13 @@ func (w *GenerateWorker) load(ctx context.Context, jobID uuid.UUID) (generationR
 	var snapshotJSON []byte
 	var storedExpectedOutputs int
 	err := w.DB.QueryRow(ctx, `SELECT j.id,j.batch_id,j.owner_user_id,j.status,COALESCE(j.cancel_mode,''),j.execution_generation,j.provider_job_id,j.expected_outputs,
-		b.prompt,b.aspect_ratio,b.resolution,b.model_id,j.attempt_count,j.generation_deadline,j.upstream_active_until,v.config
+		b.prompt,b.aspect_ratio,b.resolution,b.model_id,j.attempt_count,j.generation_deadline,j.upstream_active_until,v.config,b.options
 		FROM generation_jobs j
 		JOIN generation_batches b ON b.id=j.batch_id
 		JOIN model_capability_versions v ON v.model_id=b.model_id AND v.revision=b.capability_revision
 		WHERE j.id=$1`, jobID).Scan(
 		&item.JobID, &item.BatchID, &item.OwnerID, &item.Status, &item.CancelMode, &item.ExecutionGeneration, &item.ProviderJobID, &storedExpectedOutputs,
-		&item.Prompt, &item.AspectRatio, &item.Resolution, &item.ModelID, &item.AttemptCount, &item.GenerationDeadline, &item.UpstreamActiveUntil, &snapshotJSON)
+		&item.Prompt, &item.AspectRatio, &item.Resolution, &item.ModelID, &item.AttemptCount, &item.GenerationDeadline, &item.UpstreamActiveUntil, &snapshotJSON, &item.Options)
 	if err != nil {
 		return item, err
 	}
@@ -842,6 +843,7 @@ func canonicalRequestFromSnapshot(item generationRecord) provider.CanonicalReque
 		Resolution:        item.Resolution,
 		ExpectedImages:    model.OutputsPerDraw,
 		RequestParameters: append([]string(nil), model.RequestParameters...),
+		Options:           item.Options,
 	}
 }
 

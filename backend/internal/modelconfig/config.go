@@ -44,6 +44,7 @@ type Capabilities struct {
 	MaxReferenceImages int       `yaml:"max_reference_images" json:"max_reference_images"`
 	MaxReferenceBytes  int64     `yaml:"max_reference_bytes" json:"max_reference_bytes"`
 	DrawCount          DrawCount `yaml:"draw_count" json:"draw_count"`
+	MidjourneyVersions []string  `yaml:"midjourney_versions,omitempty" json:"midjourney_versions,omitempty"`
 }
 
 type DrawCount struct {
@@ -288,9 +289,6 @@ func validateCapabilities(m Model) error {
 	if !capabilities.TextToImage && !capabilities.ImageToImage {
 		return fmt.Errorf("model %s must support at least one generation mode", m.ID)
 	}
-	if len(capabilities.AspectRatios) == 0 || len(capabilities.Resolutions) == 0 {
-		return fmt.Errorf("model %s requires at least one aspect ratio and resolution", m.ID)
-	}
 	seenRatios := make(map[string]struct{}, len(capabilities.AspectRatios))
 	for _, ratio := range capabilities.AspectRatios {
 		parts := strings.Split(ratio, ":")
@@ -337,10 +335,10 @@ func validateCapabilities(m Model) error {
 		if capabilities.ImageToImage && !has("input_references") {
 			return fmt.Errorf("model %s enables image_to_image without OpenRouter input_references", m.ID)
 		}
-		if len(capabilities.AspectRatios) > 1 && !has("aspect_ratio") {
+		if len(capabilities.AspectRatios) > 0 && !has("aspect_ratio") {
 			return fmt.Errorf("model %s advertises selectable aspect ratios without OpenRouter aspect_ratio", m.ID)
 		}
-		if len(capabilities.Resolutions) > 1 && !has("resolution") {
+		if len(capabilities.Resolutions) > 0 && !has("resolution") {
 			return fmt.Errorf("model %s advertises selectable resolutions without OpenRouter resolution", m.ID)
 		}
 		if m.OutputsPerDraw > 1 && !has("n") {
@@ -349,6 +347,9 @@ func validateCapabilities(m Model) error {
 	case "legnext":
 		if len(m.Policy.AllowedOutputHosts) == 0 {
 			return fmt.Errorf("model %s requires an output host allowlist", m.ID)
+		}
+		if len(capabilities.MidjourneyVersions) > 0 && duplicateOrBlank(capabilities.MidjourneyVersions) {
+			return fmt.Errorf("model %s has blank or duplicate Midjourney versions", m.ID)
 		}
 	default:
 		return fmt.Errorf("model %s uses unsupported provider %q", m.ID, m.Provider)

@@ -131,7 +131,13 @@ func (m *Maintenance) cleanup(ctx context.Context) {
 	)
 }
 
+var errAssetInUse = errors.New("asset is still used by an active generation")
+
 func (m *Maintenance) purgeExpiredAsset(ctx context.Context, assetID uuid.UUID, storageKey, digest string) error {
+	return m.purgeAsset(ctx, assetID, storageKey, digest, true)
+}
+
+func (m *Maintenance) purgeAsset(ctx context.Context, assetID uuid.UUID, storageKey, digest string, resetIfBusy bool) error {
 	tx, err := m.DB.Begin(ctx)
 	if err != nil {
 		return err
@@ -152,11 +158,14 @@ func (m *Maintenance) purgeExpiredAsset(ctx context.Context, assetID uuid.UUID, 
 		return err
 	}
 	if inputInUse {
-		_, err = tx.Exec(ctx, `UPDATE assets SET purge_pending=false WHERE id=$1 AND purged_at IS NULL`, assetID)
-		if err != nil {
-			return err
+		if resetIfBusy {
+			_, err = tx.Exec(ctx, `UPDATE assets SET purge_pending=false WHERE id=$1 AND purged_at IS NULL`, assetID)
+			if err != nil {
+				return err
+			}
+			return tx.Commit(ctx)
 		}
-		return tx.Commit(ctx)
+		return errAssetInUse
 	}
 
 	var contentReferenced bool

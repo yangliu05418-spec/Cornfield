@@ -15,16 +15,85 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+
+	"internal-image-studio/internal/provider"
 )
 
 type generationRequest struct {
-	ModelID            string      `json:"model_id"`
-	CapabilityRevision string      `json:"capability_revision"`
-	Prompt             string      `json:"prompt"`
-	AspectRatio        string      `json:"aspect_ratio"`
-	Resolution         string      `json:"resolution"`
-	DrawCount          int         `json:"draw_count"`
-	InputAssetIDs      []uuid.UUID `json:"input_asset_ids"`
+	ModelID            string                     `json:"model_id"`
+	CapabilityRevision string                     `json:"capability_revision"`
+	Prompt             string                     `json:"prompt"`
+	AspectRatio        string                     `json:"aspect_ratio"`
+	Resolution         string                     `json:"resolution"`
+	DrawCount          int                        `json:"draw_count"`
+	InputAssetIDs      []uuid.UUID                `json:"input_asset_ids"`
+	Options            provider.GenerationOptions `json:"options"`
+}
+
+func normalizeGenerationOptions(modelID, providerID string, versions []string, inputCount int, input *generationRequest) error {
+	if providerID != "legnext" {
+		if input.Options.Midjourney != nil {
+			return errors.New("Midjourney options are not supported by this model")
+		}
+		if input.AspectRatio == "" {
+			input.AspectRatio = "auto"
+		}
+		if input.Resolution == "" {
+			input.Resolution = "auto"
+		}
+		return nil
+	}
+	if len(versions) == 0 {
+		return nil
+	}
+	options := input.Options.Midjourney
+	if options == nil {
+		options = &provider.MidjourneyOptions{Version: "8.1", Resolution: "sd", Speed: "fast", Stylize: 100}
+		input.Options.Midjourney = options
+	}
+	if !slices.Contains(versions, options.Version) || options.Stylize < 0 || options.Stylize > 1000 || options.Chaos < 0 || options.Chaos > 100 || options.Weird < 0 || options.Weird > 3000 {
+		return errors.New("Midjourney options are outside the supported range")
+	}
+	if options.ImageWeight != nil && (inputCount == 0 || *options.ImageWeight < 0 || *options.ImageWeight > 3) {
+		return errors.New("Midjourney image weight requires a reference image and must be between 0 and 3")
+	}
+	switch options.Version {
+	case "8.1":
+		if options.Resolution == "" {
+			options.Resolution = "sd"
+		}
+		if options.Speed == "" {
+			options.Speed = "fast"
+		}
+		if (options.Resolution != "sd" && options.Resolution != "hd") || options.Speed != "fast" || options.Quality != nil || options.Draft {
+			return errors.New("Midjourney V8.1 option combination is unsupported")
+		}
+		input.Resolution = strings.ToUpper(options.Resolution)
+	case "7":
+		if options.Speed == "" {
+			options.Speed = "fast"
+		}
+		if options.Speed != "fast" && options.Speed != "turbo" {
+			return errors.New("Midjourney V7 speed is unsupported")
+		}
+		if options.Draft {
+			options.Quality = nil
+		} else if options.Quality == nil {
+			quality := 1
+			options.Quality = &quality
+		}
+		if options.Quality != nil && *options.Quality != 1 && *options.Quality != 2 && *options.Quality != 4 {
+			return errors.New("Midjourney V7 quality is unsupported")
+		}
+		options.Resolution = ""
+		input.Resolution = "auto"
+	default:
+		return errors.New("Midjourney version is unsupported")
+	}
+	if input.DrawCount != 1 || modelID != "legnext-midjourney" {
+		return errors.New("Midjourney creates exactly one four-image draw")
+	}
+	return nil
 }
 
 const (
@@ -168,6 +237,7 @@ type jobResponse struct {
 	ErrorCode       *string                    `json:"error_code,omitempty"`
 	ErrorMessage    *string                    `json:"error_message,omitempty"`
 	Outputs         []generationOutputResponse `json:"outputs"`
+	DeletedOutputs  []int                      `json:"deleted_outputs,omitempty"`
 }
 
 type generationOutputResponse struct {
@@ -183,17 +253,18 @@ type generationOutputResponse struct {
 }
 
 type batchResponse struct {
-	ID               uuid.UUID     `json:"id"`
-	ModelID          string        `json:"model_id"`
-	Prompt           string        `json:"prompt"`
-	AspectRatio      string        `json:"aspect_ratio"`
-	Resolution       string        `json:"resolution"`
-	DrawCount        int           `json:"draw_count"`
-	ExpectedOutputs  int           `json:"expected_outputs"`
-	CompletedOutputs int           `json:"completed_outputs"`
-	Status           string        `json:"status"`
-	CreatedAt        time.Time     `json:"created_at"`
-	Jobs             []jobResponse `json:"jobs"`
+	ID               uuid.UUID                  `json:"id"`
+	ModelID          string                     `json:"model_id"`
+	Prompt           string                     `json:"prompt"`
+	AspectRatio      string                     `json:"aspect_ratio"`
+	Resolution       string                     `json:"resolution"`
+	DrawCount        int                        `json:"draw_count"`
+	ExpectedOutputs  int                        `json:"expected_outputs"`
+	CompletedOutputs int                        `json:"completed_outputs"`
+	Status           string                     `json:"status"`
+	CreatedAt        time.Time                  `json:"created_at"`
+	Jobs             []jobResponse              `json:"jobs"`
+	Options          provider.GenerationOptions `json:"options"`
 }
 
 type generationJobLocation struct {
@@ -239,6 +310,12 @@ func (a *generationAssembler) addOutput(jobID uuid.UUID, output generationOutput
 	}
 	a.items[location.batchIndex].Jobs[location.jobIndex].Outputs = append(a.items[location.batchIndex].Jobs[location.jobIndex].Outputs, output)
 	return true
+}
+
+func (a *generationAssembler) addDeletedOutput(jobID uuid.UUID, outputIndex int) {
+	if location, ok := a.jobIndexes[jobID]; ok {
+		a.items[location.batchIndex].Jobs[location.jobIndex].DeletedOutputs = append(a.items[location.batchIndex].Jobs[location.jobIndex].DeletedOutputs, outputIndex)
+	}
 }
 
 type generationCursor struct {
@@ -327,7 +404,13 @@ func (s *Server) createGeneration(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	promptLength := utf8.RuneCountInString(input.Prompt)
-	if promptLength < 1 || promptLength > 8192 || !slices.Contains(model.Capabilities.AspectRatios, input.AspectRatio) || !slices.Contains(model.Capabilities.Resolutions, input.Resolution) || input.DrawCount < model.Capabilities.DrawCount.Min || input.DrawCount > model.Capabilities.DrawCount.Max {
+	if err := normalizeGenerationOptions(model.ID, model.Provider, model.Capabilities.MidjourneyVersions, len(input.InputAssetIDs), &input); err != nil {
+		writeError(w, http.StatusUnprocessableEntity, "CAPABILITY_INVALID", err.Error(), false, r)
+		return
+	}
+	ratioValid := len(model.Capabilities.AspectRatios) == 0 && input.AspectRatio == "auto" || slices.Contains(model.Capabilities.AspectRatios, input.AspectRatio)
+	resolutionValid := len(model.Capabilities.Resolutions) == 0 && input.Resolution == "auto" || slices.Contains(model.Capabilities.Resolutions, input.Resolution) || model.Provider == "legnext" && len(model.Capabilities.MidjourneyVersions) > 0
+	if promptLength < 1 || promptLength > 8192 || !ratioValid || !resolutionValid || input.DrawCount < model.Capabilities.DrawCount.Min || input.DrawCount > model.Capabilities.DrawCount.Max {
 		writeError(w, http.StatusUnprocessableEntity, "CAPABILITY_INVALID", "生成参数不在模型支持范围内", false, r)
 		return
 	}
@@ -434,8 +517,8 @@ func (s *Server) createGeneration(w http.ResponseWriter, r *http.Request) {
 	}
 	var batchID uuid.UUID
 	expected := input.DrawCount * model.OutputsPerDraw
-	err = tx.QueryRow(r.Context(), `INSERT INTO generation_batches(owner_user_id,idempotency_key,request_hash,model_id,capability_revision,prompt,aspect_ratio,resolution,draw_count,expected_outputs)
-		VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING id`, sess.UserID, idempotencyKey, requestHash, input.ModelID, s.catalog.Hash, input.Prompt, input.AspectRatio, input.Resolution, input.DrawCount, expected).Scan(&batchID)
+	err = tx.QueryRow(r.Context(), `INSERT INTO generation_batches(owner_user_id,idempotency_key,request_hash,model_id,capability_revision,prompt,aspect_ratio,resolution,draw_count,expected_outputs,options)
+		VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING id`, sess.UserID, idempotencyKey, requestHash, input.ModelID, s.catalog.Hash, input.Prompt, input.AspectRatio, input.Resolution, input.DrawCount, expected, input.Options).Scan(&batchID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "DATABASE_ERROR", "创建任务失败，请确认模型配置已应用", true, r)
 		return
@@ -492,7 +575,7 @@ func (s *Server) listGenerations(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "INVALID_CURSOR", "分页游标无效", false, r)
 		return
 	}
-	rows, err := s.db.Query(r.Context(), `SELECT id,model_id,prompt,aspect_ratio,resolution,draw_count,expected_outputs,completed_outputs,status,created_at
+	rows, err := s.db.Query(r.Context(), `SELECT id,model_id,prompt,aspect_ratio,resolution,draw_count,expected_outputs,completed_outputs,status,created_at,options
 		FROM generation_batches WHERE owner_user_id=$1
 		  AND ($2::timestamptz IS NULL OR (created_at,id)<($2,$3::uuid))
 		ORDER BY created_at DESC,id DESC LIMIT $4`, sess.UserID, cursorTime, cursorID, limit+1)
@@ -503,7 +586,7 @@ func (s *Server) listGenerations(w http.ResponseWriter, r *http.Request) {
 	items := make([]batchResponse, 0, limit+1)
 	for rows.Next() {
 		var item batchResponse
-		if err = rows.Scan(&item.ID, &item.ModelID, &item.Prompt, &item.AspectRatio, &item.Resolution, &item.DrawCount, &item.ExpectedOutputs, &item.CompletedOutputs, &item.Status, &item.CreatedAt); err != nil {
+		if err = rows.Scan(&item.ID, &item.ModelID, &item.Prompt, &item.AspectRatio, &item.Resolution, &item.DrawCount, &item.ExpectedOutputs, &item.CompletedOutputs, &item.Status, &item.CreatedAt, &item.Options); err != nil {
 			rows.Close()
 			writeError(w, http.StatusInternalServerError, "DATABASE_ERROR", "读取任务失败", true, r)
 			return
@@ -551,9 +634,10 @@ func (s *Server) listGenerations(w http.ResponseWriter, r *http.Request) {
 	}
 	jobRows.Close()
 
-	outputRows, err := s.db.Query(r.Context(), `SELECT o.job_id,o.asset_id,o.output_index,a.width,a.height,a.media_type
+	outputRows, err := s.db.Query(r.Context(), `SELECT o.job_id,o.asset_id,o.output_index,a.width,a.height,a.media_type,
+		(o.deleted_at IS NOT NULL OR a.purged_at IS NOT NULL OR a.purge_pending)
 		FROM generation_outputs o JOIN generation_jobs j ON j.id=o.job_id JOIN assets a ON a.id=o.asset_id
-		WHERE j.batch_id=ANY($1) AND a.purged_at IS NULL AND a.purge_pending=false ORDER BY j.batch_id,j.draw_index,o.output_index,o.asset_id`, batchIDs)
+		WHERE j.batch_id=ANY($1) ORDER BY j.batch_id,j.draw_index,o.output_index,o.asset_id`, batchIDs)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "DATABASE_ERROR", "读取任务失败", true, r)
 		return
@@ -561,10 +645,15 @@ func (s *Server) listGenerations(w http.ResponseWriter, r *http.Request) {
 	for outputRows.Next() {
 		var jobID uuid.UUID
 		var output generationOutputResponse
-		if err = outputRows.Scan(&jobID, &output.AssetID, &output.OutputIndex, &output.Width, &output.Height, &output.MediaType); err != nil {
+		var deleted bool
+		if err = outputRows.Scan(&jobID, &output.AssetID, &output.OutputIndex, &output.Width, &output.Height, &output.MediaType, &deleted); err != nil {
 			outputRows.Close()
 			writeError(w, http.StatusInternalServerError, "DATABASE_ERROR", "读取任务失败", true, r)
 			return
+		}
+		if deleted {
+			assembler.addDeletedOutput(jobID, output.OutputIndex)
+			continue
 		}
 		setGenerationOutputURLs(&output)
 		assembler.addOutput(jobID, output)
@@ -597,8 +686,8 @@ func (s *Server) getGeneration(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) loadBatch(ctx context.Context, id uuid.UUID, sess session) (batchResponse, error) {
 	var item batchResponse
-	err := s.db.QueryRow(ctx, `SELECT id,model_id,prompt,aspect_ratio,resolution,draw_count,expected_outputs,completed_outputs,status,created_at
-		FROM generation_batches WHERE id=$1 AND (owner_user_id=$2 OR $3='admin')`, id, sess.UserID, sess.Role).Scan(&item.ID, &item.ModelID, &item.Prompt, &item.AspectRatio, &item.Resolution, &item.DrawCount, &item.ExpectedOutputs, &item.CompletedOutputs, &item.Status, &item.CreatedAt)
+	err := s.db.QueryRow(ctx, `SELECT id,model_id,prompt,aspect_ratio,resolution,draw_count,expected_outputs,completed_outputs,status,created_at,options
+		FROM generation_batches WHERE id=$1 AND (owner_user_id=$2 OR $3='admin')`, id, sess.UserID, sess.Role).Scan(&item.ID, &item.ModelID, &item.Prompt, &item.AspectRatio, &item.Resolution, &item.DrawCount, &item.ExpectedOutputs, &item.CompletedOutputs, &item.Status, &item.CreatedAt, &item.Options)
 	if err != nil {
 		return item, err
 	}
@@ -623,9 +712,10 @@ func (s *Server) loadBatch(ctx context.Context, id uuid.UUID, sess session) (bat
 		return item, err
 	}
 	rows.Close()
-	outputRows, err := s.db.Query(ctx, `SELECT o.job_id,o.asset_id,o.output_index,a.width,a.height,a.media_type
+	outputRows, err := s.db.Query(ctx, `SELECT o.job_id,o.asset_id,o.output_index,a.width,a.height,a.media_type,
+		(o.deleted_at IS NOT NULL OR a.purged_at IS NOT NULL OR a.purge_pending)
 		FROM generation_outputs o JOIN generation_jobs j ON j.id=o.job_id JOIN assets a ON a.id=o.asset_id
-		WHERE j.batch_id=$1 AND a.purged_at IS NULL AND a.purge_pending=false ORDER BY j.draw_index,o.output_index`, id)
+		WHERE j.batch_id=$1 ORDER BY j.draw_index,o.output_index`, id)
 	if err != nil {
 		return item, err
 	}
@@ -633,8 +723,15 @@ func (s *Server) loadBatch(ctx context.Context, id uuid.UUID, sess session) (bat
 	for outputRows.Next() {
 		var jobID uuid.UUID
 		var output generationOutputResponse
-		if err = outputRows.Scan(&jobID, &output.AssetID, &output.OutputIndex, &output.Width, &output.Height, &output.MediaType); err != nil {
+		var deleted bool
+		if err = outputRows.Scan(&jobID, &output.AssetID, &output.OutputIndex, &output.Width, &output.Height, &output.MediaType, &deleted); err != nil {
 			return item, err
+		}
+		if deleted {
+			if index, exists := jobIndexes[jobID]; exists {
+				item.Jobs[index].DeletedOutputs = append(item.Jobs[index].DeletedOutputs, output.OutputIndex)
+			}
+			continue
 		}
 		setGenerationOutputURLs(&output)
 		if index, exists := jobIndexes[jobID]; exists {

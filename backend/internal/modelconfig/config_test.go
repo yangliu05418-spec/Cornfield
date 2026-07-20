@@ -75,7 +75,7 @@ func TestProductionCatalogIsValid(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load production catalog: %v", err)
 	}
-	if len(catalog.Models) != 8 || catalog.Hash == "" {
+	if len(catalog.Models) != 9 || catalog.Hash == "" {
 		t.Fatalf("unexpected catalog: %+v", catalog)
 	}
 }
@@ -197,8 +197,8 @@ func validOpenRouterModel() Model {
 		Capabilities: Capabilities{
 			TextToImage:        true,
 			ImageToImage:       true,
-			AspectRatios:       []string{"1:1"},
-			Resolutions:        []string{"1K"},
+			AspectRatios:       []string{},
+			Resolutions:        []string{},
 			MaxReferenceImages: 4,
 			MaxReferenceBytes:  25 << 20,
 			DrawCount:          DrawCount{Min: 1, Max: 4, Default: 1},

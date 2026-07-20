@@ -57,6 +57,37 @@ func TestLegnextSubmitPrependsReferenceURLs(t *testing.T) {
 	}
 }
 
+func TestLegnextSubmitBuildsValidatedMidjourneyOptions(t *testing.T) {
+	var text string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var payload struct {
+			Text string `json:"text"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&payload)
+		text = payload.Text
+		_, _ = w.Write([]byte(`{"job_id":"job-options","status":"pending"}`))
+	}))
+	defer server.Close()
+	quality, weight := 4, 1.5
+	adapter := NewLegnext("test-key")
+	adapter.BaseURL, adapter.Client = server.URL, server.Client()
+	_, err := adapter.Submit(context.Background(), CanonicalRequest{
+		Prompt: "field at dusk", AspectRatio: "16:9",
+		ReferenceURLs: []string{"https://cornfield.test/reference"},
+		Options: GenerationOptions{Midjourney: &MidjourneyOptions{
+			Version: "7", Speed: "turbo", Quality: &quality, Stylize: 200,
+			Chaos: 12, Weird: 40, Raw: true, Tile: true, ImageWeight: &weight,
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "https://cornfield.test/reference field at dusk --ar 16:9 --q 4 --stylize 200 --chaos 12 --weird 40 --iw 1.5 --turbo --v 7 --raw --tile"
+	if text != want {
+		t.Fatalf("text = %q, want %q", text, want)
+	}
+}
+
 func TestLegnextRejectsNonHTTPSReferenceURL(t *testing.T) {
 	adapter := NewLegnext("test-key")
 	_, err := adapter.Submit(context.Background(), CanonicalRequest{Prompt: "prompt", ReferenceURLs: []string{"http://localhost/image.png"}})

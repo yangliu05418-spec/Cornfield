@@ -92,6 +92,10 @@ func main() {
 	go scheduler.Run(ctx)
 	go scheduler.ListenNotifications(ctx)
 	go (&studioWorker.Maintenance{DB: db, Blobs: store, AssetRoot: cfg.AssetRoot, Log: logger, Generator: generateWorker}).Run(ctx)
+	deletionWake := make(chan struct{}, 1)
+	deletions := &studioWorker.DeletionProcessor{DB: db, Blobs: store, AssetRoot: cfg.AssetRoot, Log: logger, Wake: deletionWake}
+	go deletions.Run(ctx)
+	go deletions.ListenNotifications(ctx)
 	go (&studioWorker.UploadValidator{DB: db, Blobs: store, AssetRoot: cfg.AssetRoot, Generator: generateWorker, Log: logger}).Run(ctx)
 	go (&studioWorker.ProviderProber{DB: db, Adapters: adapters, Log: logger}).Run(ctx)
 	if err := riverClient.Start(ctx); err != nil {

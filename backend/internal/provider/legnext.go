@@ -7,8 +7,10 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 type Legnext struct {
@@ -57,7 +59,7 @@ func (task legnextTask) providerJobID() string {
 }
 
 func (l *Legnext) Submit(ctx context.Context, input CanonicalRequest) (Submission, error) {
-	parts := make([]string, 0, len(input.ReferenceURLs)+3)
+	parts := make([]string, 0, len(input.ReferenceURLs)+16)
 	for _, referenceURL := range input.ReferenceURLs {
 		parsed, err := url.Parse(referenceURL)
 		if err != nil || parsed.Scheme != "https" || parsed.Hostname() == "" || parsed.User != nil || parsed.Fragment != "" {
@@ -69,10 +71,36 @@ func (l *Legnext) Submit(ctx context.Context, input CanonicalRequest) (Submissio
 	if input.AspectRatio != "" {
 		parts = append(parts, "--ar", input.AspectRatio)
 	}
+	if options := input.Options.Midjourney; options != nil {
+		if options.Quality != nil {
+			parts = append(parts, "--q", strconv.Itoa(*options.Quality))
+		}
+		parts = append(parts, "--stylize", strconv.Itoa(options.Stylize), "--chaos", strconv.Itoa(options.Chaos), "--weird", strconv.Itoa(options.Weird))
+		if options.ImageWeight != nil {
+			parts = append(parts, "--iw", strconv.FormatFloat(*options.ImageWeight, 'f', -1, 64))
+		}
+		parts = append(parts, "--"+options.Speed, "--v", options.Version)
+		if options.Resolution == "hd" {
+			parts = append(parts, "--hd")
+		}
+		if options.Raw {
+			parts = append(parts, "--raw")
+		}
+		if options.Tile {
+			parts = append(parts, "--tile")
+		}
+		if options.Draft {
+			parts = append(parts, "--draft")
+		}
+	}
+	providerPrompt := strings.Join(parts, " ")
+	if utf8.RuneCountInString(providerPrompt) > 8192 {
+		return Submission{}, &Error{Code: "PROMPT_TOO_LONG", Message: "final Legnext prompt exceeds 8192 characters"}
+	}
 	payload, err := json.Marshal(struct {
 		Text     string `json:"text"`
 		Callback string `json:"callback,omitempty"`
-	}{Text: strings.Join(parts, " "), Callback: input.CallbackURL})
+	}{Text: providerPrompt, Callback: input.CallbackURL})
 	if err != nil {
 		return Submission{}, err
 	}

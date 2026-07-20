@@ -17,6 +17,25 @@ type CanonicalRequest struct {
 	ReferenceURLs     []string
 	RequestParameters []string
 	CallbackURL       string
+	Options           GenerationOptions
+}
+
+type GenerationOptions struct {
+	Midjourney *MidjourneyOptions `json:"midjourney,omitempty"`
+}
+
+type MidjourneyOptions struct {
+	Version     string   `json:"version"`
+	Resolution  string   `json:"resolution,omitempty"`
+	Speed       string   `json:"speed"`
+	Quality     *int     `json:"quality,omitempty"`
+	Draft       bool     `json:"draft"`
+	Stylize     int      `json:"stylize"`
+	Chaos       int      `json:"chaos"`
+	Weird       int      `json:"weird"`
+	Raw         bool     `json:"raw"`
+	Tile        bool     `json:"tile"`
+	ImageWeight *float64 `json:"image_weight,omitempty"`
 }
 
 type Submission struct {

@@ -7,6 +7,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+
+	"internal-image-studio/internal/provider"
 )
 
 func TestGenerationRequestHash(t *testing.T) {
@@ -77,6 +79,44 @@ func TestControlledLegnextFlags(t *testing.T) {
 		if containsControlledLegnextInput(prompt) {
 			t.Fatalf("expected prompt to be allowed: %q", prompt)
 		}
+	}
+}
+
+func TestNormalizeMidjourneyOptions(t *testing.T) {
+	input := generationRequest{DrawCount: 1, Options: provider.GenerationOptions{Midjourney: &provider.MidjourneyOptions{
+		Version: "8.1", Resolution: "hd", Speed: "fast", Stylize: 100,
+	}}}
+	if err := normalizeGenerationOptions("legnext-midjourney", "legnext", []string{"8.1", "7"}, 0, &input); err != nil {
+		t.Fatal(err)
+	}
+	if input.Resolution != "HD" {
+		t.Fatalf("resolution = %q", input.Resolution)
+	}
+
+	quality := 4
+	input = generationRequest{DrawCount: 1, Options: provider.GenerationOptions{Midjourney: &provider.MidjourneyOptions{
+		Version: "7", Speed: "turbo", Quality: &quality, Draft: true,
+	}}}
+	if err := normalizeGenerationOptions("legnext-midjourney", "legnext", []string{"8.1", "7"}, 0, &input); err != nil {
+		t.Fatal(err)
+	}
+	if input.Options.Midjourney.Quality != nil || input.Resolution != "auto" {
+		t.Fatalf("V7 draft was not normalized: %+v", input)
+	}
+
+	input = generationRequest{DrawCount: 4, Options: provider.GenerationOptions{Midjourney: &provider.MidjourneyOptions{Version: "8.1", Speed: "fast"}}}
+	if err := normalizeGenerationOptions("legnext-midjourney", "legnext", []string{"8.1", "7"}, 0, &input); err == nil {
+		t.Fatal("four Midjourney draws were accepted")
+	}
+}
+
+func TestUnsupportedOpenRouterControlsNormalizeToAuto(t *testing.T) {
+	input := generationRequest{DrawCount: 1}
+	if err := normalizeGenerationOptions("openrouter-test", "openrouter", nil, 0, &input); err != nil {
+		t.Fatal(err)
+	}
+	if input.AspectRatio != "auto" || input.Resolution != "auto" {
+		t.Fatalf("input = %+v", input)
 	}
 }
 

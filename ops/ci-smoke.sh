@@ -151,7 +151,12 @@ for _ in $(seq 1 30); do
   [[ "${deletion_status}" == "succeeded" ]] && break
   sleep 1
 done
-test "${deletion_status}" = "succeeded"
+if [[ "${deletion_status}" != "succeeded" ]]; then
+  deletion_diagnostic="$(docker compose exec -T postgres psql -U studio_bootstrap -d studio -At -F ' ' -c \
+    "SELECT status,attempt_count,COALESCE(error_code,'-'),COALESCE(error_message,'-') FROM deletion_requests WHERE id='${deletion_request_id}'::uuid")"
+  echo "::error file=ops/ci-smoke.sh,title=User deletion did not complete::${deletion_diagnostic}" >&2
+  false
+fi
 test "$(docker compose exec -T postgres psql -U studio_bootstrap -d studio -Atc \
   "SELECT status FROM users WHERE id='${deletion_user_id}'::uuid")" = "deleted"
 test "$(docker compose exec -T postgres psql -U studio_bootstrap -d studio -Atc \

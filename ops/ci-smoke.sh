@@ -1,6 +1,13 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+report_error() {
+  local status=$?
+  echo "::error file=ops/ci-smoke.sh,line=${BASH_LINENO[0]},title=Fresh Compose smoke failed::command exited with status ${status}" >&2
+  return "${status}"
+}
+trap report_error ERR
+
 if [[ "${CI:-}" != "true" ]]; then
   echo "ci-smoke: refusing to run outside an isolated CI runner" >&2
   exit 1

@@ -19,6 +19,7 @@ CREATE INDEX assets_owner_organization_cursor_idx
 GRANT SELECT, INSERT, UPDATE, DELETE ON asset_folders TO studio_api;
 GRANT UPDATE (folder_id,archived_at) ON assets TO studio_api;
 GRANT DELETE ON asset_folders TO studio_worker;
+GRANT SELECT (owner_user_id) ON asset_folders TO studio_worker;
 
 -- +goose Down
 REVOKE ALL ON asset_folders FROM studio_api, studio_worker;

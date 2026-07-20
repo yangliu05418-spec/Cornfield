@@ -46,7 +46,7 @@ CREATE TRIGGER deletion_requests_notify AFTER INSERT ON deletion_requests
     FOR EACH ROW EXECUTE FUNCTION notify_deletion_request();
 
 GRANT SELECT, INSERT ON deletion_requests TO studio_api;
-GRANT SELECT, UPDATE ON deletion_requests TO studio_worker;
+GRANT SELECT, UPDATE, DELETE ON deletion_requests TO studio_worker;
 GRANT UPDATE (purge_pending) ON assets TO studio_api;
 GRANT UPDATE (deleted_at) ON generation_outputs TO studio_api;
 GRANT UPDATE (status, session_version, updated_at) ON users TO studio_api;

@@ -93,8 +93,8 @@ func (p *DeletionProcessor) processOne(ctx context.Context) {
 		err = p.deleteUser(ctx, *request.TargetUserID)
 	}
 	if errors.Is(err, errAssetInUse) || errors.Is(err, errUserDeletionWaiting) || errors.Is(err, errOrphanCandidateChanged) {
-		_, _ = p.DB.Exec(ctx, `UPDATE deletion_requests SET status='pending',started_at=NULL,next_attempt_at=now()+interval '2 seconds'
-			WHERE id=$1 AND status='running'`, request.ID)
+		_, _ = p.DB.Exec(ctx, `UPDATE deletion_requests SET status='pending',started_at=NULL,next_attempt_at=now()+interval '2 seconds',
+			error_code='DELETE_WAITING',error_message=$2 WHERE id=$1 AND status='running'`, request.ID, boundedDeletionError(err.Error()))
 		return
 	}
 	if err != nil {

@@ -120,12 +120,16 @@ printf '%s\n' "${admin_password}" | docker compose run --rm -T --no-deps model-a
 delete_content='ci-delete-me'
 delete_digest="$(printf '%s' "${delete_content}" | sha256sum | cut -d' ' -f1)"
 delete_key="${delete_digest:0:2}/${delete_digest:2:2}/${delete_digest}/original.png"
+delete_first_directory="${DATA_ROOT}/assets/${delete_digest:0:2}"
+delete_second_directory="${delete_first_directory}/${delete_digest:2:2}"
 delete_directory="${DATA_ROOT}/assets/${delete_digest:0:2}/${delete_digest:2:2}/${delete_digest}"
-sudo install -d -o 65532 -g 65532 -m 0750 "${delete_directory}"
+sudo install -d -o 65532 -g 65532 -m 0750 \
+  "${delete_first_directory}" "${delete_second_directory}" "${delete_directory}"
 printf '%s' "${delete_content}" | sudo tee "${delete_directory}/original.png" >/dev/null
 printf '%s' 'thumbnail' | sudo tee "${delete_directory}/thumb-320.webp" >/dev/null
 sudo chown -R 65532:65532 "${delete_directory}"
-sudo touch -d '10 minutes ago' "${delete_directory}" "${delete_directory}"/*
+test "$(sudo sha256sum "${delete_directory}/original.png" | cut -d' ' -f1)" = "${delete_digest}"
+sudo touch -d '10 minutes ago' "${delete_directory}"/* "${delete_directory}"
 delete_quarantine_key='ci-delete-upload.png'
 printf '%s' "${delete_content}" | sudo tee "${DATA_ROOT}/uploads/quarantine/${delete_quarantine_key}" >/dev/null
 sudo chown 65532:65532 "${DATA_ROOT}/uploads/quarantine/${delete_quarantine_key}"

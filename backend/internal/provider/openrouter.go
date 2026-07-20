@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 type OpenRouter struct {
@@ -48,7 +49,14 @@ func (o *OpenRouter) Submit(ctx context.Context, input CanonicalRequest) (Submis
 	for _, referenceURL := range input.ReferenceURLs {
 		references = append(references, map[string]any{"type": "image_url", "image_url": map[string]string{"url": referenceURL}})
 	}
-	payload := map[string]any{"model": input.Model, "prompt": input.Prompt}
+	prompt := strings.TrimSpace(input.Prompt)
+	if input.PromptAspectRatio && input.AspectRatio != "" && input.AspectRatio != "auto" {
+		prompt += "\n\nMandatory composition requirement: frame the final image in a " + input.AspectRatio + " aspect ratio. Compose every subject and background for that exact canvas orientation; do not add borders, letterboxing, or a collage."
+	}
+	if utf8.RuneCountInString(prompt) > 8192 {
+		return Submission{}, &Error{Code: "PROMPT_TOO_LONG", Message: "final OpenRouter prompt exceeds 8192 characters"}
+	}
+	payload := map[string]any{"model": input.Model, "prompt": prompt}
 	if supports("n") && input.ExpectedImages > 0 {
 		payload["n"] = input.ExpectedImages
 	}
@@ -60,6 +68,9 @@ func (o *OpenRouter) Submit(ctx context.Context, input CanonicalRequest) (Submis
 	}
 	if supports("output_format") {
 		payload["output_format"] = "png"
+	}
+	if supports("quality") && input.Options.Image != nil && input.Options.Image.Quality != "" {
+		payload["quality"] = input.Options.Image.Quality
 	}
 	if len(references) > 0 {
 		payload["input_references"] = references

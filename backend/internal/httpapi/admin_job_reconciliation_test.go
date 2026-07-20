@@ -99,6 +99,9 @@ func TestOnlyAsynchronousProviderCanAttachRemoteJob(t *testing.T) {
 	if providerSupportsPolling("openrouter") {
 		t.Fatal("OpenRouter's synchronous image API must never enter the poll path")
 	}
+	if providerSupportsPolling("bfl") {
+		t.Fatal("BFL reconciliation cannot attach without its returned polling URL")
+	}
 }
 
 type failingPasswordReader struct{}

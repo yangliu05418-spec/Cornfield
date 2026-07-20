@@ -153,6 +153,7 @@ fi
 
 legnext_key_path="$(secret_source LEGNEXT_API_KEY_SECRET_SOURCE secrets/legnext_api_key)"
 openrouter_key_path="$(secret_source OPENROUTER_API_KEY_SECRET_SOURCE secrets/openrouter_api_key)"
+bfl_key_path="$(secret_source BFL_API_KEY_SECRET_SOURCE secrets/bfl_api_key)"
 provider_callback_path="$(secret_source PROVIDER_CALLBACK_SECRET_SOURCE secrets/provider_callback_secret)"
 provider_url_signing_path="$(secret_source PROVIDER_URL_SIGNING_SECRET_SOURCE secrets/provider_url_signing_secret)"
 
@@ -165,7 +166,7 @@ check_raw_secret() {
     "${path}" || fail "${path} must contain exactly one raw value of at least ${minimum_length} characters without whitespace"
 }
 
-for path in "${legnext_key_path}" "${openrouter_key_path}"; do
+for path in "${legnext_key_path}" "${openrouter_key_path}" "${bfl_key_path}"; do
   check_raw_secret "${path}" 16
 done
 for path in "${provider_callback_path}" "${provider_url_signing_path}"; do

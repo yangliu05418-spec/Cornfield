@@ -119,6 +119,8 @@ func validProviderJobID(value string) bool {
 }
 
 func providerSupportsPolling(providerID string) bool {
+	// BFL polling requires the cluster-specific URL returned at submission;
+	// the reconciliation endpoint currently accepts only a remote job ID.
 	return providerID == "legnext"
 }
 

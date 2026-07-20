@@ -66,6 +66,34 @@ func TestOpenRouterSubmitCapabilityGatesPayload(t *testing.T) {
 	}
 }
 
+func TestOpenRouterQualityAndPromptAspectRatio(t *testing.T) {
+	var payload map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatal(err)
+		}
+		_, _ = w.Write([]byte(`{"id":"generation-1","data":[{"b64_json":"cG5n","media_type":"image/png"}]}`))
+	}))
+	defer server.Close()
+	adapter := NewOpenRouter("test-key", "")
+	adapter.BaseURL = server.URL
+	adapter.Client = server.Client()
+	_, err := adapter.Submit(context.Background(), CanonicalRequest{
+		Model: "openai/gpt-image-2", Prompt: "a corn field", AspectRatio: "16:9", PromptAspectRatio: true,
+		ExpectedImages: 1, RequestParameters: []string{"quality", "n"}, Options: GenerationOptions{Image: &ImageOptions{Quality: "high"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if payload["quality"] != "high" || payload["aspect_ratio"] != nil || payload["resolution"] != nil {
+		t.Fatalf("payload = %#v", payload)
+	}
+	prompt, _ := payload["prompt"].(string)
+	if !strings.Contains(prompt, "16:9 aspect ratio") || !strings.HasPrefix(prompt, "a corn field") {
+		t.Fatalf("prompt = %q", prompt)
+	}
+}
+
 func TestOpenRouterSubmitRejectsUngatedReferenceImages(t *testing.T) {
 	adapter := NewOpenRouter("test-key", "")
 	_, err := adapter.Submit(context.Background(), CanonicalRequest{

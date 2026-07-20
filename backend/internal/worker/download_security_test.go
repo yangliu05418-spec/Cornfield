@@ -31,3 +31,16 @@ func TestDownloadErrorDoesNotExposeSignedProviderURL(t *testing.T) {
 		}
 	}
 }
+
+func TestBFLOutputHostPatternIsNarrow(t *testing.T) {
+	for _, host := range []string{"delivery.eu1.bfl.ai", "delivery.us2.bfl.ai"} {
+		if !outputHostAllowed(host, "delivery.*.bfl.ai") {
+			t.Fatalf("expected %q to be allowed", host)
+		}
+	}
+	for _, host := range []string{"api.bfl.ai", "delivery.bfl.ai", "delivery.a.b.bfl.ai", "delivery.eu1.bfl.ai.example.com"} {
+		if outputHostAllowed(host, "delivery.*.bfl.ai") {
+			t.Fatalf("expected %q to be rejected", host)
+		}
+	}
+}

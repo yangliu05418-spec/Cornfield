@@ -65,14 +65,16 @@ func main() {
 	if cfg.ProviderMode == "mock" {
 		adapters["legnext"] = provider.Mock{}
 		adapters["openrouter"] = provider.Mock{}
+		adapters["bfl"] = provider.Mock{}
 	} else {
 		adapters["legnext"] = provider.NewLegnext(cfg.LegnextAPIKey)
 		adapters["openrouter"] = provider.NewOpenRouter(cfg.OpenRouterAPIKey, cfg.PublicURL)
+		adapters["bfl"] = provider.NewBFL(cfg.BFLAPIKey)
 	}
 	downloadClient := safehttp.NewDownloadClient(90 * time.Second)
 	generateWorker := &studioWorker.GenerateWorker{
 		DB: db, Config: cfg, Blobs: store, Adapters: adapters,
-		ProviderSem: map[string]chan struct{}{"legnext": make(chan struct{}, 2), "openrouter": make(chan struct{}, 4)},
+		ProviderSem: map[string]chan struct{}{"legnext": make(chan struct{}, 2), "openrouter": make(chan struct{}, 4), "bfl": make(chan struct{}, 4)},
 		IngestSem:   make(chan struct{}, 4), ThumbSem: make(chan struct{}, 2), HTTPClient: downloadClient, Log: logger, Breaker: studioWorker.NewBreaker(),
 	}
 	workers := river.NewWorkers()

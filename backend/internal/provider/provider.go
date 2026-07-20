@@ -11,6 +11,7 @@ type CanonicalRequest struct {
 	Model             string
 	Prompt            string
 	AspectRatio       string
+	PromptAspectRatio bool
 	Resolution        string
 	ExpectedImages    int
 	ReferenceData     []string
@@ -22,6 +23,11 @@ type CanonicalRequest struct {
 
 type GenerationOptions struct {
 	Midjourney *MidjourneyOptions `json:"midjourney,omitempty"`
+	Image      *ImageOptions      `json:"image,omitempty"`
+}
+
+type ImageOptions struct {
+	Quality string `json:"quality,omitempty"`
 }
 
 type MidjourneyOptions struct {
@@ -40,6 +46,7 @@ type MidjourneyOptions struct {
 
 type Submission struct {
 	ProviderJobID string
+	PollingURL    string
 	Completed     bool
 	Result        Result
 	Telemetry     Telemetry

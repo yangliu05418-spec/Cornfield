@@ -73,6 +73,7 @@ func VerifyOpenRouterRemote(ctx context.Context, catalog *Catalog, client *http.
 			}
 			compareRemoteEnum(&modelReport, name, "aspect_ratio", model.Capabilities.AspectRatios, endpoint.SupportedParameters)
 			compareRemoteEnum(&modelReport, name, "resolution", model.Capabilities.Resolutions, endpoint.SupportedParameters)
+			compareRemoteEnum(&modelReport, name, "quality", model.Capabilities.Qualities, endpoint.SupportedParameters)
 		}
 		report.Models = append(report.Models, modelReport)
 	}

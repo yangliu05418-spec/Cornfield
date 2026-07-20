@@ -1,13 +1,13 @@
 # Cornfield
 
-内部使用的文生图/图生图工作台。V1 集成 Legnext（Midjourney）和 OpenRouter（其他图片模型），不包含积分、支付、社区或 Draw 编辑能力。
+内部使用的文生图/图生图工作台。V1 集成 Legnext（Midjourney）、OpenRouter 与 Black Forest Labs 官方 FLUX API，不包含积分、支付、社区或 Draw 编辑能力。
 
 ## 已实现
 
 - TanStack Start SPA：`/` 预渲染落地页，`/app/*` 静态 shell，无 Node 生产运行时。
 - 高保真创作页：justified rows、行虚拟化、五档缩放、生成占位、逐 draw 取消、预览/参考/复制/下载。
 - Go API：Argon2id 登录、opaque session、CSRF、用户管理、事务化 batch/job、SSE、流式上传和 X-Accel-Redirect。
-- Go Worker：River、公平调度、Legnext/OpenRouter Adapter、mock provider、轮询/回调对账、模糊提交保护、数据库心跳、结果校验和 libvips 缩略图。
+- Go Worker：River、公平调度、Legnext/OpenRouter/BFL Adapter、mock provider、轮询/回调对账、模糊提交保护、数据库心跳、结果校验和 libvips 缩略图。
 - PostgreSQL 18：业务真相、River 队列、可靠事件与 LISTEN/NOTIFY。
 - 本地不可变资产：SHA-256 路径、原子提交、受保护直出、90 天清理、孤儿扫描和磁盘压力保护。
 - 不可变模型能力快照：任务始终按创建时的 capability revision 执行，模型配置更新不会改变已排队任务。

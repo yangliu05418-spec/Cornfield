@@ -188,6 +188,7 @@ services:
       DATABASE_PASSWORD_FILE: /run/secrets/postgres_worker_password
       LEGNEXT_API_KEY_FILE: /run/secrets/legnext_api_key
       OPENROUTER_API_KEY_FILE: /run/secrets/openrouter_api_key
+      BFL_API_KEY_FILE: /run/secrets/bfl_api_key
       VIPS_CONCURRENCY: "2"
       VIPS_DISC_THRESHOLD: "268435456"
       MALLOC_ARENA_MAX: "2"
@@ -197,6 +198,7 @@ services:
         postgres_worker_password,
         legnext_api_key,
         openrouter_api_key,
+        bfl_api_key,
         provider_callback_secret,
         provider_url_signing_secret,
       ]
@@ -304,6 +306,7 @@ secrets:
   postgres_worker_password: { file: "${POSTGRES_WORKER_PASSWORD_SECRET_SOURCE:-./secrets/postgres_worker_password}" }
   legnext_api_key: { file: "${LEGNEXT_API_KEY_SECRET_SOURCE:-./secrets/legnext_api_key}" }
   openrouter_api_key: { file: "${OPENROUTER_API_KEY_SECRET_SOURCE:-./secrets/openrouter_api_key}" }
+  bfl_api_key: { file: "${BFL_API_KEY_SECRET_SOURCE:-./secrets/bfl_api_key}" }
   provider_callback_secret: { file: "${PROVIDER_CALLBACK_SECRET_SOURCE:-./secrets/provider_callback_secret}" }
   provider_url_signing_secret: { file: "${PROVIDER_URL_SIGNING_SECRET_SOURCE:-./secrets/provider_url_signing_secret}" }
   grafana_admin_password: { file: "${GRAFANA_ADMIN_PASSWORD_SECRET_SOURCE:-./secrets/grafana_admin_password}" }

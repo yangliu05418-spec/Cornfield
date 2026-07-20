@@ -30,6 +30,7 @@ type Model struct {
 	Enabled           bool         `yaml:"enabled" json:"enabled"`
 	Order             int          `yaml:"order" json:"order"`
 	PromptSuffix      string       `yaml:"prompt_suffix,omitempty" json:"prompt_suffix,omitempty"`
+	PromptAspectRatio bool         `yaml:"prompt_aspect_ratio,omitempty" json:"prompt_aspect_ratio,omitempty"`
 	RequestParameters []string     `yaml:"request_parameters,omitempty" json:"request_parameters,omitempty"`
 	OutputsPerDraw    int          `yaml:"outputs_per_draw" json:"outputs_per_draw"`
 	Capabilities      Capabilities `yaml:"capabilities" json:"capabilities"`
@@ -41,6 +42,7 @@ type Capabilities struct {
 	ImageToImage       bool      `yaml:"image_to_image" json:"image_to_image"`
 	AspectRatios       []string  `yaml:"aspect_ratios" json:"aspect_ratios"`
 	Resolutions        []string  `yaml:"resolutions" json:"resolutions"`
+	Qualities          []string  `yaml:"qualities,omitempty" json:"qualities,omitempty"`
 	MaxReferenceImages int       `yaml:"max_reference_images" json:"max_reference_images"`
 	MaxReferenceBytes  int64     `yaml:"max_reference_bytes" json:"max_reference_bytes"`
 	DrawCount          DrawCount `yaml:"draw_count" json:"draw_count"`
@@ -308,6 +310,9 @@ func validateCapabilities(m Model) error {
 	if duplicateOrBlank(capabilities.Resolutions) {
 		return fmt.Errorf("model %s has blank or duplicate resolutions", m.ID)
 	}
+	if duplicateOrBlank(capabilities.Qualities) {
+		return fmt.Errorf("model %s has blank or duplicate qualities", m.ID)
+	}
 	if capabilities.MaxReferenceImages < 0 || capabilities.MaxReferenceImages > 16 {
 		return fmt.Errorf("model %s has invalid max_reference_images", m.ID)
 	}
@@ -335,7 +340,7 @@ func validateCapabilities(m Model) error {
 		if capabilities.ImageToImage && !has("input_references") {
 			return fmt.Errorf("model %s enables image_to_image without OpenRouter input_references", m.ID)
 		}
-		if len(capabilities.AspectRatios) > 0 && !has("aspect_ratio") {
+		if len(capabilities.AspectRatios) > 0 && !has("aspect_ratio") && !m.PromptAspectRatio {
 			return fmt.Errorf("model %s advertises selectable aspect ratios without OpenRouter aspect_ratio", m.ID)
 		}
 		if len(capabilities.Resolutions) > 0 && !has("resolution") {
@@ -343,6 +348,19 @@ func validateCapabilities(m Model) error {
 		}
 		if m.OutputsPerDraw > 1 && !has("n") {
 			return fmt.Errorf("model %s produces multiple outputs without OpenRouter n", m.ID)
+		}
+		if len(capabilities.Qualities) > 0 && !has("quality") {
+			return fmt.Errorf("model %s advertises selectable qualities without OpenRouter quality", m.ID)
+		}
+	case "bfl":
+		if len(capabilities.AspectRatios) == 0 || len(capabilities.Resolutions) == 0 {
+			return fmt.Errorf("model %s requires BFL aspect ratios and resolution tiers", m.ID)
+		}
+		if capabilities.ImageToImage && capabilities.MaxReferenceImages > 8 {
+			return fmt.Errorf("model %s exceeds BFL's eight reference image limit", m.ID)
+		}
+		if len(m.Policy.AllowedOutputHosts) == 0 {
+			return fmt.Errorf("model %s requires an output host allowlist", m.ID)
 		}
 	case "legnext":
 		if len(m.Policy.AllowedOutputHosts) == 0 {
@@ -369,6 +387,9 @@ func validatePolicy(m Model) error {
 		return fmt.Errorf("model %s has blank or duplicate output hosts", m.ID)
 	}
 	for _, host := range policy.AllowedOutputHosts {
+		if host == "delivery.*.bfl.ai" {
+			continue
+		}
 		if host != strings.ToLower(host) || strings.ContainsAny(host, "/:*?#@") || strings.HasPrefix(host, ".") || strings.HasSuffix(host, ".") {
 			return fmt.Errorf("model %s has invalid output host %q", m.ID, host)
 		}

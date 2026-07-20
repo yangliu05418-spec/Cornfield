@@ -130,8 +130,11 @@ func verifyRemote(catalog *modelconfig.Catalog) {
 		}
 	}
 	for _, model := range catalog.Models {
-		if model.Provider == "legnext" {
+		switch model.Provider {
+		case "legnext":
 			fmt.Printf("skipped %s: Legnext has no machine-readable capability endpoint\n", model.ID)
+		case "bfl":
+			fmt.Printf("skipped %s: BFL has no machine-readable capability endpoint\n", model.ID)
 		}
 	}
 	if report.HasDrift() {

@@ -16,6 +16,7 @@ export type Model = {
     image_to_image: boolean
     aspect_ratios: string[]
     resolutions: string[]
+    qualities?: string[]
     midjourney_versions?: string[]
     max_reference_images: number
     max_reference_bytes: number
@@ -84,6 +85,7 @@ export type MidjourneyOptions = {
 
 export type GenerationOptions = {
   midjourney?: MidjourneyOptions
+  image?: { quality: 'auto' | 'low' | 'medium' | 'high' }
 }
 
 export type GenerationOutput = {

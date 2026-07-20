@@ -66,6 +66,7 @@ type generationRecord struct {
 	CancelMode          string
 	ExecutionGeneration int
 	ProviderJobID       *string
+	ProviderPollingURL  *string
 	ExpectedOutputs     int
 	Prompt              string
 	AspectRatio         string
@@ -205,7 +206,7 @@ func (w *GenerateWorker) Work(ctx context.Context, riverJob *river.Job[GenerateA
 
 	switch record.Status {
 	case "cancelling":
-		tracked, err := w.completeCancellation(ctx, record, adapter, provider.Submission{ProviderJobID: valueOrPointer(record.ProviderJobID)}, false)
+		tracked, err := w.completeCancellation(ctx, record, adapter, submissionFromRecord(record), false)
 		if err != nil {
 			return err
 		}
@@ -221,7 +222,7 @@ func (w *GenerateWorker) Work(ctx context.Context, riverJob *river.Job[GenerateA
 
 	if record.GenerationDeadline != nil && !time.Now().Before(*record.GenerationDeadline) {
 		if record.ProviderJobID != nil {
-			submission := provider.Submission{ProviderJobID: *record.ProviderJobID}
+			submission := submissionFromRecord(record)
 			// A task can complete just before its deadline while the Worker is
 			// restarting. Perform one authenticated final read before declaring a
 			// paid result lost; the ordinary deadline-bounded poll would already be
@@ -414,14 +415,14 @@ func (w *GenerateWorker) Work(ctx context.Context, riverJob *river.Job[GenerateA
 	}
 	pollCtx, cancelPoll := boundedContext(ctx, 45*time.Second, record.GenerationDeadline)
 	started := time.Now()
-	result, pollErr := adapter.Poll(pollCtx, provider.Submission{ProviderJobID: *record.ProviderJobID})
+	result, pollErr := adapter.Poll(pollCtx, submissionFromRecord(record))
 	cancelPoll()
 	release()
 	w.recordPassiveBreaker(ctx, record, model, breakerKey, pollErr)
 	w.recordAttempt(ctx, record, "poll", time.Since(started), pollErr, result.Usage, result.Telemetry)
 	if pollErr != nil {
 		if status, statusErr := w.currentStatus(ctx, record.JobID); statusErr == nil && (status == "cancelling" || status == "cancelled") {
-			tracked, cancelErr := w.completeCancellation(ctx, record, adapter, provider.Submission{ProviderJobID: *record.ProviderJobID}, false)
+			tracked, cancelErr := w.completeCancellation(ctx, record, adapter, submissionFromRecord(record), false)
 			if cancelErr != nil {
 				return cancelErr
 			}
@@ -456,13 +457,13 @@ func (w *GenerateWorker) load(ctx context.Context, jobID uuid.UUID) (generationR
 	var item generationRecord
 	var snapshotJSON []byte
 	var storedExpectedOutputs int
-	err := w.DB.QueryRow(ctx, `SELECT j.id,j.batch_id,j.owner_user_id,j.status,COALESCE(j.cancel_mode,''),j.execution_generation,j.provider_job_id,j.expected_outputs,
+	err := w.DB.QueryRow(ctx, `SELECT j.id,j.batch_id,j.owner_user_id,j.status,COALESCE(j.cancel_mode,''),j.execution_generation,j.provider_job_id,j.provider_poll_url,j.expected_outputs,
 		b.prompt,b.aspect_ratio,b.resolution,b.model_id,j.attempt_count,j.generation_deadline,j.upstream_active_until,v.config,b.options
 		FROM generation_jobs j
 		JOIN generation_batches b ON b.id=j.batch_id
 		JOIN model_capability_versions v ON v.model_id=b.model_id AND v.revision=b.capability_revision
 		WHERE j.id=$1`, jobID).Scan(
-		&item.JobID, &item.BatchID, &item.OwnerID, &item.Status, &item.CancelMode, &item.ExecutionGeneration, &item.ProviderJobID, &storedExpectedOutputs,
+		&item.JobID, &item.BatchID, &item.OwnerID, &item.Status, &item.CancelMode, &item.ExecutionGeneration, &item.ProviderJobID, &item.ProviderPollingURL, &storedExpectedOutputs,
 		&item.Prompt, &item.AspectRatio, &item.Resolution, &item.ModelID, &item.AttemptCount, &item.GenerationDeadline, &item.UpstreamActiveUntil, &snapshotJSON, &item.Options)
 	if err != nil {
 		return item, err
@@ -593,6 +594,13 @@ func safeForManualResubmit(item generationRecord) bool {
 
 func needsProviderSubmission(item generationRecord) bool {
 	return item.ProviderJobID == nil
+}
+
+func submissionFromRecord(item generationRecord) provider.Submission {
+	return provider.Submission{
+		ProviderJobID: valueOrPointer(item.ProviderJobID),
+		PollingURL:    valueOrPointer(item.ProviderPollingURL),
+	}
 }
 
 // stageSynchronousResult durably associates an already-paid synchronous
@@ -737,8 +745,8 @@ func (w *GenerateWorker) acceptSubmission(ctx context.Context, item generationRe
 		return false, err
 	}
 	defer tx.Rollback(ctx)
-	command, err := tx.Exec(ctx, `UPDATE generation_jobs SET provider_job_id=NULLIF($2,''),status=$3,updated_at=now()
-		WHERE id=$1 AND status='submitting' AND provider_job_id IS NULL`, item.JobID, submission.ProviderJobID, status)
+	command, err := tx.Exec(ctx, `UPDATE generation_jobs SET provider_job_id=NULLIF($2,''),provider_poll_url=NULLIF($3,''),status=$4,updated_at=now()
+		WHERE id=$1 AND status='submitting' AND provider_job_id IS NULL`, item.JobID, submission.ProviderJobID, submission.PollingURL, status)
 	if err != nil {
 		return false, err
 	}
@@ -840,6 +848,7 @@ func canonicalRequestFromSnapshot(item generationRecord) provider.CanonicalReque
 		Model:             model.ProviderModel,
 		Prompt:            prompt,
 		AspectRatio:       item.AspectRatio,
+		PromptAspectRatio: model.PromptAspectRatio,
 		Resolution:        item.Resolution,
 		ExpectedImages:    model.OutputsPerDraw,
 		RequestParameters: append([]string(nil), model.RequestParameters...),
@@ -1207,7 +1216,7 @@ func (w *GenerateWorker) observeTerminalUpstream(ctx context.Context, item gener
 	}
 	pollCtx, cancelPoll := boundedContext(ctx, 45*time.Second, item.UpstreamActiveUntil)
 	started := time.Now()
-	result, pollErr := adapter.Poll(pollCtx, provider.Submission{ProviderJobID: *item.ProviderJobID})
+	result, pollErr := adapter.Poll(pollCtx, submissionFromRecord(item))
 	cancelPoll()
 	release()
 	w.recordPassiveBreaker(ctx, item, item.ModelSnapshot, item.ProviderID+":"+item.ModelID, pollErr)
@@ -1607,7 +1616,7 @@ func (w *GenerateWorker) download(ctx context.Context, item generationRecord, ra
 	}
 	allowed := false
 	for _, host := range item.ModelSnapshot.Policy.AllowedOutputHosts {
-		if strings.EqualFold(parsed.Hostname(), host) {
+		if outputHostAllowed(parsed.Hostname(), host) {
 			allowed = true
 		}
 	}
@@ -1631,6 +1640,19 @@ func (w *GenerateWorker) download(ctx context.Context, item generationRecord, ra
 		return nil, "", errors.New("result image exceeds limit")
 	}
 	return data, res.Header.Get("Content-Type"), nil
+}
+
+func outputHostAllowed(host, pattern string) bool {
+	host = strings.ToLower(strings.TrimSuffix(host, "."))
+	pattern = strings.ToLower(pattern)
+	if host == pattern {
+		return true
+	}
+	if pattern != "delivery.*.bfl.ai" || !strings.HasPrefix(host, "delivery.") || !strings.HasSuffix(host, ".bfl.ai") {
+		return false
+	}
+	region := strings.TrimSuffix(strings.TrimPrefix(host, "delivery."), ".bfl.ai")
+	return region != "" && !strings.Contains(region, ".")
 }
 
 func (w *GenerateWorker) makeThumbnails(ctx context.Context, key string) {

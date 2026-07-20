@@ -20,6 +20,7 @@ import type {
   Asset,
   AssetPage,
   GenerationBatch,
+  GenerationOptions,
   MidjourneyOptions,
   Model,
 } from '#/lib/api'
@@ -55,7 +56,7 @@ type PendingSubmission = {
     resolution: string
     draw_count: number
     input_asset_ids: string[]
-    options: { midjourney?: MidjourneyOptions }
+    options: GenerationOptions
   }
 }
 
@@ -158,6 +159,7 @@ function CreatePage() {
   const [prompt, setPrompt] = useState('')
   const [ratio, setRatio] = useState('1:1')
   const [resolution, setResolution] = useState('1K')
+  const [quality, setQuality] = useState('auto')
   const [draws, setDraws] = useState(1)
   const [midjourney, setMidjourney] = useState<MidjourneyOptions>({
     version: '8.1',
@@ -255,6 +257,8 @@ function CreatePage() {
       setRatio(activeModel.capabilities.aspect_ratios[0] ?? 'auto')
     if (!activeModel.capabilities.resolutions.includes(resolution))
       setResolution(activeModel.capabilities.resolutions[0] ?? 'auto')
+    if (!(activeModel.capabilities.qualities ?? []).includes(quality))
+      setQuality(activeModel.capabilities.qualities?.[0] ?? 'auto')
     if (activeModel.id === 'legnext-midjourney') setDraws(1)
     setDraws((current) =>
       Math.min(
@@ -273,7 +277,7 @@ function CreatePage() {
         )
         .slice(0, limit)
     })
-  }, [activeModel, modelID, ratio, resolution])
+  }, [activeModel, modelID, quality, ratio, resolution])
   useEffect(() => {
     const userID = me.data?.user.id
     if (!userID) return
@@ -450,6 +454,9 @@ function CreatePage() {
         ? (midjourney.resolution ?? 'sd').toUpperCase()
         : 'auto'
       : resolution
+    const imageOptions = activeModel.capabilities.qualities?.length
+      ? { image: { quality: quality as 'auto' | 'low' | 'medium' | 'high' } }
+      : {}
     const batch: GenerationBatch = {
       id: optimisticID,
       model_id: activeModel.id,
@@ -467,7 +474,7 @@ function CreatePage() {
         status: 'creating',
         expected_outputs: activeModel.outputs_per_draw,
       })),
-      options: isMidjourney ? { midjourney } : {},
+      options: isMidjourney ? { midjourney } : imageOptions,
     }
     create.mutate({
       idempotencyKey,
@@ -480,7 +487,7 @@ function CreatePage() {
         resolution: submittedResolution,
         draw_count: draws,
         input_asset_ids: references.map((asset) => asset.id),
-        options: isMidjourney ? { midjourney } : {},
+        options: isMidjourney ? { midjourney } : imageOptions,
       },
     })
   }
@@ -741,6 +748,20 @@ function CreatePage() {
                   value={midjourney}
                   hasReference={references.length > 0}
                   onChange={setMidjourney}
+                />
+              ) : activeModel?.capabilities.qualities?.length ? (
+                <GeneratorSelect
+                  label="选择画质"
+                  value={quality}
+                  items={activeModel.capabilities.qualities.map((item) => ({
+                    value: item,
+                    label:
+                      { auto: '自动', low: '低', medium: '中', high: '高' }[
+                        item
+                      ] ?? item,
+                  }))}
+                  icon={<span className="resolution-icon" />}
+                  onChange={setQuality}
                 />
               ) : (
                 !!activeModel?.capabilities.resolutions.length && (

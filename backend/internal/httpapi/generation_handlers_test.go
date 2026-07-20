@@ -86,7 +86,7 @@ func TestNormalizeMidjourneyOptions(t *testing.T) {
 	input := generationRequest{DrawCount: 1, Options: provider.GenerationOptions{Midjourney: &provider.MidjourneyOptions{
 		Version: "8.1", Resolution: "hd", Speed: "fast", Stylize: 100,
 	}}}
-	if err := normalizeGenerationOptions("legnext-midjourney", "legnext", []string{"8.1", "7"}, 0, &input); err != nil {
+	if err := normalizeGenerationOptions("legnext-midjourney", "legnext", []string{"8.1", "7"}, nil, 0, &input); err != nil {
 		t.Fatal(err)
 	}
 	if input.Resolution != "HD" {
@@ -97,7 +97,7 @@ func TestNormalizeMidjourneyOptions(t *testing.T) {
 	input = generationRequest{DrawCount: 1, Options: provider.GenerationOptions{Midjourney: &provider.MidjourneyOptions{
 		Version: "7", Speed: "turbo", Quality: &quality, Draft: true,
 	}}}
-	if err := normalizeGenerationOptions("legnext-midjourney", "legnext", []string{"8.1", "7"}, 0, &input); err != nil {
+	if err := normalizeGenerationOptions("legnext-midjourney", "legnext", []string{"8.1", "7"}, nil, 0, &input); err != nil {
 		t.Fatal(err)
 	}
 	if input.Options.Midjourney.Quality != nil || input.Resolution != "auto" {
@@ -105,18 +105,33 @@ func TestNormalizeMidjourneyOptions(t *testing.T) {
 	}
 
 	input = generationRequest{DrawCount: 4, Options: provider.GenerationOptions{Midjourney: &provider.MidjourneyOptions{Version: "8.1", Speed: "fast"}}}
-	if err := normalizeGenerationOptions("legnext-midjourney", "legnext", []string{"8.1", "7"}, 0, &input); err == nil {
+	if err := normalizeGenerationOptions("legnext-midjourney", "legnext", []string{"8.1", "7"}, nil, 0, &input); err == nil {
 		t.Fatal("four Midjourney draws were accepted")
 	}
 }
 
 func TestUnsupportedOpenRouterControlsNormalizeToAuto(t *testing.T) {
 	input := generationRequest{DrawCount: 1}
-	if err := normalizeGenerationOptions("openrouter-test", "openrouter", nil, 0, &input); err != nil {
+	if err := normalizeGenerationOptions("openrouter-test", "openrouter", nil, nil, 0, &input); err != nil {
 		t.Fatal(err)
 	}
 	if input.AspectRatio != "auto" || input.Resolution != "auto" {
 		t.Fatalf("input = %+v", input)
+	}
+}
+
+func TestNormalizeImageQuality(t *testing.T) {
+	input := generationRequest{DrawCount: 1}
+	qualities := []string{"auto", "low", "medium", "high"}
+	if err := normalizeGenerationOptions("openrouter-gpt-image-2", "openrouter", nil, qualities, 0, &input); err != nil {
+		t.Fatal(err)
+	}
+	if input.Options.Image == nil || input.Options.Image.Quality != "auto" {
+		t.Fatalf("quality was not defaulted: %+v", input.Options)
+	}
+	input.Options.Image.Quality = "ultra"
+	if err := normalizeGenerationOptions("openrouter-gpt-image-2", "openrouter", nil, qualities, 0, &input); err == nil {
+		t.Fatal("unsupported quality was accepted")
 	}
 }
 

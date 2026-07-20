@@ -150,15 +150,27 @@ func validBFLPollingURL(raw string) bool {
 		return false
 	}
 	parsed, err := url.Parse(raw)
-	if err != nil || parsed.Scheme != "https" || parsed.User != nil || parsed.Fragment != "" {
+	if err != nil || parsed.Scheme != "https" || parsed.User != nil || parsed.Fragment != "" || (parsed.Port() != "" && parsed.Port() != "443") {
 		return false
 	}
-	switch strings.ToLower(parsed.Hostname()) {
-	case "api.bfl.ai", "api.eu.bfl.ai", "api.us.bfl.ai":
+	host := strings.ToLower(parsed.Hostname())
+	if host == "api.bfl.ai" {
 		return true
-	default:
+	}
+	labels := strings.Split(host, ".")
+	return len(labels) == 4 && labels[0] == "api" && validBFLRegionLabel(labels[1]) && labels[2] == "bfl" && labels[3] == "ai"
+}
+
+func validBFLRegionLabel(label string) bool {
+	if label == "" || len(label) > 63 || label[0] == '-' || label[len(label)-1] == '-' {
 		return false
 	}
+	for _, character := range label {
+		if (character < 'a' || character > 'z') && (character < '0' || character > '9') && character != '-' {
+			return false
+		}
+	}
+	return true
 }
 
 func bflDimensions(ratio, resolution string) (int, int, error) {

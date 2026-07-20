@@ -56,8 +56,11 @@ func TestBFLDimensionsAndPollingURLValidation(t *testing.T) {
 		}
 	}
 	if validBFLPollingURL("https://api.bfl.ai.example.com/v1/get_result?id=1") ||
+		validBFLPollingURL("https://api.eu2.bfl.ai.example.com/v1/get_result?id=1") ||
+		validBFLPollingURL("https://api.eu2.bfl.ai:8443/v1/get_result?id=1") ||
 		validBFLPollingURL("https://api.bfl.ai/"+strings.Repeat("x", 2048)) ||
-		!validBFLPollingURL("https://api.eu.bfl.ai/v1/get_result?id=1") {
+		!validBFLPollingURL("https://api.eu.bfl.ai/v1/get_result?id=1") ||
+		!validBFLPollingURL("https://api.eu2.bfl.ai/v1/get_result?id=1") {
 		t.Fatal("polling URL allowlist is incorrect")
 	}
 }

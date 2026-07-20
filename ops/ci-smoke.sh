@@ -207,6 +207,30 @@ curl --fail-with-body --silent --show-error --cookie "${cookie_jar}" \
 revision="$(jq -er '.revision' "${models_json}")"
 jq -e '.models | length >= 2' "${models_json}" >/dev/null
 
+# Exercise the complete text-to-image path independently of reference uploads.
+text_generation_json="${tmp_dir}/text-generation.json"
+text_request_json="$(jq -nc --arg revision "${revision}" \
+  '{model_id:"openrouter-gemini-3-1-flash-lite-image",capability_revision:$revision,prompt:"A minimal cornfield under a clear sky",aspect_ratio:"1:1",resolution:"1K",draw_count:1,input_asset_ids:[]}')"
+curl --fail-with-body --silent --show-error --cookie "${cookie_jar}" \
+  --header "X-CSRF-Token: ${csrf_token}" --header 'Content-Type: application/json' \
+  --header 'Idempotency-Key: ci-smoke-text-to-image-v1' --data "${text_request_json}" \
+  http://127.0.0.1:8081/api/v1/generations > "${text_generation_json}"
+text_batch_id="$(jq -er '.id' "${text_generation_json}")"
+
+text_batch_json="${tmp_dir}/text-batch.json"
+for _ in $(seq 1 120); do
+  curl --fail-with-body --silent --show-error --cookie "${cookie_jar}" \
+    "http://127.0.0.1:8081/api/v1/generations/${text_batch_id}" > "${text_batch_json}"
+  if [[ "$(jq -r '.status' "${text_batch_json}")" == "succeeded" ]]; then
+    break
+  fi
+  sleep 1
+done
+jq -e '.status == "succeeded" and .completed_outputs == 1 and (.jobs[0].outputs | length) == 1' "${text_batch_json}" >/dev/null
+text_reference_count="$(docker compose exec -T postgres psql -U studio_bootstrap -d studio -Atc \
+  "SELECT usage->>'reference_count' FROM provider_attempts WHERE job_id=(SELECT id FROM generation_jobs WHERE batch_id='${text_batch_id}'::uuid LIMIT 1) AND operation='submit' ORDER BY id DESC LIMIT 1")"
+test "${text_reference_count}" = "0"
+
 # Exercise streaming upload, quarantine validation, libvips decode and
 # content-addressed promotion before using the asset as an image input.
 reference_png="${tmp_dir}/reference.png"
@@ -283,4 +307,4 @@ docker compose ps --status running --services | grep -qx worker
 docker compose ps --status running --services | grep -qx postgres
 docker compose ps --status running --services | grep -qx web
 
-echo "ci-smoke: full mock image-to-image path passed"
+echo "ci-smoke: full mock text-to-image and image-to-image paths passed"

@@ -73,13 +73,18 @@ func (l *Legnext) Submit(ctx context.Context, input CanonicalRequest) (Submissio
 	}
 	if options := input.Options.Midjourney; options != nil {
 		if options.Quality != nil {
-			parts = append(parts, "--q", strconv.Itoa(*options.Quality))
+			parts = append(parts, "--q", strconv.FormatFloat(*options.Quality, 'f', -1, 64))
 		}
 		parts = append(parts, "--stylize", strconv.Itoa(options.Stylize), "--chaos", strconv.Itoa(options.Chaos), "--weird", strconv.Itoa(options.Weird))
 		if options.ImageWeight != nil {
 			parts = append(parts, "--iw", strconv.FormatFloat(*options.ImageWeight, 'f', -1, 64))
 		}
-		parts = append(parts, "--"+options.Speed, "--v", options.Version)
+		parts = append(parts, "--"+options.Speed)
+		if options.Version == "niji 6" {
+			parts = append(parts, "--niji", "6")
+		} else {
+			parts = append(parts, "--v", options.Version)
+		}
 		if options.Resolution == "hd" {
 			parts = append(parts, "--hd")
 		}

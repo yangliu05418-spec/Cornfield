@@ -1183,9 +1183,7 @@ select {
   transform-origin: var(--radix-popover-content-transform-origin);
 }
 .mj-options-heading {
-  display: flex;
-  align-items: start;
-  justify-content: space-between;
+  display: grid;
   gap: 16px;
   padding: 2px 2px 14px;
 }
@@ -1201,7 +1199,9 @@ select {
   font-size: 9px;
 }
 .segmented-control {
-  display: flex;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  width: 100%;
   padding: 3px;
   border: 1px solid #383b36;
   border-radius: 10px;

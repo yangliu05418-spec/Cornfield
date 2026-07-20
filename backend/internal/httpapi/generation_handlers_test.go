@@ -11,6 +11,8 @@ import (
 	"internal-image-studio/internal/provider"
 )
 
+func float64Pointer(value float64) *float64 { return &value }
+
 func TestGenerationRequestHash(t *testing.T) {
 	assetID := uuid.MustParse("ac2be23a-6f82-4c32-8165-9559cecf74fc")
 	base := generationRequest{ModelID: "model", CapabilityRevision: "rev", Prompt: "prompt", AspectRatio: "1:1", Resolution: "1K", DrawCount: 1, InputAssetIDs: []uuid.UUID{assetID}}
@@ -93,7 +95,7 @@ func TestNormalizeMidjourneyOptions(t *testing.T) {
 		t.Fatalf("resolution = %q", input.Resolution)
 	}
 
-	quality := 4
+	quality := 4.0
 	input = generationRequest{DrawCount: 1, Options: provider.GenerationOptions{Midjourney: &provider.MidjourneyOptions{
 		Version: "7", Speed: "turbo", Quality: &quality, Draft: true,
 	}}}
@@ -107,6 +109,50 @@ func TestNormalizeMidjourneyOptions(t *testing.T) {
 	input = generationRequest{DrawCount: 4, Options: provider.GenerationOptions{Midjourney: &provider.MidjourneyOptions{Version: "8.1", Speed: "fast"}}}
 	if err := normalizeGenerationOptions("legnext-midjourney", "legnext", []string{"8.1", "7"}, nil, 0, &input); err == nil {
 		t.Fatal("four Midjourney draws were accepted")
+	}
+}
+
+func TestNormalizeEverySupportedMidjourneyVersion(t *testing.T) {
+	versions := []string{"8.1", "8", "7", "6.1", "6", "niji 6"}
+	tests := []struct {
+		version    string
+		resolution string
+		quality    *float64
+		wantRes    string
+	}{
+		{version: "8.1", resolution: "sd", wantRes: "SD"},
+		{version: "8", resolution: "hd", quality: float64Pointer(4), wantRes: "HD"},
+		{version: "7", quality: float64Pointer(2), wantRes: "auto"},
+		{version: "6.1", quality: float64Pointer(0.5), wantRes: "auto"},
+		{version: "6", quality: float64Pointer(1), wantRes: "auto"},
+		{version: "niji 6", quality: float64Pointer(2), wantRes: "auto"},
+	}
+	for _, test := range tests {
+		t.Run(test.version, func(t *testing.T) {
+			input := generationRequest{DrawCount: 1, Options: provider.GenerationOptions{Midjourney: &provider.MidjourneyOptions{
+				Version: test.version, Resolution: test.resolution, Speed: "fast", Quality: test.quality, Stylize: 100,
+			}}}
+			if err := normalizeGenerationOptions("legnext-midjourney", "legnext", versions, nil, 0, &input); err != nil {
+				t.Fatal(err)
+			}
+			if input.Resolution != test.wantRes {
+				t.Fatalf("resolution = %q, want %q", input.Resolution, test.wantRes)
+			}
+		})
+	}
+
+	invalid := []provider.MidjourneyOptions{
+		{Version: "8.1", Speed: "fast", Quality: float64Pointer(1)},
+		{Version: "8", Speed: "turbo", Quality: float64Pointer(1)},
+		{Version: "7", Speed: "fast", Quality: float64Pointer(0.5)},
+		{Version: "6.1", Speed: "fast", Quality: float64Pointer(4)},
+		{Version: "niji 6", Speed: "fast", Draft: true},
+	}
+	for _, options := range invalid {
+		input := generationRequest{DrawCount: 1, Options: provider.GenerationOptions{Midjourney: &options}}
+		if err := normalizeGenerationOptions("legnext-midjourney", "legnext", versions, nil, 0, &input); err == nil {
+			t.Fatalf("invalid options were accepted: %+v", options)
+		}
 	}
 }
 

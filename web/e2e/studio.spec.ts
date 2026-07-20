@@ -266,7 +266,7 @@ test('Midjourney stays one draw with four outputs and versioned parameters', asy
           image_to_image: true,
           aspect_ratios: ['1:1', '16:9'],
           resolutions: ['SD', 'HD'],
-          midjourney_versions: ['8.1', '7'],
+          midjourney_versions: ['8.1', '8', '7', '6.1', '6', 'niji 6'],
           max_reference_images: 4,
           max_reference_bytes: 10_485_760,
           draw_count: { min: 1, max: 1, default: 1 },
@@ -295,6 +295,15 @@ test('Midjourney stays one draw with four outputs and versioned parameters', asy
   await expect(page.getByRole('button', { name: '增加抽卡' })).toHaveCount(0)
   await page.getByRole('button', { name: 'V8.1 · SD' }).click()
   await expect(page.getByText('Midjourney 参数')).toBeVisible()
+  await expect(
+    page.getByRole('button', { name: 'V8', exact: true }),
+  ).toBeVisible()
+  await expect(
+    page.getByRole('button', { name: 'V6.1', exact: true }),
+  ).toBeVisible()
+  await expect(
+    page.getByRole('button', { name: 'Niji 6', exact: true }),
+  ).toBeVisible()
   await page.keyboard.press('Escape')
 
   await page.getByRole('textbox', { name: '生成提示词' }).fill('one draw')

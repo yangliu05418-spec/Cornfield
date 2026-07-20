@@ -450,7 +450,7 @@ function CreatePage() {
     const createdAt = new Date().toISOString()
     const expectedOutputs = draws * activeModel.outputs_per_draw
     const submittedResolution = isMidjourney
-      ? midjourney.version === '8.1'
+      ? midjourney.version === '8.1' || midjourney.version === '8'
         ? (midjourney.resolution ?? 'sd').toUpperCase()
         : 'auto'
       : resolution
@@ -746,6 +746,7 @@ function CreatePage() {
               {isMidjourney ? (
                 <MidjourneyOptionsControl
                   value={midjourney}
+                  versions={activeModel.capabilities.midjourney_versions ?? []}
                   hasReference={references.length > 0}
                   onChange={setMidjourney}
                 />

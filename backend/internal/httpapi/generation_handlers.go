@@ -60,7 +60,7 @@ func normalizeGenerationOptions(modelID, providerID string, versions, qualities 
 	}
 	options := input.Options.Midjourney
 	if options == nil {
-		options = &provider.MidjourneyOptions{Version: "8.1", Resolution: "sd", Speed: "fast", Stylize: 100}
+		options = &provider.MidjourneyOptions{Version: versions[0], Speed: "fast", Stylize: 100}
 		input.Options.Midjourney = options
 	}
 	if !slices.Contains(versions, options.Version) || options.Stylize < 0 || options.Stylize > 1000 || options.Chaos < 0 || options.Chaos > 100 || options.Weird < 0 || options.Weird > 3000 {
@@ -68,6 +68,12 @@ func normalizeGenerationOptions(modelID, providerID string, versions, qualities 
 	}
 	if options.ImageWeight != nil && (inputCount == 0 || *options.ImageWeight < 0 || *options.ImageWeight > 3) {
 		return errors.New("Midjourney image weight requires a reference image and must be between 0 and 3")
+	}
+	qualityAllowed := func(values ...float64) bool {
+		if options.Quality == nil {
+			return false
+		}
+		return slices.Contains(values, *options.Quality)
 	}
 	switch options.Version {
 	case "8.1":
@@ -81,6 +87,24 @@ func normalizeGenerationOptions(modelID, providerID string, versions, qualities 
 			return errors.New("Midjourney V8.1 option combination is unsupported")
 		}
 		input.Resolution = strings.ToUpper(options.Resolution)
+	case "8":
+		if options.Resolution == "" {
+			options.Resolution = "sd"
+		}
+		if options.Speed == "" {
+			options.Speed = "fast"
+		}
+		if (options.Resolution != "sd" && options.Resolution != "hd") || options.Speed != "fast" || options.Draft {
+			return errors.New("Midjourney V8 option combination is unsupported")
+		}
+		if options.Quality == nil {
+			quality := 1.0
+			options.Quality = &quality
+		}
+		if !qualityAllowed(1, 4) {
+			return errors.New("Midjourney V8 quality is unsupported")
+		}
+		input.Resolution = strings.ToUpper(options.Resolution)
 	case "7":
 		if options.Speed == "" {
 			options.Speed = "fast"
@@ -91,11 +115,30 @@ func normalizeGenerationOptions(modelID, providerID string, versions, qualities 
 		if options.Draft {
 			options.Quality = nil
 		} else if options.Quality == nil {
-			quality := 1
+			quality := 1.0
 			options.Quality = &quality
 		}
-		if options.Quality != nil && *options.Quality != 1 && *options.Quality != 2 && *options.Quality != 4 {
+		if options.Quality != nil && !qualityAllowed(1, 2, 4) {
 			return errors.New("Midjourney V7 quality is unsupported")
+		}
+		options.Resolution = ""
+		input.Resolution = "auto"
+	case "6", "6.1", "niji 6":
+		if options.Speed == "" {
+			options.Speed = "fast"
+		}
+		if options.Speed != "fast" && options.Speed != "turbo" {
+			return errors.New("Midjourney legacy speed is unsupported")
+		}
+		if options.Draft {
+			return errors.New("Midjourney legacy versions do not support Draft mode")
+		}
+		if options.Quality == nil {
+			quality := 1.0
+			options.Quality = &quality
+		}
+		if !qualityAllowed(0.5, 1, 2) {
+			return errors.New("Midjourney legacy quality is unsupported")
 		}
 		options.Resolution = ""
 		input.Resolution = "auto"

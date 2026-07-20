@@ -1,4 +1,4 @@
-revision: 4
+revision: 5
 models:
   - id: legnext-midjourney-v7
     display_name: Midjourney V7
@@ -43,7 +43,7 @@ models:
       image_to_image: true
       aspect_ratios: ["1:1", "16:9", "9:16", "4:3", "3:4", "3:2", "2:3"]
       resolutions: ["SD", "HD"]
-      midjourney_versions: ["8.1", "7"]
+      midjourney_versions: ["8.1", "8", "7", "6.1", "6", "niji 6"]
       max_reference_images: 4
       max_reference_bytes: 10485760
       draw_count: { min: 1, max: 1, default: 1 }

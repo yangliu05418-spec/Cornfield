@@ -34,7 +34,7 @@ type MidjourneyOptions struct {
 	Version     string   `json:"version"`
 	Resolution  string   `json:"resolution,omitempty"`
 	Speed       string   `json:"speed"`
-	Quality     *int     `json:"quality,omitempty"`
+	Quality     *float64 `json:"quality,omitempty"`
 	Draft       bool     `json:"draft"`
 	Stylize     int      `json:"stylize"`
 	Chaos       int      `json:"chaos"`

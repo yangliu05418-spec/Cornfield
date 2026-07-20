@@ -68,7 +68,7 @@ func TestLegnextSubmitBuildsValidatedMidjourneyOptions(t *testing.T) {
 		_, _ = w.Write([]byte(`{"job_id":"job-options","status":"pending"}`))
 	}))
 	defer server.Close()
-	quality, weight := 4, 1.5
+	quality, weight := 4.0, 1.5
 	adapter := NewLegnext("test-key")
 	adapter.BaseURL, adapter.Client = server.URL, server.Client()
 	_, err := adapter.Submit(context.Background(), CanonicalRequest{
@@ -87,6 +87,49 @@ func TestLegnextSubmitBuildsValidatedMidjourneyOptions(t *testing.T) {
 		t.Fatalf("text = %q, want %q", text, want)
 	}
 }
+
+func TestLegnextSubmitPinsEverySupportedMidjourneyVersion(t *testing.T) {
+	tests := []struct {
+		name    string
+		options MidjourneyOptions
+		want    string
+	}{
+		{name: "v8.1", options: MidjourneyOptions{Version: "8.1", Resolution: "hd", Speed: "fast", Stylize: 100}, want: "prompt --ar 1:1 --stylize 100 --chaos 0 --weird 0 --fast --v 8.1 --hd"},
+		{name: "v8", options: MidjourneyOptions{Version: "8", Resolution: "hd", Speed: "fast", Quality: float64Pointer(4), Stylize: 100}, want: "prompt --ar 1:1 --q 4 --stylize 100 --chaos 0 --weird 0 --fast --v 8 --hd"},
+		{name: "v7", options: MidjourneyOptions{Version: "7", Speed: "fast", Draft: true, Stylize: 100}, want: "prompt --ar 1:1 --stylize 100 --chaos 0 --weird 0 --fast --v 7 --draft"},
+		{name: "v6.1", options: MidjourneyOptions{Version: "6.1", Speed: "fast", Quality: float64Pointer(2), Stylize: 100}, want: "prompt --ar 1:1 --q 2 --stylize 100 --chaos 0 --weird 0 --fast --v 6.1"},
+		{name: "v6", options: MidjourneyOptions{Version: "6", Speed: "turbo", Quality: float64Pointer(0.5), Stylize: 100}, want: "prompt --ar 1:1 --q 0.5 --stylize 100 --chaos 0 --weird 0 --turbo --v 6"},
+		{name: "niji6", options: MidjourneyOptions{Version: "niji 6", Speed: "turbo", Quality: float64Pointer(1), Stylize: 100}, want: "prompt --ar 1:1 --q 1 --stylize 100 --chaos 0 --weird 0 --turbo --niji 6"},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			var text string
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				var payload struct {
+					Text string `json:"text"`
+				}
+				_ = json.NewDecoder(r.Body).Decode(&payload)
+				text = payload.Text
+				_, _ = w.Write([]byte(`{"job_id":"job-version","status":"pending"}`))
+			}))
+			defer server.Close()
+			adapter := NewLegnext("test-key")
+			adapter.BaseURL, adapter.Client = server.URL, server.Client()
+			_, err := adapter.Submit(context.Background(), CanonicalRequest{
+				Prompt: "prompt", AspectRatio: "1:1", Options: GenerationOptions{Midjourney: &test.options},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if text != test.want {
+				t.Fatalf("text = %q, want %q", text, test.want)
+			}
+		})
+	}
+}
+
+func float64Pointer(value float64) *float64 { return &value }
 
 func TestLegnextRejectsNonHTTPSReferenceURL(t *testing.T) {
 	adapter := NewLegnext("test-key")

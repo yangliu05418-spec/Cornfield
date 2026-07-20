@@ -5,17 +5,26 @@ import type { MidjourneyOptions } from '#/lib/api'
 
 export function MidjourneyOptionsControl({
   value,
+  versions,
   hasReference,
   onChange,
 }: {
   value: MidjourneyOptions
+  versions: string[]
   hasReference: boolean
   onChange: (value: MidjourneyOptions) => void
 }) {
   const update = (patch: Partial<MidjourneyOptions>) =>
     onChange({ ...value, ...patch })
-  const isV7 = value.version === '7'
-  const title = isV7 ? 'V7 · 参数' : `V8.1 · ${value.resolution?.toUpperCase()}`
+  const supportsResolution = value.version === '8' || value.version === '8.1'
+  const supportsDraft = value.version === '7'
+  const supportsTurbo = !supportsResolution
+  const qualityOptions = qualitiesFor(value.version)
+  const title = supportsResolution
+    ? `V${value.version} · ${value.resolution?.toUpperCase()}`
+    : value.version === 'niji 6'
+      ? 'Niji 6 · 参数'
+      : `V${value.version} · 参数`
 
   return (
     <Popover.Root>
@@ -38,39 +47,21 @@ export function MidjourneyOptionsControl({
               <span>服务端将校验并按固定顺序提交</span>
             </div>
             <div className="segmented-control" aria-label="Midjourney 版本">
-              {(['8.1', '7'] as const).map((version) => (
+              {versions.map((version) => (
                 <button
                   type="button"
                   key={version}
                   data-active={value.version === version}
-                  onClick={() =>
-                    update(
-                      version === '8.1'
-                        ? {
-                            version,
-                            resolution: 'sd',
-                            speed: 'fast',
-                            quality: undefined,
-                            draft: false,
-                          }
-                        : {
-                            version,
-                            resolution: undefined,
-                            speed: 'fast',
-                            quality: 1,
-                            draft: false,
-                          },
-                    )
-                  }
+                  onClick={() => update(optionsForVersion(version))}
                 >
-                  V{version}
+                  {version === 'niji 6' ? 'Niji 6' : `V${version}`}
                 </button>
               ))}
             </div>
           </div>
 
           <div className="mj-option-grid">
-            {!isV7 && (
+            {supportsResolution && (
               <OptionSelect
                 label="分辨率"
                 value={value.resolution ?? 'sd'}
@@ -83,49 +74,48 @@ export function MidjourneyOptionsControl({
                 }
               />
             )}
-            {isV7 && (
-              <>
-                <OptionSelect
-                  label="速度"
-                  value={value.speed}
-                  options={[
-                    ['fast', 'Fast'],
-                    ['turbo', 'Turbo'],
-                  ]}
-                  onChange={(speed) =>
-                    update({ speed: speed as 'fast' | 'turbo' })
+            {supportsTurbo && (
+              <OptionSelect
+                label="速度"
+                value={value.speed}
+                options={[
+                  ['fast', 'Fast'],
+                  ['turbo', 'Turbo'],
+                ]}
+                onChange={(speed) =>
+                  update({ speed: speed as 'fast' | 'turbo' })
+                }
+              />
+            )}
+            {supportsDraft && (
+              <label className="option-toggle">
+                <span>Draft</span>
+                <input
+                  type="checkbox"
+                  checked={value.draft}
+                  onChange={(event) =>
+                    update({
+                      draft: event.target.checked,
+                      quality: event.target.checked
+                        ? undefined
+                        : (value.quality ?? 1),
+                    })
                   }
                 />
-                <label className="option-toggle">
-                  <span>Draft</span>
-                  <input
-                    type="checkbox"
-                    checked={value.draft}
-                    onChange={(event) =>
-                      update({
-                        draft: event.target.checked,
-                        quality: event.target.checked
-                          ? undefined
-                          : (value.quality ?? 1),
-                      })
-                    }
-                  />
-                </label>
-                {!value.draft && (
-                  <OptionSelect
-                    label="Quality"
-                    value={String(value.quality ?? 1)}
-                    options={[
-                      ['1', '1'],
-                      ['2', '2'],
-                      ['4', '4'],
-                    ]}
-                    onChange={(quality) =>
-                      update({ quality: Number(quality) as 1 | 2 | 4 })
-                    }
-                  />
-                )}
-              </>
+              </label>
+            )}
+            {qualityOptions.length > 0 && !value.draft && (
+              <OptionSelect
+                label="Quality"
+                value={String(value.quality ?? 1)}
+                options={qualityOptions.map((quality) => [
+                  String(quality),
+                  String(quality),
+                ])}
+                onChange={(quality) =>
+                  update({ quality: Number(quality) as 0.5 | 1 | 2 | 4 })
+                }
+              />
             )}
             <RangeOption
               label="Stylize"
@@ -171,6 +161,40 @@ export function MidjourneyOptionsControl({
       </Popover.Portal>
     </Popover.Root>
   )
+}
+
+function optionsForVersion(version: string): Partial<MidjourneyOptions> {
+  const typedVersion = version as MidjourneyOptions['version']
+  if (version === '8.1')
+    return {
+      version: typedVersion,
+      resolution: 'sd',
+      speed: 'fast',
+      quality: undefined,
+      draft: false,
+    }
+  if (version === '8')
+    return {
+      version: typedVersion,
+      resolution: 'sd',
+      speed: 'fast',
+      quality: 1,
+      draft: false,
+    }
+  return {
+    version: typedVersion,
+    resolution: undefined,
+    speed: 'fast',
+    quality: 1,
+    draft: false,
+  }
+}
+
+function qualitiesFor(version: MidjourneyOptions['version']) {
+  if (version === '8.1') return []
+  if (version === '8') return [1, 4] as const
+  if (version === '7') return [1, 2, 4] as const
+  return [0.5, 1, 2] as const
 }
 
 function OptionSelect({

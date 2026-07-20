@@ -211,6 +211,7 @@ func run() error {
 
 	seed := deterministicSeed(releaseSHA)
 	allPassed := true
+	createPermits := newCreatePermitStream(ctx, 5*time.Second)
 	for _, model := range catalog.Models {
 		if !model.Enabled {
 			continue
@@ -219,7 +220,7 @@ func run() error {
 		if model.Capabilities.ImageToImage {
 			cases = append(cases, buildImageCase(model, catalog.Hash, releaseSHA, seed, referenceID))
 		}
-		if err := runModel(ctx, client, store, folderID, cases); err != nil {
+		if err := runModel(ctx, client, store, folderID, cases, createPermits); err != nil {
 			allPassed = false
 			fmt.Fprintf(os.Stderr, "model %s paused: %v\n", model.ID, err)
 		}
@@ -501,7 +502,30 @@ func buildImageCase(model modelconfig.Model, revision, _ string, seed int64, ref
 	return item
 }
 
-func runModel(ctx context.Context, client *apiClient, store *reportStore, folderID uuid.UUID, cases []canaryCase) error {
+func newCreatePermitStream(ctx context.Context, interval time.Duration) <-chan struct{} {
+	permits := make(chan struct{})
+	go func() {
+		defer close(permits)
+		timer := time.NewTimer(0)
+		defer timer.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-timer.C:
+			}
+			select {
+			case <-ctx.Done():
+				return
+			case permits <- struct{}{}:
+				timer.Reset(interval)
+			}
+		}
+	}()
+	return permits
+}
+
+func runModel(ctx context.Context, client *apiClient, store *reportStore, folderID uuid.UUID, cases []canaryCase, createPermit <-chan struct{}) error {
 	pending := make([]canaryCase, 0, len(cases))
 	for _, item := range cases {
 		if !store.passed(item.Key) {
@@ -518,27 +542,6 @@ func runModel(ctx context.Context, client *apiClient, store *reportStore, folder
 	results := make(chan caseResult)
 	workerCount := min(4, len(pending))
 	var workers sync.WaitGroup
-	rate := time.NewTicker(5 * time.Second)
-	defer rate.Stop()
-	stopRefill := make(chan struct{})
-	defer close(stopRefill)
-	burst := make(chan struct{}, 4)
-	for range 4 {
-		burst <- struct{}{}
-	}
-	go func() {
-		for {
-			select {
-			case <-stopRefill:
-				return
-			case <-rate.C:
-				select {
-				case burst <- struct{}{}:
-				default:
-				}
-			}
-		}
-	}()
 	for range workerCount {
 		workers.Add(1)
 		go func() {
@@ -547,7 +550,7 @@ func runModel(ctx context.Context, client *apiClient, store *reportStore, folder
 				select {
 				case <-modelCtx.Done():
 					return
-				case <-burst:
+				case <-createPermit:
 				}
 				result := client.runCase(modelCtx, folderID, item)
 				select {
@@ -697,6 +700,9 @@ func (c *apiClient) createGeneration(ctx context.Context, payload any, batch *ge
 			return lastErr
 		}
 		delay := time.Duration(1<<attempt) * time.Second
+		if errors.As(lastErr, &apiErr) && apiErr.Status == http.StatusTooManyRequests {
+			delay = 5 * time.Second
+		}
 		select {
 		case <-ctx.Done():
 			return ctx.Err()

@@ -39,12 +39,12 @@ function ChangePassword() {
         <div className="login-mark">
           <KeyRound size={18} />
         </div>
-        <p className="eyebrow">FIRST SIGN IN</p>
-        <h1>设置你的新密码</h1>
-        <p className="login-copy">临时密码只能使用一次。修改后请重新登录。</p>
+        <p className="eyebrow">ACCOUNT SECURITY</p>
+        <h1>修改密码</h1>
+        <p className="login-copy">更新账户密码后，请使用新密码重新登录。</p>
         <form onSubmit={submit}>
           <label>
-            临时密码
+            当前密码
             <input
               type="password"
               value={currentPassword}

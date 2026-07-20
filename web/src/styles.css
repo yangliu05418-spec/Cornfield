@@ -442,11 +442,25 @@ a {
 }
 .nav-account {
   justify-self: end;
+  font-size: 11px;
+  color: #b5b6b7;
+}
+.account-trigger {
   display: flex;
   align-items: center;
   gap: 8px;
-  font-size: 11px;
-  color: #b5b6b7;
+  min-height: 34px;
+  padding: 3px 7px 3px 4px;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  background: transparent;
+  cursor: pointer;
+}
+.account-trigger:hover,
+.account-trigger[data-state='open'] {
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.05);
+  border-color: rgba(255, 255, 255, 0.06);
 }
 .avatar {
   width: 25px;
@@ -457,6 +471,36 @@ a {
   color: var(--ink);
   background: #d9d9d9;
   font-weight: 600;
+}
+.account-menu {
+  z-index: 80;
+  width: 164px;
+  padding: 6px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: rgba(28, 30, 32, 0.98);
+  box-shadow: 0 18px 50px rgba(0, 0, 0, 0.34);
+  transform-origin: var(--radix-popover-content-transform-origin);
+  animation: generator-menu-in 170ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+.account-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  width: 100%;
+  min-height: 34px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 8px;
+  color: #c7c8c9;
+  background: transparent;
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+.account-menu-item:hover {
+  color: var(--text);
+  background: var(--surface-2);
 }
 .icon-button {
   display: grid;

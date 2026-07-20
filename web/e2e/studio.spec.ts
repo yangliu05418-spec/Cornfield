@@ -90,9 +90,18 @@ test('a restored temporary-password session cannot enter the studio', async ({
   })
   await page.goto('/app/create')
   await expect(page).toHaveURL(/\/app\/change-password$/)
-  await expect(
-    page.getByRole('heading', { name: '设置你的新密码' }),
-  ).toBeVisible()
+  await expect(page.getByRole('heading', { name: '修改密码' })).toBeVisible()
+})
+
+test('account menu exposes password change', async ({ page }) => {
+  await installStudioMocks(page)
+  await page.goto('/app/create')
+
+  await page.getByRole('button', { name: '打开账户菜单' }).click()
+  await page.getByRole('link', { name: '修改密码' }).click()
+
+  await expect(page).toHaveURL(/\/app\/change-password$/)
+  await expect(page.getByRole('heading', { name: '修改密码' })).toBeVisible()
 })
 
 test('a protected API 401 clears the studio and returns to login', async ({

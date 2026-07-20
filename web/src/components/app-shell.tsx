@@ -5,7 +5,15 @@ import {
   useNavigate,
 } from '@tanstack/react-router'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { FolderOpen, LogOut, Settings2, Sparkles } from 'lucide-react'
+import * as Popover from '@radix-ui/react-popover'
+import {
+  ChevronDown,
+  FolderOpen,
+  KeyRound,
+  LogOut,
+  Settings2,
+  Sparkles,
+} from 'lucide-react'
 import { useEffect } from 'react'
 import type { ReactNode } from 'react'
 
@@ -82,21 +90,43 @@ export function AppShell({ children }: { children: ReactNode }) {
           )}
         </nav>
         <div className="nav-account">
-          <span className="avatar">
-            {user.display_name.slice(0, 1).toUpperCase()}
-          </span>
-          <span className="account-name">{user.display_name}</span>
-          <button
-            className="icon-button"
-            aria-label="退出登录"
-            onClick={async () => {
-              await api('/api/v1/auth/logout', { method: 'POST' })
-              queryClient.clear()
-              await navigate({ to: '/app/login' })
-            }}
-          >
-            <LogOut size={14} />
-          </button>
+          <Popover.Root>
+            <Popover.Trigger asChild>
+              <button className="account-trigger" aria-label="打开账户菜单">
+                <span className="avatar">
+                  {user.display_name.slice(0, 1).toUpperCase()}
+                </span>
+                <span className="account-name">{user.display_name}</span>
+                <ChevronDown size={13} aria-hidden="true" />
+              </button>
+            </Popover.Trigger>
+            <Popover.Portal>
+              <Popover.Content
+                className="account-menu"
+                align="end"
+                sideOffset={8}
+                collisionPadding={8}
+              >
+                <Popover.Close asChild>
+                  <Link to="/app/change-password" className="account-menu-item">
+                    <KeyRound size={14} />
+                    修改密码
+                  </Link>
+                </Popover.Close>
+                <button
+                  className="account-menu-item"
+                  onClick={async () => {
+                    await api('/api/v1/auth/logout', { method: 'POST' })
+                    queryClient.clear()
+                    await navigate({ to: '/app/login' })
+                  }}
+                >
+                  <LogOut size={14} />
+                  退出登录
+                </button>
+              </Popover.Content>
+            </Popover.Portal>
+          </Popover.Root>
         </div>
       </header>
       {children}

@@ -168,7 +168,7 @@ func TestCatalogHashIncludesOperationalPolicy(t *testing.T) {
 	if err := os.WriteFile(firstPath, source, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	changed := strings.Replace(string(source), "max_concurrency: 4", "max_concurrency: 3", 1)
+	changed := strings.ReplaceAll(string(source), "max_concurrency: 4", "max_concurrency: 3")
 	if err := os.WriteFile(secondPath, []byte(changed), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -182,6 +182,30 @@ func TestCatalogHashIncludesOperationalPolicy(t *testing.T) {
 	}
 	if first.Hash == second.Hash {
 		t.Fatal("capability hash did not change with operational policy")
+	}
+}
+
+func TestProviderConcurrencyUsesOneCatalogValue(t *testing.T) {
+	catalog, err := Load(filepath.Join("..", "..", "..", "config", "models.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	limits, err := catalog.ProviderConcurrency()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for provider, want := range map[string]int{"legnext": 2, "openrouter": 4, "bfl": 4} {
+		if limits[provider] != want {
+			t.Fatalf("provider %s limit = %d, want %d", provider, limits[provider], want)
+		}
+	}
+
+	first := validOpenRouterModel()
+	second := validOpenRouterModel()
+	second.ID = "openrouter-test-2"
+	second.Policy.MaxConcurrency = first.Policy.MaxConcurrency + 1
+	if err := (Catalog{Revision: 1, Models: []Model{first, second}}).Validate(); err == nil || !strings.Contains(err.Error(), "inconsistent max_concurrency") {
+		t.Fatalf("inconsistent provider limit error = %v", err)
 	}
 }
 

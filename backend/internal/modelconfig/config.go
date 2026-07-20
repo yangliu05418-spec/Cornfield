@@ -283,7 +283,28 @@ func (c Catalog) Validate() error {
 			return err
 		}
 	}
+	if _, err := c.ProviderConcurrency(); err != nil {
+		return err
+	}
 	return nil
+}
+
+// ProviderConcurrency returns the provider-wide limits declared by enabled
+// models. A provider has one upstream capacity, so every enabled model routed
+// through it must agree on the same value.
+func (c Catalog) ProviderConcurrency() (map[string]int, error) {
+	limits := make(map[string]int)
+	for _, model := range c.Models {
+		if !model.Enabled {
+			continue
+		}
+		limit := model.Policy.MaxConcurrency
+		if existing, ok := limits[model.Provider]; ok && existing != limit {
+			return nil, fmt.Errorf("provider %s has inconsistent max_concurrency values %d and %d", model.Provider, existing, limit)
+		}
+		limits[model.Provider] = limit
+	}
+	return limits, nil
 }
 
 func validateCapabilities(m Model) error {

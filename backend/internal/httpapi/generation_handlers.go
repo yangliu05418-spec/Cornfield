@@ -33,7 +33,7 @@ type generationRequest struct {
 func normalizeGenerationOptions(modelID, providerID string, versions, qualities []string, inputCount int, input *generationRequest) error {
 	if providerID != "legnext" {
 		if input.Options.Midjourney != nil {
-			return errors.New("Midjourney options are not supported by this model")
+			return errors.New("midjourney options are not supported by this model")
 		}
 		if len(qualities) == 0 {
 			if input.Options.Image != nil {
@@ -64,10 +64,10 @@ func normalizeGenerationOptions(modelID, providerID string, versions, qualities 
 		input.Options.Midjourney = options
 	}
 	if !slices.Contains(versions, options.Version) || options.Stylize < 0 || options.Stylize > 1000 || options.Chaos < 0 || options.Chaos > 100 || options.Weird < 0 || options.Weird > 3000 {
-		return errors.New("Midjourney options are outside the supported range")
+		return errors.New("midjourney options are outside the supported range")
 	}
 	if options.ImageWeight != nil && (inputCount == 0 || *options.ImageWeight < 0 || *options.ImageWeight > 3) {
-		return errors.New("Midjourney image weight requires a reference image and must be between 0 and 3")
+		return errors.New("midjourney image weight requires a reference image and must be between 0 and 3")
 	}
 	qualityAllowed := func(values ...float64) bool {
 		if options.Quality == nil {
@@ -84,7 +84,7 @@ func normalizeGenerationOptions(modelID, providerID string, versions, qualities 
 			options.Speed = "fast"
 		}
 		if (options.Resolution != "sd" && options.Resolution != "hd") || options.Speed != "fast" || options.Quality != nil || options.Draft {
-			return errors.New("Midjourney V8.1 option combination is unsupported")
+			return errors.New("midjourney V8.1 option combination is unsupported")
 		}
 		input.Resolution = strings.ToUpper(options.Resolution)
 	case "8":
@@ -95,14 +95,14 @@ func normalizeGenerationOptions(modelID, providerID string, versions, qualities 
 			options.Speed = "fast"
 		}
 		if (options.Resolution != "sd" && options.Resolution != "hd") || options.Speed != "fast" || options.Draft {
-			return errors.New("Midjourney V8 option combination is unsupported")
+			return errors.New("midjourney V8 option combination is unsupported")
 		}
 		if options.Quality == nil {
 			quality := 1.0
 			options.Quality = &quality
 		}
 		if !qualityAllowed(1, 4) {
-			return errors.New("Midjourney V8 quality is unsupported")
+			return errors.New("midjourney V8 quality is unsupported")
 		}
 		input.Resolution = strings.ToUpper(options.Resolution)
 	case "7":
@@ -110,7 +110,7 @@ func normalizeGenerationOptions(modelID, providerID string, versions, qualities 
 			options.Speed = "fast"
 		}
 		if options.Speed != "fast" && options.Speed != "turbo" {
-			return errors.New("Midjourney V7 speed is unsupported")
+			return errors.New("midjourney V7 speed is unsupported")
 		}
 		if options.Draft {
 			options.Quality = nil
@@ -119,7 +119,7 @@ func normalizeGenerationOptions(modelID, providerID string, versions, qualities 
 			options.Quality = &quality
 		}
 		if options.Quality != nil && !qualityAllowed(1, 2, 4) {
-			return errors.New("Midjourney V7 quality is unsupported")
+			return errors.New("midjourney V7 quality is unsupported")
 		}
 		options.Resolution = ""
 		input.Resolution = "auto"
@@ -128,25 +128,25 @@ func normalizeGenerationOptions(modelID, providerID string, versions, qualities 
 			options.Speed = "fast"
 		}
 		if options.Speed != "fast" && options.Speed != "turbo" {
-			return errors.New("Midjourney legacy speed is unsupported")
+			return errors.New("midjourney legacy speed is unsupported")
 		}
 		if options.Draft {
-			return errors.New("Midjourney legacy versions do not support Draft mode")
+			return errors.New("midjourney legacy versions do not support Draft mode")
 		}
 		if options.Quality == nil {
 			quality := 1.0
 			options.Quality = &quality
 		}
 		if !qualityAllowed(0.5, 1, 2) {
-			return errors.New("Midjourney legacy quality is unsupported")
+			return errors.New("midjourney legacy quality is unsupported")
 		}
 		options.Resolution = ""
 		input.Resolution = "auto"
 	default:
-		return errors.New("Midjourney version is unsupported")
+		return errors.New("midjourney version is unsupported")
 	}
 	if input.DrawCount != 1 || modelID != "legnext-midjourney" {
-		return errors.New("Midjourney creates exactly one four-image draw")
+		return errors.New("midjourney creates exactly one four-image draw")
 	}
 	return nil
 }

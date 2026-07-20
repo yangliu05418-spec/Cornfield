@@ -3,7 +3,10 @@ package worker
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
+	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/google/uuid"
@@ -164,8 +167,13 @@ func (p *DeletionProcessor) deleteUser(ctx context.Context, userID uuid.UUID) er
 	if active > 0 {
 		return errUserDeletionWaiting
 	}
-	rows, err := p.DB.Query(ctx, `UPDATE assets SET purge_pending=true WHERE owner_user_id=$1 AND purged_at IS NULL
-		RETURNING id`, userID)
+	if err := p.deleteUserUploads(ctx, userID); err != nil {
+		return err
+	}
+	if _, err := p.DB.Exec(ctx, `UPDATE assets SET purge_pending=true WHERE owner_user_id=$1 AND purged_at IS NULL`, userID); err != nil {
+		return err
+	}
+	rows, err := p.DB.Query(ctx, `SELECT id FROM assets WHERE owner_user_id=$1 ORDER BY id`, userID)
 	if err != nil {
 		return err
 	}
@@ -178,6 +186,10 @@ func (p *DeletionProcessor) deleteUser(ctx context.Context, userID uuid.UUID) er
 		}
 		assetIDs = append(assetIDs, id)
 	}
+	if err = rows.Err(); err != nil {
+		rows.Close()
+		return err
+	}
 	rows.Close()
 	for _, assetID := range assetIDs {
 		if err = p.deleteAsset(ctx, assetID); err != nil {
@@ -189,6 +201,30 @@ func (p *DeletionProcessor) deleteUser(ctx context.Context, userID uuid.UUID) er
 		return err
 	}
 	defer tx.Rollback(ctx)
+	var status string
+	if err = tx.QueryRow(ctx, `SELECT status FROM users WHERE id=$1 FOR UPDATE`, userID).Scan(&status); err != nil {
+		return err
+	}
+	if status == "deleted" {
+		return tx.Commit(ctx)
+	}
+	if status != "deleting" {
+		return fmt.Errorf("user deletion requires deleting status, got %s", status)
+	}
+	if err = tx.QueryRow(ctx, `SELECT count(*) FROM generation_jobs WHERE owner_user_id=$1
+		AND (status NOT IN ('succeeded','failed','cancelled') OR upstream_active_until>now())`, userID).Scan(&active); err != nil {
+		return err
+	}
+	if active > 0 {
+		return errUserDeletionWaiting
+	}
+	var unpurged bool
+	if err = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM assets WHERE owner_user_id=$1 AND purged_at IS NULL)`, userID).Scan(&unpurged); err != nil {
+		return err
+	}
+	if unpurged {
+		return errors.New("user assets are not fully purged")
+	}
 	for _, statement := range []string{
 		`DELETE FROM upload_sessions WHERE owner_user_id=$1`,
 		`DELETE FROM generation_batches WHERE owner_user_id=$1`,
@@ -205,12 +241,69 @@ func (p *DeletionProcessor) deleteUser(ctx context.Context, userID uuid.UUID) er
 		}
 	}
 	deletedUsername := "deleted-" + userID.String()
-	_, err = tx.Exec(ctx, `UPDATE users SET username=$2,display_name='已删除用户',password_hash='deleted',status='deleted',
+	command, err := tx.Exec(ctx, `UPDATE users SET username=$2,display_name='已删除用户',password_hash='deleted',status='deleted',
 		must_change_password=false,temporary_password_expires_at=NULL,updated_at=now() WHERE id=$1 AND status='deleting'`, userID, deletedUsername)
 	if err != nil {
 		return err
 	}
+	if command.RowsAffected() != 1 {
+		return errors.New("user deletion lost its status lease")
+	}
 	return tx.Commit(ctx)
+}
+
+func (p *DeletionProcessor) deleteUserUploads(ctx context.Context, userID uuid.UUID) error {
+	if _, err := p.DB.Exec(ctx, `UPDATE upload_sessions SET status='failed',error_code='OWNER_UNAVAILABLE',updated_at=now()
+		WHERE owner_user_id=$1 AND status IN ('created','uploading','validating')`, userID); err != nil {
+		return err
+	}
+	rows, err := p.DB.Query(ctx, `SELECT id,COALESCE(quarantine_key,'') FROM upload_sessions WHERE owner_user_id=$1`, userID)
+	if err != nil {
+		return err
+	}
+	type uploadFile struct {
+		id            uuid.UUID
+		quarantineKey string
+	}
+	files := make([]uploadFile, 0)
+	for rows.Next() {
+		var item uploadFile
+		if err = rows.Scan(&item.id, &item.quarantineKey); err != nil {
+			rows.Close()
+			return err
+		}
+		files = append(files, item)
+	}
+	if err = rows.Err(); err != nil {
+		rows.Close()
+		return err
+	}
+	rows.Close()
+
+	lease := p.Blobs.AcquireContentLease()
+	defer lease.Release()
+	for _, item := range files {
+		if item.quarantineKey != "" {
+			if filepath.Base(item.quarantineKey) != item.quarantineKey {
+				return errors.New("upload quarantine key is unsafe")
+			}
+			if err = removeIfPresent(filepath.Join(p.AssetRoot, "uploads", "quarantine", item.quarantineKey)); err != nil {
+				return err
+			}
+		}
+		if err = removeIfPresent(filepath.Join(p.AssetRoot, "uploads", "tmp", item.id.String()+"-validation.webp")); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func removeIfPresent(filename string) error {
+	err := os.Remove(filename)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	return err
 }
 
 func boundedDeletionError(message string) string {

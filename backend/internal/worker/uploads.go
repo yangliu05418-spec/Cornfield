@@ -42,8 +42,10 @@ func (v *UploadValidator) Run(ctx context.Context) {
 func (v *UploadValidator) processOne(ctx context.Context) bool {
 	var id, ownerID uuid.UUID
 	var filename, declaredMedia, quarantineKey string
-	err := v.DB.QueryRow(ctx, `SELECT id,owner_user_id,original_filename,declared_media_type,quarantine_key
-		FROM upload_sessions WHERE status='validating' AND expires_at>now() ORDER BY created_at LIMIT 1`).Scan(&id, &ownerID, &filename, &declaredMedia, &quarantineKey)
+	err := v.DB.QueryRow(ctx, `SELECT s.id,s.owner_user_id,s.original_filename,s.declared_media_type,s.quarantine_key
+		FROM upload_sessions s JOIN users u ON u.id=s.owner_user_id
+		WHERE s.status='validating' AND s.expires_at>now() AND u.status='active'
+		ORDER BY s.created_at LIMIT 1`).Scan(&id, &ownerID, &filename, &declaredMedia, &quarantineKey)
 	if err != nil {
 		if !errors.Is(err, pgx.ErrNoRows) {
 			v.Log.Warn("upload validation queue read failed", "error", err)
@@ -89,6 +91,21 @@ func (v *UploadValidator) processOne(ctx context.Context) bool {
 	}
 	cancelDecode()
 	_ = os.Remove(validationOutput)
+	tx, err := v.DB.Begin(ctx)
+	if err != nil {
+		return false
+	}
+	defer tx.Rollback(ctx)
+	var ownerStatus string
+	if err = tx.QueryRow(ctx, `SELECT status FROM users WHERE id=$1 FOR UPDATE`, ownerID).Scan(&ownerStatus); err != nil {
+		return false
+	}
+	if ownerStatus != "active" {
+		_ = tx.Rollback(ctx)
+		v.fail(ctx, id, "OWNER_UNAVAILABLE")
+		_ = os.Remove(path)
+		return true
+	}
 	contentLease := v.Blobs.AcquireContentLease()
 	leaseReleased := false
 	defer func() {
@@ -101,11 +118,6 @@ func (v *UploadValidator) processOne(ctx context.Context) bool {
 		v.Log.Warn("upload immutable commit failed", "upload_id", id, "error", err)
 		return false
 	}
-	tx, err := v.DB.Begin(ctx)
-	if err != nil {
-		return false
-	}
-	defer tx.Rollback(ctx)
 	var assetID uuid.UUID
 	err = tx.QueryRow(ctx, `INSERT INTO assets(owner_user_id,kind,storage_key,sha256,media_type,original_filename,width,height,byte_size)
 		VALUES($1,'upload',$2,$3,$4,$5,$6,$7,$8) RETURNING id`, ownerID, key, digest, media, filename, width, height, size).Scan(&assetID)
@@ -119,7 +131,23 @@ func (v *UploadValidator) processOne(ctx context.Context) bool {
 	}
 	if err != nil {
 		v.Log.Warn("upload database update failed", "upload_id", id, "error", err)
-		return false
+		_ = tx.Rollback(ctx)
+		maintenance := &Maintenance{DB: v.DB, Blobs: v.Blobs, AssetRoot: v.AssetRoot, Log: v.Log}
+		referenced, referenceErr := maintenance.storageDigestReferenced(ctx, digest)
+		if referenceErr != nil {
+			v.Log.Warn("upload rollback reference check failed", "upload_id", id, "error", referenceErr)
+			return false
+		}
+		if !referenced {
+			if _, deleteErr := deleteCanonicalContent(v.AssetRoot, key, digest, time.Now()); deleteErr != nil {
+				v.Log.Warn("upload rollback content cleanup failed", "upload_id", id, "error", deleteErr)
+				return false
+			}
+		}
+		v.fail(ctx, id, "UPLOAD_COMMIT_FAILED")
+		contentLease.Release()
+		leaseReleased = true
+		return true
 	}
 	if err = tx.Commit(ctx); err != nil {
 		v.Log.Warn("upload database commit failed", "upload_id", id, "error", err)

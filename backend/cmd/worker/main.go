@@ -41,6 +41,15 @@ func main() {
 		os.Exit(1)
 	}
 	logger.Info("worker model catalog validated", "model_revision", catalog.Hash)
+	providerLimits, err := catalog.ProviderConcurrency()
+	if err != nil {
+		logger.Error("provider concurrency invalid", "error", err)
+		os.Exit(1)
+	}
+	providerSem := make(map[string]chan struct{}, len(providerLimits))
+	for providerID, limit := range providerLimits {
+		providerSem[providerID] = make(chan struct{}, limit)
+	}
 	store, err := blob.NewLocal(cfg.AssetRoot)
 	if err != nil {
 		logger.Error("storage unavailable", "error", err)
@@ -74,7 +83,7 @@ func main() {
 	downloadClient := safehttp.NewDownloadClient(90 * time.Second)
 	generateWorker := &studioWorker.GenerateWorker{
 		DB: db, Config: cfg, Blobs: store, Adapters: adapters,
-		ProviderSem: map[string]chan struct{}{"legnext": make(chan struct{}, 2), "openrouter": make(chan struct{}, 4), "bfl": make(chan struct{}, 4)},
+		ProviderSem: providerSem,
 		IngestSem:   make(chan struct{}, 4), ThumbSem: make(chan struct{}, 2), HTTPClient: downloadClient, Log: logger, Breaker: studioWorker.NewBreaker(),
 	}
 	workers := river.NewWorkers()

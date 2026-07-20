@@ -100,10 +100,57 @@ test "${ownership_hardening}" = "t"
 runtime_privileges="$(docker compose exec -T postgres psql -U studio_bootstrap -d studio -Atc \
   "SELECT has_schema_privilege('studio_api','public','USAGE') AND NOT has_schema_privilege('studio_api','public','CREATE') AND NOT has_table_privilege('studio_api','river_job','SELECT') AND has_column_privilege('studio_api','assets','lock_guard','UPDATE') AND NOT has_column_privilege('studio_api','assets','purge_pending','UPDATE') AND has_column_privilege('studio_api','providers','state','UPDATE') AND NOT has_column_privilege('studio_api','providers','enabled','UPDATE') AND has_column_privilege('studio_worker','user_sessions','expires_at','SELECT') AND NOT has_column_privilege('studio_worker','user_sessions','token_hash','SELECT') AND has_table_privilege('studio_worker','river_job','SELECT') AND has_table_privilege('studio_worker','river_job','INSERT') AND has_table_privilege('studio_worker','river_job','UPDATE') AND has_table_privilege('studio_worker','river_job','DELETE')")"
 test "${runtime_privileges}" = "t"
+bfl_display_name="$(docker compose exec -T postgres psql -U studio_bootstrap -d studio -Atc \
+  "SELECT display_name FROM providers WHERE id='bfl'")"
+test "${bfl_display_name}" = "Black Forest Labs"
 
 admin_password='ci-smoke-password-123456'
 printf '%s\n' "${admin_password}" | docker compose run --rm -T --no-deps model-apply adminctl \
   --username ci-admin --display-name 'CI Admin'
+
+# Reproduce the production deletion failure that originally left bytes behind:
+# the asset is already tombstoned, but its canonical directory still exists.
+delete_content='ci-delete-me'
+delete_digest="$(printf '%s' "${delete_content}" | sha256sum | cut -d' ' -f1)"
+delete_key="${delete_digest:0:2}/${delete_digest:2:2}/${delete_digest}/original.png"
+delete_directory="${DATA_ROOT}/assets/${delete_digest:0:2}/${delete_digest:2:2}/${delete_digest}"
+sudo install -d -o 65532 -g 65532 -m 0750 "${delete_directory}"
+printf '%s' "${delete_content}" | sudo tee "${delete_directory}/original.png" >/dev/null
+printf '%s' 'thumbnail' | sudo tee "${delete_directory}/thumb-320.webp" >/dev/null
+sudo chown -R 65532:65532 "${delete_directory}"
+sudo touch -d '10 minutes ago' "${delete_directory}" "${delete_directory}"/*
+delete_quarantine_key='ci-delete-upload.png'
+printf '%s' "${delete_content}" | sudo tee "${DATA_ROOT}/uploads/quarantine/${delete_quarantine_key}" >/dev/null
+sudo chown 65532:65532 "${DATA_ROOT}/uploads/quarantine/${delete_quarantine_key}"
+deletion_ids="$(docker compose exec -T postgres psql -U studio_bootstrap -d studio -At -F ' ' -v ON_ERROR_STOP=1 -c \
+  "WITH target AS (
+     INSERT INTO users(username,display_name,password_hash,role,status,must_change_password)
+     VALUES('ci-delete-user','Delete User','unused','member','deleting',false) RETURNING id
+   ), asset AS (
+     INSERT INTO assets(owner_user_id,kind,storage_key,sha256,media_type,width,height,byte_size,purged_at)
+     SELECT id,'upload','${delete_key}','${delete_digest}','image/png',1,1,${#delete_content},now() FROM target
+   ), upload AS (
+     INSERT INTO upload_sessions(owner_user_id,status,original_filename,declared_media_type,declared_size,quarantine_key)
+     SELECT id,'validating','delete.png','image/png',${#delete_content},'${delete_quarantine_key}' FROM target
+   ), request AS (
+     INSERT INTO deletion_requests(kind,owner_user_id,target_user_id,requested_by)
+     SELECT 'user',target.id,target.id,admin.id FROM target CROSS JOIN users admin WHERE admin.username='ci-admin'
+     RETURNING id
+   ) SELECT target.id,request.id FROM target CROSS JOIN request")"
+read -r deletion_user_id deletion_request_id <<< "${deletion_ids}"
+for _ in $(seq 1 30); do
+  deletion_status="$(docker compose exec -T postgres psql -U studio_bootstrap -d studio -Atc \
+    "SELECT status FROM deletion_requests WHERE id='${deletion_request_id}'::uuid")"
+  [[ "${deletion_status}" == "succeeded" ]] && break
+  sleep 1
+done
+test "${deletion_status}" = "succeeded"
+test "$(docker compose exec -T postgres psql -U studio_bootstrap -d studio -Atc \
+  "SELECT status FROM users WHERE id='${deletion_user_id}'::uuid")" = "deleted"
+test "$(docker compose exec -T postgres psql -U studio_bootstrap -d studio -Atc \
+  "SELECT count(*) FROM assets WHERE owner_user_id='${deletion_user_id}'::uuid")" = "0"
+test ! -e "${delete_directory}"
+test ! -e "${DATA_ROOT}/uploads/quarantine/${delete_quarantine_key}"
 
 tmp_dir="$(mktemp -d /tmp/cornfield-ci-http.XXXXXX)"
 cookie_jar="${tmp_dir}/cookies"

@@ -520,22 +520,21 @@ func (w *GenerateWorker) claimSubmissionSlot(ctx context.Context, item generatio
 	if retryAfter, open := persistedBreakerRetryAfter(time.Now(), breakerOpenUntil); open {
 		return submissionClaim{RetryAfter: retryAfter, Reason: "provider_breaker_open"}, nil
 	}
-	providerLimit := model.Policy.MaxConcurrency
-	modelLimit := model.Policy.MaxConcurrency
-	if modelLimit < 1 {
-		modelLimit = 1
+	providerSem := w.ProviderSem[item.ProviderID]
+	if providerSem == nil || cap(providerSem) < 1 {
+		return submissionClaim{}, fmt.Errorf("provider %s has no concurrency limit", item.ProviderID)
 	}
-	var providerActive, modelActive int
+	providerLimit := cap(providerSem)
+	var providerActive int
 	if err = tx.QueryRow(ctx, `SELECT
-		count(*) FILTER (WHERE v.config->>'provider'=$1)::int,
-		count(*) FILTER (WHERE b.model_id=$2)::int
+		count(*) FILTER (WHERE v.config->>'provider'=$1)::int
 		FROM generation_jobs j
 		JOIN generation_batches b ON b.id=j.batch_id
 		JOIN model_capability_versions v ON v.model_id=b.model_id AND v.revision=b.capability_revision
-		WHERE j.status IN ('submitting','provider_pending','cancelling') OR j.upstream_active_until>now()`, item.ProviderID, item.ModelID).Scan(&providerActive, &modelActive); err != nil {
+		WHERE j.status IN ('submitting','provider_pending','cancelling') OR j.upstream_active_until>now()`, item.ProviderID).Scan(&providerActive); err != nil {
 		return submissionClaim{}, err
 	}
-	if providerActive >= providerLimit || modelActive >= modelLimit {
+	if providerActive >= providerLimit {
 		return submissionClaim{RetryAfter: time.Second, Reason: "quota"}, nil
 	}
 	seconds := model.Policy.GenerationTimeoutSeconds

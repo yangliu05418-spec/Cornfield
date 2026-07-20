@@ -6,24 +6,23 @@ import {
   useQueryClient,
 } from '@tanstack/react-query'
 import type { InfiniteData, QueryClient } from '@tanstack/react-query'
-import {
-  ChevronDown,
-  Layers3,
-  Minus,
-  Plus,
-  Sparkles,
-  X,
-  ZoomIn,
-  ZoomOut,
-} from 'lucide-react'
+import { Minus, Plus, Sparkles, X, ZoomIn, ZoomOut } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { CSSProperties, FormEvent } from 'react'
 
 import { AppShell } from '#/components/app-shell'
+import { GeneratorSelect } from '#/components/generator-select'
 import { buildWallItems, JustifiedWall } from '#/components/justified-wall'
+import { MidjourneyOptionsControl } from '#/components/midjourney-options'
 import type { JustifiedWallHandle } from '#/components/justified-wall'
 import { api, getMe } from '#/lib/api'
-import type { Asset, AssetPage, GenerationBatch, Model } from '#/lib/api'
+import type {
+  Asset,
+  AssetPage,
+  GenerationBatch,
+  MidjourneyOptions,
+  Model,
+} from '#/lib/api'
 
 export const Route = createFileRoute('/app/create')({ component: CreatePage })
 
@@ -56,6 +55,7 @@ type PendingSubmission = {
     resolution: string
     draw_count: number
     input_asset_ids: string[]
+    options: { midjourney?: MidjourneyOptions }
   }
 }
 
@@ -159,6 +159,17 @@ function CreatePage() {
   const [ratio, setRatio] = useState('1:1')
   const [resolution, setResolution] = useState('1K')
   const [draws, setDraws] = useState(1)
+  const [midjourney, setMidjourney] = useState<MidjourneyOptions>({
+    version: '8.1',
+    resolution: 'sd',
+    speed: 'fast',
+    draft: false,
+    stylize: 100,
+    chaos: 0,
+    weird: 0,
+    raw: false,
+    tile: false,
+  })
   const [density, setDensity] = useState(2)
   const [references, setReferences] = useState<Asset[]>([])
   const [optimisticBatches, setOptimisticBatches] = useState<GenerationBatch[]>(
@@ -169,6 +180,7 @@ function CreatePage() {
     models.data?.models.find((model) => model.id === modelID) ??
     models.data?.models[0]
   const maxDraws = activeModel?.capabilities.draw_count.max ?? 4
+  const isMidjourney = activeModel?.id === 'legnext-midjourney'
   const refreshAssetHead = useCallback(() => {
     assetRefreshVersion.current++
     if (assetRefreshInFlight.current) return assetRefreshInFlight.current
@@ -240,9 +252,10 @@ function CreatePage() {
     if (!activeModel) return
     if (!modelID) setModelID(activeModel.id)
     if (!activeModel.capabilities.aspect_ratios.includes(ratio))
-      setRatio(activeModel.capabilities.aspect_ratios[0])
+      setRatio(activeModel.capabilities.aspect_ratios[0] ?? 'auto')
     if (!activeModel.capabilities.resolutions.includes(resolution))
-      setResolution(activeModel.capabilities.resolutions[0])
+      setResolution(activeModel.capabilities.resolutions[0] ?? 'auto')
+    if (activeModel.id === 'legnext-midjourney') setDraws(1)
     setDraws((current) =>
       Math.min(
         activeModel.capabilities.draw_count.max,
@@ -432,12 +445,17 @@ function CreatePage() {
     const optimisticID = `optimistic:${idempotencyKey}`
     const createdAt = new Date().toISOString()
     const expectedOutputs = draws * activeModel.outputs_per_draw
+    const submittedResolution = isMidjourney
+      ? midjourney.version === '8.1'
+        ? (midjourney.resolution ?? 'sd').toUpperCase()
+        : 'auto'
+      : resolution
     const batch: GenerationBatch = {
       id: optimisticID,
       model_id: activeModel.id,
       prompt: prompt.trim(),
       aspect_ratio: ratio,
-      resolution,
+      resolution: submittedResolution,
       draw_count: draws,
       expected_outputs: expectedOutputs,
       completed_outputs: 0,
@@ -449,6 +467,7 @@ function CreatePage() {
         status: 'creating',
         expected_outputs: activeModel.outputs_per_draw,
       })),
+      options: isMidjourney ? { midjourney } : {},
     }
     create.mutate({
       idempotencyKey,
@@ -458,11 +477,26 @@ function CreatePage() {
         capability_revision: models.data.revision,
         prompt: prompt.trim(),
         aspect_ratio: ratio,
-        resolution,
+        resolution: submittedResolution,
         draw_count: draws,
         input_asset_ids: references.map((asset) => asset.id),
+        options: isMidjourney ? { midjourney } : {},
       },
     })
+  }
+  async function deleteAsset(asset: Asset) {
+    if (!window.confirm('永久删除这张图片？此操作无法撤销。')) return
+    try {
+      await api(`/api/v1/assets/${asset.id}`, { method: 'DELETE' })
+      setReferences((current) => current.filter((item) => item.id !== asset.id))
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ['assets'] }),
+        queryClient.invalidateQueries({ queryKey: ['generations'] }),
+      ])
+      setNotice('图片已进入永久删除流程')
+    } catch (reason) {
+      setNotice(reason instanceof Error ? reason.message : '删除失败')
+    }
   }
   async function cancel(batchID: string, jobID: string) {
     try {
@@ -612,6 +646,7 @@ function CreatePage() {
           targetHeight={rowHeights[density]}
           onReference={addReference}
           onCancel={cancel}
+          onDelete={(asset) => void deleteAsset(asset)}
           onNotice={setNotice}
           hasMore={assets.hasNextPage}
           isLoadingMore={assets.isFetchingNextPage}
@@ -674,72 +709,77 @@ function CreatePage() {
                 aria-label="生成提示词"
                 value={prompt}
                 onChange={(event) => setPrompt(event.target.value)}
-                placeholder="Describe the scene you imagine"
+                placeholder="描述你想象中的画面"
                 rows={1}
               />
             </div>
             <div className="generator-controls">
-              <label className="select-control">
-                <Sparkles size={14} />
-                <select
-                  aria-label="选择模型"
-                  value={activeModel?.id ?? ''}
-                  onChange={(event) => setModelID(event.target.value)}
-                >
-                  {models.data?.models.map((model) => (
-                    <option key={model.id} value={model.id}>
-                      {model.display_name}
-                    </option>
-                  ))}
-                </select>
-                <ChevronDown size={13} />
-              </label>
-              <label className="select-control">
-                <span className="ratio-icon" />
-                <select
-                  aria-label="选择画面比例"
+              <GeneratorSelect
+                label="选择模型"
+                value={activeModel?.id ?? ''}
+                items={(models.data?.models ?? []).map((model) => ({
+                  value: model.id,
+                  label: model.display_name,
+                }))}
+                icon={<Sparkles size={14} />}
+                onChange={setModelID}
+              />
+              {!!activeModel?.capabilities.aspect_ratios.length && (
+                <GeneratorSelect
+                  label="选择画面比例"
                   value={ratio}
-                  onChange={(event) => setRatio(event.target.value)}
-                >
-                  {activeModel?.capabilities.aspect_ratios.map((item) => (
-                    <option key={item}>{item}</option>
-                  ))}
-                </select>
-                <ChevronDown size={13} />
-              </label>
-              <label className="select-control">
-                <Layers3 size={14} />
-                <select
-                  aria-label="选择分辨率"
-                  value={resolution}
-                  onChange={(event) => setResolution(event.target.value)}
-                >
-                  {activeModel?.capabilities.resolutions.map((item) => (
-                    <option key={item}>{item}</option>
-                  ))}
-                </select>
-                <ChevronDown size={13} />
-              </label>
+                  items={activeModel.capabilities.aspect_ratios.map((item) => ({
+                    value: item,
+                    label: item,
+                  }))}
+                  icon={<span className="ratio-icon" />}
+                  onChange={setRatio}
+                />
+              )}
+              {isMidjourney ? (
+                <MidjourneyOptionsControl
+                  value={midjourney}
+                  hasReference={references.length > 0}
+                  onChange={setMidjourney}
+                />
+              ) : (
+                !!activeModel?.capabilities.resolutions.length && (
+                  <GeneratorSelect
+                    label="选择分辨率"
+                    value={resolution}
+                    items={activeModel.capabilities.resolutions.map((item) => ({
+                      value: item,
+                      label: item,
+                    }))}
+                    icon={<span className="resolution-icon" />}
+                    onChange={setResolution}
+                  />
+                )
+              )}
               <div className="draw-control" aria-label="抽卡次数">
-                <button
-                  type="button"
-                  disabled={draws <= 1}
-                  onClick={() => setDraws(Math.max(1, draws - 1))}
-                  aria-label="减少抽卡"
-                >
-                  <Minus size={13} />
-                </button>
-                <span>
-                  {draws}/{maxDraws}
-                </span>
-                <button
-                  type="button"
-                  disabled={draws >= maxDraws}
-                  onClick={() => setDraws(Math.min(maxDraws, draws + 1))}
-                  aria-label="增加抽卡"
-                >
-                  <Plus size={13} />
-                </button>
+                {isMidjourney ? (
+                  <span>4 张/次</span>
+                ) : (
+                  <>
+                    <button
+                      type="button"
+                      disabled={draws <= 1}
+                      onClick={() => setDraws(Math.max(1, draws - 1))}
+                      aria-label="减少抽卡"
+                    >
+                      <Minus size={13} />
+                    </button>
+                    <span>{draws} 次</span>
+                    <button
+                      type="button"
+                      disabled={draws >= maxDraws}
+                      onClick={() => setDraws(Math.min(maxDraws, draws + 1))}
+                      aria-label="增加抽卡"
+                    >
+                      <Plus size={13} />
+                    </button>
+                  </>
+                )}
               </div>
             </div>
           </div>

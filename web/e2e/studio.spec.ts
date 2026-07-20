@@ -248,6 +248,79 @@ test('polling restores a completed asset when no SSE job event arrives', async (
   })
 })
 
+test('Midjourney stays one draw with four outputs and versioned parameters', async ({
+  page,
+}) => {
+  await installStudioMocks(page, {
+    models: [
+      {
+        id: 'legnext-midjourney',
+        display_name: 'Midjourney',
+        provider: 'legnext',
+        outputs_per_draw: 4,
+        capabilities: {
+          text_to_image: true,
+          image_to_image: true,
+          aspect_ratios: ['1:1', '16:9'],
+          resolutions: ['SD', 'HD'],
+          midjourney_versions: ['8.1', '7'],
+          max_reference_images: 4,
+          max_reference_bytes: 10_485_760,
+          draw_count: { min: 1, max: 1, default: 1 },
+        },
+      },
+      {
+        id: 'gpt-image-2',
+        display_name: 'GPT Image 2',
+        provider: 'openrouter',
+        outputs_per_draw: 1,
+        capabilities: {
+          text_to_image: true,
+          image_to_image: true,
+          aspect_ratios: [],
+          resolutions: [],
+          max_reference_images: 4,
+          max_reference_bytes: 10_485_760,
+          draw_count: { min: 1, max: 4, default: 1 },
+        },
+      },
+    ],
+  })
+  await page.goto('/app/create')
+
+  await expect(page.getByText('4 张/次')).toBeVisible()
+  await expect(page.getByRole('button', { name: '增加抽卡' })).toHaveCount(0)
+  await page.getByRole('button', { name: 'V8.1 · SD' }).click()
+  await expect(page.getByText('Midjourney 参数')).toBeVisible()
+  await page.keyboard.press('Escape')
+
+  await page.getByRole('textbox', { name: '生成提示词' }).fill('one draw')
+  const requestPromise = page.waitForRequest(
+    (request) =>
+      request.url().endsWith('/api/v1/generations') &&
+      request.method() === 'POST',
+  )
+  await page.getByRole('button', { name: '生成', exact: true }).click()
+  const body = (await requestPromise).postDataJSON() as {
+    draw_count: number
+    options: { midjourney: { version: string; resolution: string } }
+  }
+  expect(body.draw_count).toBe(1)
+  expect(body.options.midjourney).toMatchObject({
+    version: '8.1',
+    resolution: 'sd',
+  })
+
+  await page.getByRole('combobox', { name: '选择模型' }).click()
+  await page.getByRole('option', { name: 'GPT Image 2' }).click()
+  await expect(
+    page.getByRole('combobox', { name: '选择画面比例' }),
+  ).toHaveCount(0)
+  await expect(page.getByRole('combobox', { name: '选择分辨率' })).toHaveCount(
+    0,
+  )
+})
+
 test.describe('mobile studio', () => {
   test.use({ viewport: { width: 390, height: 844 }, hasTouch: true })
 
@@ -301,6 +374,7 @@ async function installStudioMocks(
     }
     generationPages?: Record<string, { items: unknown[]; next_cursor: string }>
     generationPostNetworkFailures?: number
+    models?: unknown[]
   } = {},
 ) {
   let assets = Array.from({ length: 18 }, (_, index) => ({
@@ -354,7 +428,7 @@ async function installStudioMocks(
     if (pathname === '/api/v1/models') {
       return json(route, {
         revision: 'qa-revision',
-        models: [
+        models: options.models ?? [
           {
             id: 'nano-banana-pro',
             display_name: 'Nano Banana Pro',

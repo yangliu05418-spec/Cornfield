@@ -5,7 +5,7 @@ import {
   useNavigate,
 } from '@tanstack/react-router'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { Aperture, FolderOpen, LogOut, Settings2, Sparkles } from 'lucide-react'
+import { FolderOpen, LogOut, Settings2, Sparkles } from 'lucide-react'
 import { useEffect } from 'react'
 import type { ReactNode } from 'react'
 
@@ -59,9 +59,7 @@ export function AppShell({ children }: { children: ReactNode }) {
     <div className="app-frame">
       <header className="app-nav">
         <Link to="/app/create" className="app-brand" aria-label="Cornfield">
-          <span className="brand-mark">
-            <Aperture size={15} />
-          </span>
+          <img className="brand-mark" src="/cornfield-mark.svg" alt="" />
           <span>Cornfield</span>
         </Link>
         <nav aria-label="主导航">
@@ -111,9 +109,6 @@ export function AdminTabs() {
     <nav className="admin-tabs" aria-label="管理导航">
       <Link to="/app/admin/providers" activeProps={{ className: 'active' }}>
         上游状态
-      </Link>
-      <Link to="/app/admin/models" activeProps={{ className: 'active' }}>
-        模型配置
       </Link>
       <Link to="/app/admin/users" activeProps={{ className: 'active' }}>
         用户

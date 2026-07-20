@@ -1,6 +1,6 @@
 import { createFileRoute } from '@tanstack/react-router'
-import { useInfiniteQuery } from '@tanstack/react-query'
-import { Download, Search } from 'lucide-react'
+import { useInfiniteQuery, useQueryClient } from '@tanstack/react-query'
+import { Download, Search, Trash2 } from 'lucide-react'
 import { useMemo, useState } from 'react'
 
 import { AppShell } from '#/components/app-shell'
@@ -11,6 +11,7 @@ export const Route = createFileRoute('/app/assets')({ component: AssetsPage })
 
 function AssetsPage() {
   const [search, setSearch] = useState('')
+  const queryClient = useQueryClient()
   const assets = useInfiniteQuery({
     queryKey: ['assets', 'library'],
     queryFn: ({ pageParam }) =>
@@ -28,6 +29,12 @@ function AssetsPage() {
         asset.original_filename?.toLowerCase().includes(normalizedSearch),
     )
   }, [assets.data, search])
+  async function deleteAsset(id: string) {
+    if (!window.confirm('永久删除这张图片？此操作无法撤销。')) return
+    await api(`/api/v1/assets/${id}`, { method: 'DELETE' })
+    await queryClient.invalidateQueries({ queryKey: ['assets'] })
+    await queryClient.invalidateQueries({ queryKey: ['generations'] })
+  }
 
   return (
     <AppShell>
@@ -59,9 +66,18 @@ function AssetsPage() {
                   loading="lazy"
                   decoding="async"
                 />
-                <a href={`${asset.url}?download=1`} aria-label="下载">
-                  <Download size={14} />
-                </a>
+                <div className="asset-card-actions">
+                  <a href={`${asset.url}?download=1`} aria-label="下载">
+                    <Download size={14} />
+                  </a>
+                  <button
+                    type="button"
+                    aria-label="永久删除"
+                    onClick={() => void deleteAsset(asset.id)}
+                  >
+                    <Trash2 size={14} />
+                  </button>
+                </div>
               </div>
               <div>
                 <span>

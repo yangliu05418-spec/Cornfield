@@ -82,11 +82,11 @@ describe('buildWallItems', () => {
       id: 'batch',
       prompt: 'test',
       aspect_ratio: '1:1',
-      status: 'succeeded',
+      status: 'running',
       jobs: [
         {
           id: 'job',
-          status: 'succeeded',
+          status: 'provider_pending',
           expected_outputs: 1,
           draw_index: 0,
         },
@@ -104,5 +104,27 @@ describe('buildWallItems', () => {
 
     expect(items).toHaveLength(1)
     expect(items[0]).toMatchObject({ id: 'job:0', asset })
+  })
+
+  it('does not render a deleted output as a completed blank slot', () => {
+    const batch = {
+      id: 'batch',
+      prompt: 'test',
+      aspect_ratio: '1:1',
+      status: 'running',
+      jobs: [
+        {
+          id: 'job',
+          status: 'provider_pending',
+          expected_outputs: 4,
+          deleted_outputs: [2],
+          draw_index: 0,
+        },
+      ],
+    } as unknown as GenerationBatch
+
+    const items = buildWallItems([], [batch])
+    expect(items).toHaveLength(3)
+    expect(items.map((item) => item.outputIndex)).toEqual([0, 1, 3])
   })
 })

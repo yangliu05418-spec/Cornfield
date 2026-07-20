@@ -1,5 +1,5 @@
 import { useVirtualizer } from '@tanstack/react-virtual'
-import { Copy, Download, ImagePlus, Maximize2, X } from 'lucide-react'
+import { Copy, Download, ImagePlus, Maximize2, Trash2, X } from 'lucide-react'
 import {
   forwardRef,
   useCallback,
@@ -53,6 +53,7 @@ type JustifiedWallProps = {
   targetHeight: number
   onReference: (asset: Asset) => void
   onCancel: (batchID: string, jobID: string) => void
+  onDelete: (asset: Asset) => void
   onNotice?: (message: string) => void
   onLoadMore?: () => void
   hasMore?: boolean
@@ -119,7 +120,9 @@ export function buildWallItems(
   for (const batch of batches) {
     const [ratioWidth, ratioHeight] = batch.aspect_ratio.split(':').map(Number)
     for (const job of batch.jobs) {
+      const deletedOutputs = new Set(job.deleted_outputs ?? [])
       for (let output = 0; output < job.expected_outputs; output++) {
+        if (deletedOutputs.has(output)) continue
         const slotID = `${job.id}:${output}`
         const asset = outputAssets.get(slotID)
         if (asset) {
@@ -173,6 +176,7 @@ export const JustifiedWall = forwardRef<
     targetHeight,
     onReference,
     onCancel,
+    onDelete,
     onNotice,
     onLoadMore,
     hasMore = false,
@@ -367,6 +371,7 @@ export const JustifiedWall = forwardRef<
                     priority={virtualRow.index === 0}
                     onReference={onReference}
                     onCancel={onCancel}
+                    onDelete={onDelete}
                     onPreview={setPreview}
                     onNotice={onNotice}
                   />
@@ -391,6 +396,7 @@ export const JustifiedWall = forwardRef<
           asset={preview}
           onClose={() => setPreview(null)}
           onReference={onReference}
+          onDelete={onDelete}
         />
       )}
     </>
@@ -402,6 +408,7 @@ function WallCard({
   priority,
   onReference,
   onCancel,
+  onDelete,
   onPreview,
   onNotice,
 }: {
@@ -409,6 +416,7 @@ function WallCard({
   priority: boolean
   onReference: (asset: Asset) => void
   onCancel: (batchID: string, jobID: string) => void
+  onDelete: (asset: Asset) => void
   onPreview: (asset: Asset) => void
   onNotice?: (message: string) => void
 }) {
@@ -513,6 +521,13 @@ function WallCard({
           <a aria-label="下载" href={`${asset.url}?download=1`}>
             <Download size={14} />
           </a>
+          <button
+            type="button"
+            aria-label="永久删除"
+            onClick={() => onDelete(asset)}
+          >
+            <Trash2 size={14} />
+          </button>
         </div>
       </div>
     </article>
@@ -523,10 +538,12 @@ function PreviewDialog({
   asset,
   onClose,
   onReference,
+  onDelete,
 }: {
   asset: Asset
   onClose: () => void
   onReference: (asset: Asset) => void
+  onDelete: (asset: Asset) => void
 }) {
   const panelRef = useRef<HTMLDivElement>(null)
   const closeRef = useRef<HTMLButtonElement>(null)
@@ -605,6 +622,10 @@ function PreviewDialog({
             <Download size={15} />
             下载原图
           </a>
+          <button type="button" onClick={() => onDelete(asset)}>
+            <Trash2 size={15} />
+            永久删除
+          </button>
         </div>
       </div>
     </div>

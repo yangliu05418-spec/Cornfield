@@ -2,7 +2,7 @@ import { createFileRoute, Link, useNavigate } from '@tanstack/react-router'
 import { useQueryClient } from '@tanstack/react-query'
 import { useState } from 'react'
 import type { FormEvent } from 'react'
-import { Aperture, ArrowLeft, ArrowRight } from 'lucide-react'
+import { ArrowLeft, ArrowRight } from 'lucide-react'
 
 import { api } from '#/lib/api'
 import type { User } from '#/lib/api'
@@ -48,9 +48,7 @@ function LoginPage() {
         返回首页
       </Link>
       <section className="login-panel">
-        <div className="login-mark">
-          <Aperture size={18} />
-        </div>
+        <img className="login-mark" src="/cornfield-mark.svg" alt="" />
         <p className="eyebrow">PRIVATE WORKSPACE</p>
         <h1>回到创作现场</h1>
         <p className="login-copy">使用管理员分配的内部账号进入 Cornfield。</p>

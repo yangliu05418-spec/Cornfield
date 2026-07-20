@@ -16,6 +16,7 @@ export type Model = {
     image_to_image: boolean
     aspect_ratios: string[]
     resolutions: string[]
+    midjourney_versions?: string[]
     max_reference_images: number
     max_reference_bytes: number
     draw_count: { min: number; max: number; default: number }
@@ -55,6 +56,25 @@ export type GenerationJob = {
   error_code?: string
   error_message?: string
   outputs?: GenerationOutput[]
+  deleted_outputs?: number[]
+}
+
+export type MidjourneyOptions = {
+  version: '8.1' | '7'
+  resolution?: 'sd' | 'hd'
+  speed: 'fast' | 'turbo'
+  quality?: 1 | 2 | 4
+  draft: boolean
+  stylize: number
+  chaos: number
+  weird: number
+  raw: boolean
+  tile: boolean
+  image_weight?: number
+}
+
+export type GenerationOptions = {
+  midjourney?: MidjourneyOptions
 }
 
 export type GenerationOutput = {
@@ -81,6 +101,7 @@ export type GenerationBatch = {
   status: string
   created_at: string
   jobs: GenerationJob[]
+  options?: GenerationOptions
 }
 
 export class APIError extends Error {

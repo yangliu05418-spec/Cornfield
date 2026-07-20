@@ -1,13 +1,33 @@
 package main
 
 import (
+	"context"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
 	"internal-image-studio/internal/modelconfig"
 )
+
+func TestCreatePermitStreamDoesNotBurst(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	interval := 20 * time.Millisecond
+	permits := newCreatePermitStream(ctx, interval)
+	<-permits
+	select {
+	case <-permits:
+		t.Fatal("received a second create permit before the interval")
+	case <-time.After(interval / 2):
+	}
+	select {
+	case <-permits:
+	case <-time.After(3 * interval):
+		t.Fatal("timed out waiting for the next create permit")
+	}
+}
 
 func TestProductionCatalogCanaryMatrix(t *testing.T) {
 	catalog, err := modelconfig.Load(filepath.Join("..", "..", "..", "config", "models.yaml"))

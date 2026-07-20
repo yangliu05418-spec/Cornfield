@@ -257,8 +257,7 @@ function CreatePage() {
   useEffect(() => {
     if (!activeModel) return
     if (!modelID) setModelID(activeModel.id)
-    if (!availableRatios.includes(ratio))
-      setRatio(availableRatios[0] ?? 'auto')
+    if (!availableRatios.includes(ratio)) setRatio(availableRatios[0] ?? 'auto')
     if (!activeModel.capabilities.resolutions.includes(resolution))
       setResolution(activeModel.capabilities.resolutions[0] ?? 'auto')
     if (!(activeModel.capabilities.qualities ?? []).includes(quality))

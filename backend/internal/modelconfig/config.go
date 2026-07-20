@@ -41,15 +41,16 @@ type Model struct {
 }
 
 type Capabilities struct {
-	TextToImage        bool      `yaml:"text_to_image" json:"text_to_image"`
-	ImageToImage       bool      `yaml:"image_to_image" json:"image_to_image"`
-	AspectRatios       []string  `yaml:"aspect_ratios" json:"aspect_ratios"`
-	Resolutions        []string  `yaml:"resolutions" json:"resolutions"`
-	Qualities          []string  `yaml:"qualities,omitempty" json:"qualities,omitempty"`
-	MaxReferenceImages int       `yaml:"max_reference_images" json:"max_reference_images"`
-	MaxReferenceBytes  int64     `yaml:"max_reference_bytes" json:"max_reference_bytes"`
-	DrawCount          DrawCount `yaml:"draw_count" json:"draw_count"`
-	MidjourneyVersions []string  `yaml:"midjourney_versions,omitempty" json:"midjourney_versions,omitempty"`
+	TextToImage              bool                `yaml:"text_to_image" json:"text_to_image"`
+	ImageToImage             bool                `yaml:"image_to_image" json:"image_to_image"`
+	AspectRatios             []string            `yaml:"aspect_ratios" json:"aspect_ratios"`
+	AspectRatiosByResolution map[string][]string `yaml:"aspect_ratios_by_resolution,omitempty" json:"aspect_ratios_by_resolution,omitempty"`
+	Resolutions              []string            `yaml:"resolutions" json:"resolutions"`
+	Qualities                []string            `yaml:"qualities,omitempty" json:"qualities,omitempty"`
+	MaxReferenceImages       int                 `yaml:"max_reference_images" json:"max_reference_images"`
+	MaxReferenceBytes        int64               `yaml:"max_reference_bytes" json:"max_reference_bytes"`
+	DrawCount                DrawCount           `yaml:"draw_count" json:"draw_count"`
+	MidjourneyVersions       []string            `yaml:"midjourney_versions,omitempty" json:"midjourney_versions,omitempty"`
 }
 
 type DrawCount struct {
@@ -327,6 +328,13 @@ func (c Catalog) MaxSubmitTimeout() time.Duration {
 	return maximum
 }
 
+func (m Model) AspectRatiosForResolution(resolution string) []string {
+	if ratios, ok := m.Capabilities.AspectRatiosByResolution[resolution]; ok {
+		return ratios
+	}
+	return m.Capabilities.AspectRatios
+}
+
 func validateCapabilities(m Model) error {
 	capabilities := m.Capabilities
 	if !capabilities.TextToImage && !capabilities.ImageToImage {
@@ -350,6 +358,23 @@ func validateCapabilities(m Model) error {
 	}
 	if duplicateOrBlank(capabilities.Resolutions) {
 		return fmt.Errorf("model %s has blank or duplicate resolutions", m.ID)
+	}
+	resolutions := make(map[string]struct{}, len(capabilities.Resolutions))
+	for _, resolution := range capabilities.Resolutions {
+		resolutions[resolution] = struct{}{}
+	}
+	for resolution, ratios := range capabilities.AspectRatiosByResolution {
+		if _, ok := resolutions[resolution]; !ok {
+			return fmt.Errorf("model %s restricts aspect ratios for unknown resolution %q", m.ID, resolution)
+		}
+		if len(ratios) == 0 || duplicateOrBlank(ratios) {
+			return fmt.Errorf("model %s has blank or duplicate aspect ratios for resolution %q", m.ID, resolution)
+		}
+		for _, ratio := range ratios {
+			if _, ok := seenRatios[ratio]; !ok {
+				return fmt.Errorf("model %s resolution %s uses unknown aspect ratio %q", m.ID, resolution, ratio)
+			}
+		}
 	}
 	if duplicateOrBlank(capabilities.Qualities) {
 		return fmt.Errorf("model %s has blank or duplicate qualities", m.ID)

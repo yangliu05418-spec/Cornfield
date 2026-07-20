@@ -183,6 +183,10 @@ function CreatePage() {
     models.data?.models[0]
   const maxDraws = activeModel?.capabilities.draw_count.max ?? 4
   const isMidjourney = activeModel?.id === 'legnext-midjourney'
+  const availableRatios =
+    activeModel?.capabilities.aspect_ratios_by_resolution?.[resolution] ??
+    activeModel?.capabilities.aspect_ratios ??
+    []
   const refreshAssetHead = useCallback(() => {
     assetRefreshVersion.current++
     if (assetRefreshInFlight.current) return assetRefreshInFlight.current
@@ -253,8 +257,7 @@ function CreatePage() {
   useEffect(() => {
     if (!activeModel) return
     if (!modelID) setModelID(activeModel.id)
-    if (!activeModel.capabilities.aspect_ratios.includes(ratio))
-      setRatio(activeModel.capabilities.aspect_ratios[0] ?? 'auto')
+    if (!availableRatios.includes(ratio)) setRatio(availableRatios[0] ?? 'auto')
     if (!activeModel.capabilities.resolutions.includes(resolution))
       setResolution(activeModel.capabilities.resolutions[0] ?? 'auto')
     if (!(activeModel.capabilities.qualities ?? []).includes(quality))
@@ -277,7 +280,7 @@ function CreatePage() {
         )
         .slice(0, limit)
     })
-  }, [activeModel, modelID, quality, ratio, resolution])
+  }, [activeModel, availableRatios, modelID, quality, ratio, resolution])
   useEffect(() => {
     const userID = me.data?.user.id
     if (!userID) return
@@ -731,11 +734,11 @@ function CreatePage() {
                 icon={<Sparkles size={14} />}
                 onChange={setModelID}
               />
-              {!!activeModel?.capabilities.aspect_ratios.length && (
+              {!!availableRatios.length && (
                 <GeneratorSelect
                   label="选择画面比例"
                   value={ratio}
-                  items={activeModel.capabilities.aspect_ratios.map((item) => ({
+                  items={availableRatios.map((item) => ({
                     value: item,
                     label: item,
                   }))}

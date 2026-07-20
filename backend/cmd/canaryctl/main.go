@@ -449,10 +449,6 @@ func referencePNG() ([]byte, error) {
 }
 
 func buildTextCases(model modelconfig.Model, revision, _ string, seed int64) []canaryCase {
-	ratios := append([]string(nil), model.Capabilities.AspectRatios...)
-	if len(ratios) == 0 {
-		ratios = []string{"auto"}
-	}
 	resolutions := append([]string(nil), model.Capabilities.Resolutions...)
 	if len(resolutions) == 0 {
 		resolutions = []string{"auto"}
@@ -464,8 +460,12 @@ func buildTextCases(model modelconfig.Model, revision, _ string, seed int64) []c
 		// Quality models use quality as their sole resolution-like axis.
 		resolutions = []string{"auto"}
 	}
-	cases := make([]canaryCase, 0, len(ratios)*len(resolutions)*len(qualities))
+	cases := make([]canaryCase, 0, len(model.Capabilities.AspectRatios)*len(resolutions)*len(qualities))
 	for _, resolution := range resolutions {
+		ratios := append([]string(nil), model.AspectRatiosForResolution(resolution)...)
+		if len(ratios) == 0 {
+			ratios = []string{"auto"}
+		}
 		for _, ratio := range ratios {
 			for _, quality := range qualities {
 				key := caseKey(model.ID, "text", resolution, ratio, quality)

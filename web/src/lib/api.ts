@@ -15,6 +15,7 @@ export type Model = {
     text_to_image: boolean
     image_to_image: boolean
     aspect_ratios: string[]
+    aspect_ratios_by_resolution?: Record<string, string[]>
     resolutions: string[]
     qualities?: string[]
     midjourney_versions?: string[]

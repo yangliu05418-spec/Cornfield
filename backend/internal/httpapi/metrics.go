@@ -133,17 +133,33 @@ func (s *Server) writeMetrics(parent context.Context, w http.ResponseWriter) {
 		}
 		providerRows.Close()
 	}
-	attemptRows, err := s.db.Query(ctx, `SELECT provider_id,outcome,count(*) FROM provider_attempts WHERE created_at>=now()-interval '5 minutes' GROUP BY provider_id,outcome`)
+	attemptRows, err := s.db.Query(ctx, `SELECT provider_id,operation,outcome,COALESCE(error_code,''),count(*)
+		FROM provider_attempts WHERE created_at>=now()-interval '5 minutes'
+		GROUP BY provider_id,operation,outcome,COALESCE(error_code,'')`)
 	if err == nil {
 		fmt.Fprintln(w, "# TYPE image_studio_provider_attempts_5m gauge")
 		for attemptRows.Next() {
-			var providerID, outcome string
+			var providerID, operation, outcome, errorCode string
 			var total int64
-			if attemptRows.Scan(&providerID, &outcome, &total) == nil {
-				fmt.Fprintf(w, "image_studio_provider_attempts_5m{provider=%q,outcome=%q} %d\n", providerID, outcome, total)
+			if attemptRows.Scan(&providerID, &operation, &outcome, &errorCode, &total) == nil {
+				fmt.Fprintf(w, "image_studio_provider_attempts_5m{provider=%q,operation=%q,outcome=%q,error_code=%q} %d\n", providerID, operation, outcome, errorCode, total)
 			}
 		}
 		attemptRows.Close()
+	}
+	var oldestStartedSeconds float64
+	var submitRetries, uncertainJobs int64
+	if err := s.db.QueryRow(ctx, `SELECT
+		COALESCE(EXTRACT(EPOCH FROM now()-(min(created_at) FILTER (WHERE outcome='started' AND finished_at IS NULL))),0),
+		count(*) FILTER (WHERE operation='submit' AND attempt_no>1 AND created_at>=now()-interval '5 minutes'),
+		(SELECT count(*) FROM generation_jobs WHERE status='submission_uncertain')
+		FROM provider_attempts`).Scan(&oldestStartedSeconds, &submitRetries, &uncertainJobs); err == nil {
+		fmt.Fprintln(w, "# TYPE image_studio_provider_oldest_started_attempt_seconds gauge")
+		fmt.Fprintf(w, "image_studio_provider_oldest_started_attempt_seconds %f\n", oldestStartedSeconds)
+		fmt.Fprintln(w, "# TYPE image_studio_provider_submit_retries_5m gauge")
+		fmt.Fprintf(w, "image_studio_provider_submit_retries_5m %d\n", submitRetries)
+		fmt.Fprintln(w, "# TYPE image_studio_submission_uncertain_jobs gauge")
+		fmt.Fprintf(w, "image_studio_submission_uncertain_jobs %d\n", uncertainJobs)
 	}
 	heartbeatRows, err := s.db.Query(ctx, `SELECT service_name,EXTRACT(EPOCH FROM now()-max(heartbeat_at))
 		FROM service_heartbeats GROUP BY service_name ORDER BY service_name`)

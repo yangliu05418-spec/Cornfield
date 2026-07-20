@@ -12,6 +12,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"gopkg.in/yaml.v3"
 )
@@ -305,6 +306,23 @@ func (c Catalog) ProviderConcurrency() (map[string]int, error) {
 		limits[model.Provider] = limit
 	}
 	return limits, nil
+}
+
+// MaxSubmitTimeout returns the largest business submit timeout declared by an
+// enabled model. Process-level timeouts must be derived from this value so they
+// can never cancel a provider request before the business state machine does.
+func (c Catalog) MaxSubmitTimeout() time.Duration {
+	var maximum time.Duration
+	for _, model := range c.Models {
+		if !model.Enabled {
+			continue
+		}
+		candidate := time.Duration(model.Policy.SubmitTimeoutSeconds) * time.Second
+		if candidate > maximum {
+			maximum = candidate
+		}
+	}
+	return maximum
 }
 
 func validateCapabilities(m Model) error {

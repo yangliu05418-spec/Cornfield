@@ -8,8 +8,11 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/http/httptrace"
+	"regexp"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 	"unicode/utf8"
 )
@@ -22,7 +25,17 @@ type OpenRouter struct {
 }
 
 func NewOpenRouter(apiKey, publicURL string) *OpenRouter {
-	return &OpenRouter{APIKey: apiKey, PublicURL: publicURL, BaseURL: "https://openrouter.ai", Client: newHTTPClient(5*time.Minute, 4*time.Minute)}
+	return NewOpenRouterWithSubmitTimeout(apiKey, publicURL, 5*time.Minute)
+}
+
+func NewOpenRouterWithSubmitTimeout(apiKey, publicURL string, submitTimeout time.Duration) *OpenRouter {
+	if submitTimeout < time.Second {
+		submitTimeout = 5 * time.Minute
+	}
+	return &OpenRouter{
+		APIKey: apiKey, PublicURL: publicURL, BaseURL: "https://openrouter.ai",
+		Client: newHTTPClient(submitTimeout+20*time.Second, submitTimeout+10*time.Second),
+	}
 }
 
 func (o *OpenRouter) Submit(ctx context.Context, input CanonicalRequest) (Submission, error) {
@@ -87,9 +100,16 @@ func (o *OpenRouter) Submit(ctx context.Context, input CanonicalRequest) (Submis
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("HTTP-Referer", o.PublicURL)
 	req.Header.Set("X-Title", "Cornfield")
+	var requestWritten atomic.Bool
+	req = req.WithContext(httptrace.WithClientTrace(req.Context(), &httptrace.ClientTrace{
+		WroteRequest: func(httptrace.WroteRequestInfo) { requestWritten.Store(true) },
+	}))
 	started := time.Now()
 	res, err := o.Client.Do(req)
 	if err != nil {
+		if !requestWritten.Load() {
+			return Submission{}, &Error{Code: "PROVIDER_CONNECT_FAILED", Message: "provider connection failed before the request was written", Retryable: true}
+		}
 		return Submission{}, &Error{Code: "SUBMISSION_UNCERTAIN", Message: err.Error(), SubmissionUncertain: true}
 	}
 	defer res.Body.Close()
@@ -251,8 +271,10 @@ func (o *OpenRouter) Probe(ctx context.Context) Health {
 }
 
 func httpProviderError(res *http.Response, secrets ...string) error {
-	_, _ = io.Copy(io.Discard, io.LimitReader(res.Body, 64<<10))
 	message := fmt.Sprintf("provider returned HTTP %d", res.StatusCode)
+	if detail := readProviderErrorDetail(res.Body, secrets); detail != "" {
+		message += ": " + detail
+	}
 	retryable := res.StatusCode == http.StatusTooManyRequests || res.StatusCode >= 500
 	// A 403 can be a per-request content-policy rejection or model-level
 	// authorization failure; neither proves the whole credential is unusable.
@@ -261,6 +283,72 @@ func httpProviderError(res *http.Response, secrets ...string) error {
 	providerError := &Error{Code: fmt.Sprintf("PROVIDER_HTTP_%d", res.StatusCode), Message: message, Retryable: retryable, PauseProvider: pause, Telemetry: responseTelemetryExcluding(res, secrets)}
 	providerError.RetryAfter = parseRetryAfter(res.Header.Get("Retry-After"), time.Now())
 	return providerError
+}
+
+var (
+	providerErrorURLPattern    = regexp.MustCompile(`(?i)https?://[^\s"'<>]+`)
+	providerErrorDataPattern   = regexp.MustCompile(`(?i)data:[^,\s]+;base64,[A-Za-z0-9+/=_-]+`)
+	providerErrorSecretPattern = regexp.MustCompile(`(?i)\b(?:sk-[A-Za-z0-9_-]{8,}|bfl_[A-Za-z0-9_-]{8,})\b`)
+	providerErrorBearerPattern = regexp.MustCompile(`(?i)bearer\s+[A-Za-z0-9._~+/=-]{8,}`)
+)
+
+func readProviderErrorDetail(body io.Reader, secrets []string) string {
+	raw, err := io.ReadAll(io.LimitReader(body, 64<<10))
+	if err != nil || len(raw) == 0 {
+		return ""
+	}
+	var envelope struct {
+		Message string `json:"message"`
+		Error   struct {
+			Message  string `json:"message"`
+			Metadata struct {
+				ProviderName string `json:"provider_name"`
+			} `json:"metadata"`
+		} `json:"error"`
+	}
+	if json.Unmarshal(raw, &envelope) != nil {
+		return ""
+	}
+	message := envelope.Error.Message
+	if message == "" {
+		message = envelope.Message
+	}
+	if envelope.Error.Metadata.ProviderName != "" && message != "" {
+		message = envelope.Error.Metadata.ProviderName + ": " + message
+	}
+	return sanitizeProviderErrorDetail(message, secrets)
+}
+
+func sanitizeProviderErrorDetail(message string, secrets []string) string {
+	for _, secret := range secrets {
+		if secret != "" {
+			message = strings.ReplaceAll(message, secret, "[redacted]")
+		}
+	}
+	message = providerErrorDataPattern.ReplaceAllString(message, "[image-data]")
+	message = providerErrorURLPattern.ReplaceAllString(message, "[url]")
+	message = providerErrorSecretPattern.ReplaceAllString(message, "[redacted]")
+	message = providerErrorBearerPattern.ReplaceAllString(message, "Bearer [redacted]")
+	message = strings.Map(func(r rune) rune {
+		if r < 0x20 || r == 0x7f {
+			return ' '
+		}
+		return r
+	}, message)
+	message = strings.Join(strings.Fields(message), " ")
+	return boundedProviderErrorDetail(message)
+}
+
+func boundedProviderErrorDetail(message string) string {
+	const maximum = 1024
+	if len(message) <= maximum {
+		return message
+	}
+	end := maximum - 3
+	for end > 0 && !utf8.ValidString(message[:end]) {
+		end--
+	}
+	return message[:end] + "..."
 }
 
 func httpSubmissionError(res *http.Response, secrets ...string) error {

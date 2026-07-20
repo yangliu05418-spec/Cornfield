@@ -66,6 +66,24 @@ func TestOpenRouterSubmitCapabilityGatesPayload(t *testing.T) {
 	}
 }
 
+func TestOpenRouterConnectFailureBeforeWriteIsSafelyRetryable(t *testing.T) {
+	adapter := NewOpenRouter("test-key", "")
+	adapter.Client = &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+		return nil, errors.New("dial failed")
+	})}
+	_, err := adapter.Submit(context.Background(), CanonicalRequest{Model: "model", Prompt: "prompt", ExpectedImages: 1})
+	var providerErr *Error
+	if !errors.As(err, &providerErr) || !providerErr.Retryable || providerErr.SubmissionUncertain || providerErr.Code != "PROVIDER_CONNECT_FAILED" {
+		t.Fatalf("error = %#v", err)
+	}
+}
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (fn roundTripFunc) RoundTrip(request *http.Request) (*http.Response, error) {
+	return fn(request)
+}
+
 func TestOpenRouterQualityAndPromptAspectRatio(t *testing.T) {
 	var payload map[string]any
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -135,7 +153,7 @@ func TestOpenRouterSubmissionHTTPClassification(t *testing.T) {
 			if !errors.As(err, &providerErr) {
 				t.Fatalf("error = %#v", err)
 			}
-			if providerErr.Message != fmt.Sprintf("provider returned HTTP %d", test.status) || providerErr.Retryable != test.retryable || providerErr.SubmissionUncertain != test.uncertain {
+			if providerErr.Message != fmt.Sprintf("provider returned HTTP %d: upstream unavailable", test.status) || providerErr.Retryable != test.retryable || providerErr.SubmissionUncertain != test.uncertain {
 				t.Errorf("provider error = %+v", providerErr)
 			}
 			if providerErr.RetryAfter != 7*time.Second {
@@ -145,6 +163,29 @@ func TestOpenRouterSubmissionHTTPClassification(t *testing.T) {
 				t.Errorf("telemetry = %+v", providerErr.Telemetry)
 			}
 		})
+	}
+}
+
+func TestOpenRouterErrorDetailIsBoundedAndRedacted(t *testing.T) {
+	secret := "sk-secret-value-123456789"
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = fmt.Fprintf(w, `{"error":{"message":"invalid image at https://private.example/file?token=%s using %s and data:image/png;base64,QUJDREVGRw==","metadata":{"provider_name":"Seed"}}}`, secret, secret)
+	}))
+	defer server.Close()
+	adapter := NewOpenRouter(secret, "")
+	adapter.BaseURL = server.URL
+	adapter.Client = server.Client()
+	_, err := adapter.Submit(context.Background(), CanonicalRequest{Model: "model", Prompt: "prompt", ExpectedImages: 1})
+	var providerErr *Error
+	if !errors.As(err, &providerErr) {
+		t.Fatalf("error = %#v", err)
+	}
+	if strings.Contains(providerErr.Message, secret) || strings.Contains(providerErr.Message, "private.example") || strings.Contains(providerErr.Message, "QUJD") {
+		t.Fatalf("unsafe error detail survived: %q", providerErr.Message)
+	}
+	if !strings.Contains(providerErr.Message, "Seed: invalid image") || !strings.Contains(providerErr.Message, "[url]") || !strings.Contains(providerErr.Message, "[image-data]") {
+		t.Fatalf("useful sanitized detail missing: %q", providerErr.Message)
 	}
 }
 

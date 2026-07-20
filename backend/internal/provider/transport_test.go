@@ -31,7 +31,7 @@ func TestOpenRouterAllowsLongSynchronousImageResponses(t *testing.T) {
 	if !ok {
 		t.Fatalf("transport type = %T", client.Transport)
 	}
-	if transport.ResponseHeaderTimeout != 4*time.Minute {
+	if transport.ResponseHeaderTimeout != 5*time.Minute+10*time.Second {
 		t.Fatalf("response header timeout = %v", transport.ResponseHeaderTimeout)
 	}
 }

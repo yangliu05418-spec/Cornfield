@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestPolicyJSONUsesSnakeCaseAndAcceptsLegacySnapshots(t *testing.T) {
@@ -206,6 +207,23 @@ func TestProviderConcurrencyUsesOneCatalogValue(t *testing.T) {
 	second.Policy.MaxConcurrency = first.Policy.MaxConcurrency + 1
 	if err := (Catalog{Revision: 1, Models: []Model{first, second}}).Validate(); err == nil || !strings.Contains(err.Error(), "inconsistent max_concurrency") {
 		t.Fatalf("inconsistent provider limit error = %v", err)
+	}
+}
+
+func TestMaxSubmitTimeoutUsesEnabledModels(t *testing.T) {
+	fast := validOpenRouterModel()
+	fast.ID = "fast"
+	fast.Policy.SubmitTimeoutSeconds = 20
+	slow := validOpenRouterModel()
+	slow.ID = "slow"
+	slow.Policy.SubmitTimeoutSeconds = 300
+	disabled := validOpenRouterModel()
+	disabled.ID = "disabled"
+	disabled.Enabled = false
+	disabled.Policy.SubmitTimeoutSeconds = 900
+	catalog := Catalog{Models: []Model{fast, slow, disabled}}
+	if got := catalog.MaxSubmitTimeout(); got != 300*time.Second {
+		t.Fatalf("MaxSubmitTimeout() = %v, want 300s", got)
 	}
 }
 

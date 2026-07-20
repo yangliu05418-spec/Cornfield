@@ -105,7 +105,7 @@ ownership_hardening="$(docker compose exec -T postgres psql -U studio_bootstrap 
   "SELECT (SELECT pg_get_userbyid(datdba) FROM pg_database WHERE datname='studio')='studio_owner' AND NOT EXISTS(SELECT 1 FROM pg_roles WHERE rolname='studio')")"
 test "${ownership_hardening}" = "t"
 runtime_privileges="$(docker compose exec -T postgres psql -U studio_bootstrap -d studio -Atc \
-  "SELECT has_schema_privilege('studio_api','public','USAGE') AND NOT has_schema_privilege('studio_api','public','CREATE') AND NOT has_table_privilege('studio_api','river_job','SELECT') AND NOT has_table_privilege('studio_api','assets','UPDATE') AND has_column_privilege('studio_api','assets','lock_guard','UPDATE') AND has_column_privilege('studio_api','assets','purge_pending','UPDATE') AND has_column_privilege('studio_api','providers','state','UPDATE') AND NOT has_column_privilege('studio_api','providers','enabled','UPDATE') AND has_column_privilege('studio_worker','user_sessions','expires_at','SELECT') AND NOT has_column_privilege('studio_worker','user_sessions','token_hash','SELECT') AND has_column_privilege('studio_worker','users','status','SELECT') AND NOT has_column_privilege('studio_worker','users','username','SELECT') AND has_table_privilege('studio_worker','river_job','SELECT') AND has_table_privilege('studio_worker','river_job','INSERT') AND has_table_privilege('studio_worker','river_job','UPDATE') AND has_table_privilege('studio_worker','river_job','DELETE')")"
+  "SELECT has_schema_privilege('studio_api','public','USAGE') AND NOT has_schema_privilege('studio_api','public','CREATE') AND NOT has_table_privilege('studio_api','river_job','SELECT') AND NOT has_table_privilege('studio_api','assets','UPDATE') AND has_column_privilege('studio_api','assets','lock_guard','UPDATE') AND has_column_privilege('studio_api','assets','purge_pending','UPDATE') AND has_column_privilege('studio_api','providers','state','UPDATE') AND NOT has_column_privilege('studio_api','providers','enabled','UPDATE') AND has_column_privilege('studio_worker','user_sessions','expires_at','SELECT') AND NOT has_column_privilege('studio_worker','user_sessions','token_hash','SELECT') AND has_column_privilege('studio_worker','users','id','SELECT') AND has_column_privilege('studio_worker','users','status','SELECT') AND NOT has_column_privilege('studio_worker','users','username','SELECT') AND has_table_privilege('studio_worker','river_job','SELECT') AND has_table_privilege('studio_worker','river_job','INSERT') AND has_table_privilege('studio_worker','river_job','UPDATE') AND has_table_privilege('studio_worker','river_job','DELETE')")"
 test "${runtime_privileges}" = "t"
 bfl_display_name="$(docker compose exec -T postgres psql -U studio_bootstrap -d studio -Atc \
   "SELECT display_name FROM providers WHERE id='bfl'")"
@@ -159,6 +159,8 @@ if [[ "${deletion_status}" != "succeeded" ]]; then
   deletion_diagnostic="$(docker compose exec -T postgres psql -U studio_bootstrap -d studio -At -F ' ' -c \
     "SELECT status,attempt_count,COALESCE(error_code,'-'),COALESCE(error_message,'-') FROM deletion_requests WHERE id='${deletion_request_id}'::uuid")"
   echo "::error file=ops/ci-smoke.sh,title=User deletion did not complete::${deletion_diagnostic}" >&2
+  sudo find "${delete_second_directory}" -maxdepth 2 -printf 'delete fixture: %f %u:%g %m %T@\n' >&2 || true
+  sudo sha256sum "${delete_directory}/original.png" >&2 || true
   false
 fi
 test "$(docker compose exec -T postgres psql -U studio_bootstrap -d studio -Atc \

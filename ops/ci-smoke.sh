@@ -129,7 +129,8 @@ printf '%s' "${delete_content}" | sudo tee "${delete_directory}/original.png" >/
 printf '%s' 'thumbnail' | sudo tee "${delete_directory}/thumb-320.webp" >/dev/null
 sudo chown -R 65532:65532 "${delete_directory}"
 test "$(sudo sha256sum "${delete_directory}/original.png" | cut -d' ' -f1)" = "${delete_digest}"
-sudo touch -d '10 minutes ago' "${delete_directory}"/* "${delete_directory}"
+sudo touch -d '10 minutes ago' \
+  "${delete_directory}/original.png" "${delete_directory}/thumb-320.webp" "${delete_directory}"
 delete_quarantine_key='ci-delete-upload.png'
 printf '%s' "${delete_content}" | sudo tee "${DATA_ROOT}/uploads/quarantine/${delete_quarantine_key}" >/dev/null
 sudo chown 65532:65532 "${DATA_ROOT}/uploads/quarantine/${delete_quarantine_key}"

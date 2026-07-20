@@ -7,11 +7,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"math/big"
 	"os"
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"gopkg.in/yaml.v3"
 )
@@ -23,18 +25,19 @@ type Catalog struct {
 }
 
 type Model struct {
-	ID                string       `yaml:"id" json:"id"`
-	DisplayName       string       `yaml:"display_name" json:"display_name"`
-	Provider          string       `yaml:"provider" json:"provider"`
-	ProviderModel     string       `yaml:"provider_model" json:"provider_model"`
-	Enabled           bool         `yaml:"enabled" json:"enabled"`
-	Order             int          `yaml:"order" json:"order"`
-	PromptSuffix      string       `yaml:"prompt_suffix,omitempty" json:"prompt_suffix,omitempty"`
-	PromptAspectRatio bool         `yaml:"prompt_aspect_ratio,omitempty" json:"prompt_aspect_ratio,omitempty"`
-	RequestParameters []string     `yaml:"request_parameters,omitempty" json:"request_parameters,omitempty"`
-	OutputsPerDraw    int          `yaml:"outputs_per_draw" json:"outputs_per_draw"`
-	Capabilities      Capabilities `yaml:"capabilities" json:"capabilities"`
-	Policy            Policy       `yaml:"policy" json:"policy"`
+	ID                string                       `yaml:"id" json:"id"`
+	DisplayName       string                       `yaml:"display_name" json:"display_name"`
+	Provider          string                       `yaml:"provider" json:"provider"`
+	ProviderModel     string                       `yaml:"provider_model" json:"provider_model"`
+	Enabled           bool                         `yaml:"enabled" json:"enabled"`
+	Order             int                          `yaml:"order" json:"order"`
+	PromptSuffix      string                       `yaml:"prompt_suffix,omitempty" json:"prompt_suffix,omitempty"`
+	PromptAspectRatio bool                         `yaml:"prompt_aspect_ratio,omitempty" json:"prompt_aspect_ratio,omitempty"`
+	RequestParameters []string                     `yaml:"request_parameters,omitempty" json:"request_parameters,omitempty"`
+	SizeOverrides     map[string]map[string]string `yaml:"size_overrides,omitempty" json:"size_overrides,omitempty"`
+	OutputsPerDraw    int                          `yaml:"outputs_per_draw" json:"outputs_per_draw"`
+	Capabilities      Capabilities                 `yaml:"capabilities" json:"capabilities"`
+	Policy            Policy                       `yaml:"policy" json:"policy"`
 }
 
 type Capabilities struct {
@@ -307,6 +310,23 @@ func (c Catalog) ProviderConcurrency() (map[string]int, error) {
 	return limits, nil
 }
 
+// MaxSubmitTimeout returns the largest business submit timeout declared by an
+// enabled model. Process-level timeouts must be derived from this value so they
+// can never cancel a provider request before the business state machine does.
+func (c Catalog) MaxSubmitTimeout() time.Duration {
+	var maximum time.Duration
+	for _, model := range c.Models {
+		if !model.Enabled {
+			continue
+		}
+		candidate := time.Duration(model.Policy.SubmitTimeoutSeconds) * time.Second
+		if candidate > maximum {
+			maximum = candidate
+		}
+	}
+	return maximum
+}
+
 func validateCapabilities(m Model) error {
 	capabilities := m.Capabilities
 	if !capabilities.TextToImage && !capabilities.ImageToImage {
@@ -356,6 +376,9 @@ func validateCapabilities(m Model) error {
 		_, ok := parameters[parameter]
 		return ok
 	}
+	if err := validateSizeOverrides(m, has); err != nil {
+		return err
+	}
 	switch m.Provider {
 	case "openrouter":
 		if capabilities.ImageToImage && !has("input_references") {
@@ -400,6 +423,65 @@ func validateCapabilities(m Model) error {
 		return fmt.Errorf("model %s uses unsupported provider %q", m.ID, m.Provider)
 	}
 	return nil
+}
+
+func validateSizeOverrides(m Model, has func(string) bool) error {
+	if len(m.SizeOverrides) == 0 {
+		return nil
+	}
+	if m.Provider != "openrouter" || !has("size") {
+		return fmt.Errorf("model %s declares size_overrides without OpenRouter size", m.ID)
+	}
+	resolutions := make(map[string]struct{}, len(m.Capabilities.Resolutions))
+	for _, resolution := range m.Capabilities.Resolutions {
+		resolutions[resolution] = struct{}{}
+	}
+	ratios := make(map[string]struct{}, len(m.Capabilities.AspectRatios))
+	for _, ratio := range m.Capabilities.AspectRatios {
+		ratios[ratio] = struct{}{}
+	}
+	for resolution, overrides := range m.SizeOverrides {
+		if _, ok := resolutions[resolution]; !ok {
+			return fmt.Errorf("model %s has size overrides for unknown resolution %q", m.ID, resolution)
+		}
+		if len(overrides) != len(ratios) {
+			return fmt.Errorf("model %s resolution %s must override every selectable aspect ratio", m.ID, resolution)
+		}
+		for ratio, size := range overrides {
+			if _, ok := ratios[ratio]; !ok {
+				return fmt.Errorf("model %s has size override for unknown aspect ratio %q", m.ID, ratio)
+			}
+			width, height, err := parseExplicitSize(size)
+			if err != nil || width > 4096 || height > 4096 {
+				return fmt.Errorf("model %s has invalid explicit size %q for %s/%s", m.ID, size, resolution, ratio)
+			}
+			if m.ProviderModel == "bytedance-seed/seedream-4.5" && int64(width)*int64(height) < 3_686_400 {
+				return fmt.Errorf("model %s explicit size %q is below Seedream's minimum pixel area", m.ID, size)
+			}
+			ratioParts := strings.Split(ratio, ":")
+			ratioWidth, _ := strconv.Atoi(ratioParts[0])
+			ratioHeight, _ := strconv.Atoi(ratioParts[1])
+			expected := float64(ratioWidth) / float64(ratioHeight)
+			actual := float64(width) / float64(height)
+			if math.Abs(actual-expected)/expected > 0.02 {
+				return fmt.Errorf("model %s explicit size %q differs from aspect ratio %s by more than 2%%", m.ID, size, ratio)
+			}
+		}
+	}
+	return nil
+}
+
+func parseExplicitSize(size string) (int, int, error) {
+	parts := strings.Split(size, "x")
+	if len(parts) != 2 {
+		return 0, 0, errors.New("size must use WIDTHxHEIGHT")
+	}
+	width, widthErr := strconv.Atoi(parts[0])
+	height, heightErr := strconv.Atoi(parts[1])
+	if widthErr != nil || heightErr != nil || width < 1 || height < 1 {
+		return 0, 0, errors.New("size dimensions must be positive integers")
+	}
+	return width, height, nil
 }
 
 func validatePolicy(m Model) error {

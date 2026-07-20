@@ -41,6 +41,12 @@ func main() {
 		os.Exit(1)
 	}
 	logger.Info("worker model catalog validated", "model_revision", catalog.Hash)
+	maxSubmitTimeout := catalog.MaxSubmitTimeout()
+	if maxSubmitTimeout < time.Second {
+		logger.Error("model config has no enabled submit timeout")
+		os.Exit(1)
+	}
+	riverJobTimeout := maxSubmitTimeout + 30*time.Second
 	providerLimits, err := catalog.ProviderConcurrency()
 	if err != nil {
 		logger.Error("provider concurrency invalid", "error", err)
@@ -77,7 +83,7 @@ func main() {
 		adapters["bfl"] = provider.Mock{}
 	} else {
 		adapters["legnext"] = provider.NewLegnext(cfg.LegnextAPIKey)
-		adapters["openrouter"] = provider.NewOpenRouter(cfg.OpenRouterAPIKey, cfg.PublicURL)
+		adapters["openrouter"] = provider.NewOpenRouterWithSubmitTimeout(cfg.OpenRouterAPIKey, cfg.PublicURL, maxSubmitTimeout)
 		adapters["bfl"] = provider.NewBFL(cfg.BFLAPIKey)
 	}
 	downloadClient := safehttp.NewDownloadClient(90 * time.Second)
@@ -90,6 +96,7 @@ func main() {
 	river.AddWorker(workers, generateWorker)
 	riverClient, err := river.NewClient(riverpgxv5.New(db), &river.Config{
 		Queues: map[string]river.QueueConfig{"generation": {MaxWorkers: 6}}, Workers: workers,
+		JobTimeout: riverJobTimeout,
 		// REINDEX requires object ownership and is an operational migration task,
 		// not a privilege the runtime Worker should inherit from studio_owner.
 		ReindexerSchedule: river.NeverSchedule(),
@@ -103,6 +110,7 @@ func main() {
 	go scheduler.Run(ctx)
 	go scheduler.ListenNotifications(ctx)
 	go (&studioWorker.Maintenance{DB: db, Blobs: store, AssetRoot: cfg.AssetRoot, Log: logger, Generator: generateWorker}).Run(ctx)
+	go generateWorker.RunSubmissionRecovery(ctx)
 	deletionWake := make(chan struct{}, 1)
 	deletions := &studioWorker.DeletionProcessor{DB: db, Blobs: store, AssetRoot: cfg.AssetRoot, Log: logger, Wake: deletionWake}
 	go deletions.Run(ctx)
@@ -119,7 +127,7 @@ func main() {
 		os.Exit(1)
 	}
 	go (&studioWorker.Heartbeat{DB: db, Log: logger, ServiceName: studioWorker.WorkerServiceName, InstanceID: instanceID}).Run(ctx)
-	logger.Info("worker started", "provider_mode", cfg.ProviderMode)
+	logger.Info("worker started", "provider_mode", cfg.ProviderMode, "river_job_timeout", riverJobTimeout, "max_submit_timeout", maxSubmitTimeout)
 	<-ctx.Done()
 	stopCtx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 	defer cancel()

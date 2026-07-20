@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestPolicyJSONUsesSnakeCaseAndAcceptsLegacySnapshots(t *testing.T) {
@@ -206,6 +207,55 @@ func TestProviderConcurrencyUsesOneCatalogValue(t *testing.T) {
 	second.Policy.MaxConcurrency = first.Policy.MaxConcurrency + 1
 	if err := (Catalog{Revision: 1, Models: []Model{first, second}}).Validate(); err == nil || !strings.Contains(err.Error(), "inconsistent max_concurrency") {
 		t.Fatalf("inconsistent provider limit error = %v", err)
+	}
+}
+
+func TestMaxSubmitTimeoutUsesEnabledModels(t *testing.T) {
+	fast := validOpenRouterModel()
+	fast.ID = "fast"
+	fast.Policy.SubmitTimeoutSeconds = 20
+	slow := validOpenRouterModel()
+	slow.ID = "slow"
+	slow.Policy.SubmitTimeoutSeconds = 300
+	disabled := validOpenRouterModel()
+	disabled.ID = "disabled"
+	disabled.Enabled = false
+	disabled.Policy.SubmitTimeoutSeconds = 900
+	catalog := Catalog{Models: []Model{fast, slow, disabled}}
+	if got := catalog.MaxSubmitTimeout(); got != 300*time.Second {
+		t.Fatalf("MaxSubmitTimeout() = %v, want 300s", got)
+	}
+}
+
+func TestSeedreamExplicitSizeCatalog(t *testing.T) {
+	catalog, err := Load(filepath.Join("..", "..", "..", "config", "models.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	model, ok := catalog.Find("openrouter-seedream-4-5")
+	if !ok {
+		t.Fatal("Seedream model missing")
+	}
+	if strings.Join(model.Capabilities.Resolutions, ",") != "2K,4K" {
+		t.Fatalf("resolutions = %#v", model.Capabilities.Resolutions)
+	}
+	if got := model.SizeOverrides["2K"]["16:9"]; got != "2560x1440" {
+		t.Fatalf("16:9 2K override = %q", got)
+	}
+	if len(model.SizeOverrides["2K"]) != len(model.Capabilities.AspectRatios) {
+		t.Fatalf("size override count = %d, ratios = %d", len(model.SizeOverrides["2K"]), len(model.Capabilities.AspectRatios))
+	}
+}
+
+func TestSeedreamSizeOverridesRejectUnsafeArea(t *testing.T) {
+	model := validOpenRouterModel()
+	model.ProviderModel = "bytedance-seed/seedream-4.5"
+	model.RequestParameters = []string{"size", "resolution", "aspect_ratio", "n", "input_references"}
+	model.Capabilities.AspectRatios = []string{"16:9"}
+	model.Capabilities.Resolutions = []string{"2K"}
+	model.SizeOverrides = map[string]map[string]string{"2K": {"16:9": "2048x1152"}}
+	if err := validateCapabilities(model); err == nil || !strings.Contains(err.Error(), "minimum pixel area") {
+		t.Fatalf("validateCapabilities() = %v", err)
 	}
 }
 

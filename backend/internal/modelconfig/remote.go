@@ -63,7 +63,7 @@ func VerifyOpenRouterRemote(ctx context.Context, catalog *Catalog, client *http.
 				name = "unnamed endpoint"
 			}
 			for _, parameter := range model.RequestParameters {
-				if _, ok := endpoint.SupportedParameters[parameter]; !ok {
+				if !openRouterEndpointSupports(parameter, endpoint.SupportedParameters) {
 					modelReport.Drifts = append(modelReport.Drifts, fmt.Sprintf("%s no longer supports %s", name, parameter))
 				}
 			}
@@ -78,6 +78,21 @@ func VerifyOpenRouterRemote(ctx context.Context, catalog *Catalog, client *http.
 		report.Models = append(report.Models, modelReport)
 	}
 	return report, nil
+}
+
+func openRouterEndpointSupports(parameter string, supported map[string]openRouterParameter) bool {
+	if _, ok := supported[parameter]; ok {
+		return true
+	}
+	// size is a normalized Image API shorthand. OpenRouter converts explicit
+	// pixels for endpoints that expose the underlying resolution and aspect
+	// ratio controls even when discovery does not repeat the alias.
+	if parameter == "size" {
+		_, hasResolution := supported["resolution"]
+		_, hasAspectRatio := supported["aspect_ratio"]
+		return hasResolution && hasAspectRatio
+	}
+	return false
 }
 
 type openRouterEndpoints struct {

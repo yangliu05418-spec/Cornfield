@@ -85,6 +85,7 @@ type submissionClaim struct {
 	RetryAfter time.Duration
 	Reason     string
 	Attempt    int
+	AttemptID  int64
 	Deadline   time.Time
 }
 
@@ -111,7 +112,7 @@ func (e *stagedResultError) Error() string { return e.message }
 func (w *GenerateWorker) Middleware(_ *rivertype.JobRow) []rivertype.WorkerMiddleware {
 	return []rivertype.WorkerMiddleware{river.WorkerMiddlewareFunc(func(ctx context.Context, job *rivertype.JobRow, doInner func(context.Context) error) error {
 		err := doInner(ctx)
-		if err == nil || job.Attempt < job.MaxAttempts || errors.Is(err, context.Canceled) {
+		if err == nil || errors.Is(err, context.Canceled) {
 			return err
 		}
 		var snooze *river.JobSnoozeError
@@ -127,7 +128,19 @@ func (w *GenerateWorker) Middleware(_ *rivertype.JobRow) []rivertype.WorkerMiddl
 		if parseErr != nil {
 			return err
 		}
-		persistCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+		if errors.Is(err, context.DeadlineExceeded) {
+			if persistErr := w.persistSubmissionUncertain(jobID, "SUBMISSION_UNCERTAIN", "Provider submission exceeded its execution deadline; automatic resubmission is disabled", true); persistErr != nil {
+				if w.Log != nil {
+					w.Log.Error("timed-out submission could not be persisted", "generation_job_id", jobID, "error", persistErr)
+				}
+				return err
+			}
+			return river.JobCancel(err)
+		}
+		if job.Attempt < job.MaxAttempts {
+			return err
+		}
+		persistCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 		record, loadErr := w.load(persistCtx, jobID)
 		if loadErr != nil {
@@ -216,7 +229,7 @@ func (w *GenerateWorker) Work(ctx context.Context, riverJob *river.Job[GenerateA
 		return river.JobCancel(nil)
 	case "submitting":
 		if record.ProviderJobID == nil {
-			return w.markUncertain(ctx, record, "SUBMISSION_INTERRUPTED", "Worker 在提交期间中断，已停止自动重试", true)
+			return w.persistSubmissionUncertain(record.JobID, "SUBMISSION_UNCERTAIN", "Provider submission was interrupted; automatic resubmission is disabled", true)
 		}
 	}
 
@@ -231,6 +244,11 @@ func (w *GenerateWorker) Work(ctx context.Context, riverJob *river.Job[GenerateA
 			if acquireErr != nil {
 				return acquireErr
 			}
+			attemptID, attemptErr := w.beginAttempt(ctx, record, "deadline_poll")
+			if attemptErr != nil {
+				release()
+				return attemptErr
+			}
 			finalPollCtx, cancelFinalPoll := context.WithTimeout(ctx, 45*time.Second)
 			started := time.Now()
 			finalResult, finalPollErr := adapter.Poll(finalPollCtx, submission)
@@ -238,7 +256,7 @@ func (w *GenerateWorker) Work(ctx context.Context, riverJob *river.Job[GenerateA
 			release()
 			breakerKey := record.ProviderID + ":" + record.ModelID
 			w.recordPassiveBreaker(ctx, record, model, breakerKey, finalPollErr)
-			w.recordAttempt(ctx, record, "deadline_poll", time.Since(started), finalPollErr, finalResult.Usage, finalResult.Telemetry)
+			w.finishAttempt(attemptID, record, "deadline_poll", time.Since(started), finalPollErr, finalResult.Usage, finalResult.Telemetry)
 			var finalProviderErr *provider.Error
 			if errors.As(finalPollErr, &finalProviderErr) && finalProviderErr.PauseProvider {
 				if pauseErr := w.pauseProvider(ctx, record, model, finalProviderErr); pauseErr != nil {
@@ -332,7 +350,7 @@ func (w *GenerateWorker) Work(ctx context.Context, riverJob *river.Job[GenerateA
 		if submission.Completed {
 			submitUsage = submission.Result.Usage
 		}
-		w.recordAttempt(ctx, record, "submit", time.Since(started), submitErr, submitUsage, submission.Telemetry)
+		w.finishAttempt(claim.AttemptID, record, "submit", time.Since(started), submitErr, submitUsage, submission.Telemetry)
 		if submitErr != nil {
 			status, _ := w.currentStatus(ctx, record.JobID)
 			if status == "cancelled" || status == "cancelling" {
@@ -370,9 +388,7 @@ func (w *GenerateWorker) Work(ctx context.Context, riverJob *river.Job[GenerateA
 				}
 				cancelRecovery()
 				w.Log.Error("synchronous provider result could not be staged", "generation_job_id", record.JobID, "error", stageErr)
-				persistCtx, cancelPersist := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
-				defer cancelPersist()
-				if persistErr := w.markUncertain(persistCtx, record, "RESULT_STAGING_FAILED", "同步生成已完成，但结果无法可靠暂存；系统不会自动重新提交", false); persistErr != nil {
+				if persistErr := w.persistSubmissionUncertain(record.JobID, "RESULT_STAGING_FAILED", "同步生成已完成，但结果无法可靠暂存；系统不会自动重新提交", false); persistErr != nil {
 					return errors.Join(stageErr, persistErr)
 				}
 				return river.JobCancel(stageErr)
@@ -413,13 +429,18 @@ func (w *GenerateWorker) Work(ctx context.Context, riverJob *river.Job[GenerateA
 	if acquireErr != nil {
 		return acquireErr
 	}
+	attemptID, attemptErr := w.beginAttempt(ctx, record, "poll")
+	if attemptErr != nil {
+		release()
+		return attemptErr
+	}
 	pollCtx, cancelPoll := boundedContext(ctx, 45*time.Second, record.GenerationDeadline)
 	started := time.Now()
 	result, pollErr := adapter.Poll(pollCtx, submissionFromRecord(record))
 	cancelPoll()
 	release()
 	w.recordPassiveBreaker(ctx, record, model, breakerKey, pollErr)
-	w.recordAttempt(ctx, record, "poll", time.Since(started), pollErr, result.Usage, result.Telemetry)
+	w.finishAttempt(attemptID, record, "poll", time.Since(started), pollErr, result.Usage, result.Telemetry)
 	if pollErr != nil {
 		if status, statusErr := w.currentStatus(ctx, record.JobID); statusErr == nil && (status == "cancelling" || status == "cancelled") {
 			tracked, cancelErr := w.completeCancellation(ctx, record, adapter, submissionFromRecord(record), false)
@@ -560,10 +581,15 @@ func (w *GenerateWorker) claimSubmissionSlot(ctx context.Context, item generatio
 	if _, err = tx.Exec(ctx, `INSERT INTO job_events(owner_user_id,batch_id,job_id,event_type,payload) VALUES($1,$2,$3,'job.submitting',jsonb_build_object('status','submitting','attempt',$4::integer))`, item.OwnerID, item.BatchID, item.JobID, attempt); err != nil {
 		return submissionClaim{}, err
 	}
+	var attemptID int64
+	if err = tx.QueryRow(ctx, `INSERT INTO provider_attempts(job_id,provider_id,operation,attempt_no,outcome)
+		VALUES($1,$2,'submit',$3,'started') RETURNING id`, item.JobID, item.ProviderID, attempt).Scan(&attemptID); err != nil {
+		return submissionClaim{}, err
+	}
 	if err = tx.Commit(ctx); err != nil {
 		return submissionClaim{}, err
 	}
-	return submissionClaim{Claimed: true, Attempt: attempt, Deadline: storedDeadline}, nil
+	return submissionClaim{Claimed: true, Attempt: attempt, AttemptID: attemptID, Deadline: storedDeadline}, nil
 }
 
 func maxSubmissionAttempts(policy modelconfig.Policy) int {
@@ -842,6 +868,10 @@ func canonicalRequestFromSnapshot(item generationRecord) provider.CanonicalReque
 	if model.PromptSuffix != "" {
 		prompt += " " + model.PromptSuffix
 	}
+	var explicitSize string
+	if overrides := model.SizeOverrides[item.Resolution]; overrides != nil {
+		explicitSize = overrides[item.AspectRatio]
+	}
 	return provider.CanonicalRequest{
 		JobID:             item.JobID.String(),
 		Model:             model.ProviderModel,
@@ -849,6 +879,7 @@ func canonicalRequestFromSnapshot(item generationRecord) provider.CanonicalReque
 		AspectRatio:       item.AspectRatio,
 		PromptAspectRatio: model.PromptAspectRatio,
 		Resolution:        item.Resolution,
+		Size:              explicitSize,
 		ExpectedImages:    model.OutputsPerDraw,
 		RequestParameters: append([]string(nil), model.RequestParameters...),
 		Options:           item.Options,
@@ -859,7 +890,7 @@ func (w *GenerateWorker) handleProviderError(ctx context.Context, item generatio
 	var providerErr *provider.Error
 	if !errors.As(err, &providerErr) {
 		if duringSubmit {
-			return w.markUncertain(ctx, item, "SUBMISSION_UNCERTAIN", "无法确认上游是否已接收任务，已停止自动重试", true)
+			return w.persistSubmissionUncertain(item.JobID, "SUBMISSION_UNCERTAIN", "无法确认上游是否已接收任务，已停止自动重试", true)
 		}
 		return err
 	}
@@ -869,7 +900,7 @@ func (w *GenerateWorker) handleProviderError(ctx context.Context, item generatio
 		}
 	}
 	if providerErr.SubmissionUncertain {
-		return w.markUncertain(ctx, item, providerErr.Code, "提交结果不确定，已停止自动重试", true)
+		return w.persistSubmissionUncertain(item.JobID, "SUBMISSION_UNCERTAIN", "提交结果不确定，已停止自动重试", true)
 	}
 	if !providerErr.Retryable {
 		return w.fail(ctx, item, providerErr.Code, providerErr.Message, false)
@@ -933,6 +964,87 @@ func safeRetryDelay(jobID uuid.UUID, attempt int) time.Duration {
 	return time.Duration(float64(ceiling) * fraction)
 }
 
+func (w *GenerateWorker) persistSubmissionUncertain(jobID uuid.UUID, code, message string, upstreamMayBeActive bool) error {
+	persistCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	item, err := w.load(persistCtx, jobID)
+	if err != nil {
+		return err
+	}
+	return w.markUncertain(persistCtx, item, code, message, upstreamMayBeActive)
+}
+
+// RunSubmissionRecovery closes the hard-kill gap where the process cannot run
+// its normal deferred persistence. A started submit attempt is written before
+// network I/O, so an overdue unfinished row is durable proof that the request
+// may have reached the provider and must never be submitted again.
+func (w *GenerateWorker) RunSubmissionRecovery(ctx context.Context) {
+	w.recoverUnfinishedSubmissions(ctx)
+	ticker := time.NewTicker(15 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			w.recoverUnfinishedSubmissions(ctx)
+		}
+	}
+}
+
+func (w *GenerateWorker) recoverUnfinishedSubmissions(ctx context.Context) {
+	rows, err := w.DB.Query(ctx, `SELECT j.id,a.created_at
+		FROM generation_jobs j
+		JOIN LATERAL (
+			SELECT created_at FROM provider_attempts
+			WHERE job_id=j.id AND operation='submit' AND outcome='started' AND finished_at IS NULL
+			ORDER BY id DESC LIMIT 1
+		) a ON true
+		WHERE j.status='submitting' AND j.provider_job_id IS NULL
+		ORDER BY a.created_at LIMIT 64`)
+	if err != nil {
+		if w.Log != nil && ctx.Err() == nil {
+			w.Log.Warn("unfinished submission scan failed", "error", err)
+		}
+		return
+	}
+	type candidate struct {
+		jobID     uuid.UUID
+		startedAt time.Time
+	}
+	candidates := make([]candidate, 0, 64)
+	for rows.Next() {
+		var item candidate
+		if err = rows.Scan(&item.jobID, &item.startedAt); err != nil {
+			break
+		}
+		candidates = append(candidates, item)
+	}
+	if rowsErr := rows.Err(); err == nil {
+		err = rowsErr
+	}
+	rows.Close()
+	if err != nil {
+		if w.Log != nil && ctx.Err() == nil {
+			w.Log.Warn("unfinished submission scan could not be read", "error", err)
+		}
+		return
+	}
+	for _, candidate := range candidates {
+		item, loadErr := w.load(ctx, candidate.jobID)
+		if loadErr != nil || item.Status != "submitting" || item.ProviderJobID != nil {
+			continue
+		}
+		deadline := candidate.startedAt.Add(time.Duration(item.ModelSnapshot.Policy.SubmitTimeoutSeconds)*time.Second + 30*time.Second)
+		if time.Now().Before(deadline) {
+			continue
+		}
+		if persistErr := w.persistSubmissionUncertain(item.JobID, "SUBMISSION_UNCERTAIN", "Provider submission did not finish before the durable recovery deadline; automatic resubmission is disabled", true); persistErr != nil && w.Log != nil {
+			w.Log.Error("unfinished submission could not be recovered", "generation_job_id", item.JobID, "error", persistErr)
+		}
+	}
+}
+
 func (w *GenerateWorker) markUncertain(ctx context.Context, item generationRecord, code, message string, upstreamMayBeActive bool) error {
 	deadline := uncertainStateDeadline(time.Now(), item, upstreamMayBeActive)
 	tx, err := w.DB.Begin(ctx)
@@ -941,14 +1053,27 @@ func (w *GenerateWorker) markUncertain(ctx context.Context, item generationRecor
 	}
 	defer tx.Rollback(ctx)
 	var status string
-	if err = tx.QueryRow(ctx, `SELECT status FROM generation_jobs WHERE id=$1 FOR UPDATE`, item.JobID).Scan(&status); err != nil {
+	var providerJobID *string
+	if err = tx.QueryRow(ctx, `SELECT status,provider_job_id FROM generation_jobs WHERE id=$1 FOR UPDATE`, item.JobID).Scan(&status, &providerJobID); err != nil {
 		return err
 	}
 	if isBusinessTerminal(status) {
 		return tx.Commit(ctx)
 	}
+	// Once an authenticated provider job identifier is durable, the task is no
+	// longer an uncertain submission and must stay on the poll/ingest path.
+	if providerJobID != nil {
+		return tx.Commit(ctx)
+	}
 	if status == "cancelling" {
 		return w.markCancelledInTx(ctx, tx, item, false, deadline)
+	}
+	if status != "submitting" && status != "ingesting" {
+		return tx.Commit(ctx)
+	}
+	if _, err = tx.Exec(ctx, `UPDATE provider_attempts SET outcome='uncertain',error_code=$2,error_message=$3,finished_at=now()
+		WHERE id=(SELECT id FROM provider_attempts WHERE job_id=$1 AND operation='submit' AND outcome='started' AND finished_at IS NULL ORDER BY id DESC LIMIT 1)`, item.JobID, code, boundedAttemptMessage(message)); err != nil {
+		return err
 	}
 	if _, err = tx.Exec(ctx, `UPDATE generation_jobs SET status='submission_uncertain',submission_uncertain=true,error_code=$2,error_message=$3,
 		dispatch_state='finished',upstream_active_until=$4,completed_at=now(),updated_at=now() WHERE id=$1`, item.JobID, code, message, deadline); err != nil {
@@ -1074,11 +1199,13 @@ func (w *GenerateWorker) cancelRemote(ctx context.Context, item generationRecord
 	}
 	cancelCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
 	defer cancel()
+	attemptID, attemptErr := w.beginAttempt(cancelCtx, item, "cancel")
+	if attemptErr != nil {
+		return provider.CancelResult{}, attemptErr
+	}
 	started := time.Now()
 	result, err := adapter.Cancel(cancelCtx, submission)
-	recordCtx, cancelRecord := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Second)
-	defer cancelRecord()
-	w.recordAttempt(recordCtx, item, "cancel", time.Since(started), err, nil, result.Telemetry)
+	w.finishAttempt(attemptID, item, "cancel", time.Since(started), err, nil, result.Telemetry)
 	return result, err
 }
 
@@ -1213,13 +1340,18 @@ func (w *GenerateWorker) observeTerminalUpstream(ctx context.Context, item gener
 	if err != nil {
 		return err
 	}
+	attemptID, attemptErr := w.beginAttempt(ctx, item, "cancelled_poll")
+	if attemptErr != nil {
+		release()
+		return attemptErr
+	}
 	pollCtx, cancelPoll := boundedContext(ctx, 45*time.Second, item.UpstreamActiveUntil)
 	started := time.Now()
 	result, pollErr := adapter.Poll(pollCtx, submissionFromRecord(item))
 	cancelPoll()
 	release()
 	w.recordPassiveBreaker(ctx, item, item.ModelSnapshot, item.ProviderID+":"+item.ModelID, pollErr)
-	w.recordAttempt(ctx, item, "cancelled_poll", time.Since(started), pollErr, result.Usage, result.Telemetry)
+	w.finishAttempt(attemptID, item, "cancelled_poll", time.Since(started), pollErr, result.Usage, result.Telemetry)
 	if pollErr == nil && providerResultTerminal(result.Status) {
 		if err := w.clearUpstreamLease(ctx, item.JobID); err != nil {
 			return err
@@ -1697,7 +1829,14 @@ func thumbnailTempPath(directory, size string) string {
 	return filepath.Join(directory, fmt.Sprintf(".thumb-%s-%s.part.webp", size, uuid.NewString()))
 }
 
-func (w *GenerateWorker) recordAttempt(ctx context.Context, item generationRecord, operation string, duration time.Duration, attemptErr error, usage map[string]any, telemetry provider.Telemetry) {
+func (w *GenerateWorker) beginAttempt(ctx context.Context, item generationRecord, operation string) (int64, error) {
+	var attemptID int64
+	err := w.DB.QueryRow(ctx, `INSERT INTO provider_attempts(job_id,provider_id,operation,attempt_no,outcome)
+		VALUES($1,$2,$3,(SELECT count(*)+1 FROM provider_attempts WHERE job_id=$1 AND operation=$3),'started') RETURNING id`, item.JobID, item.ProviderID, operation).Scan(&attemptID)
+	return attemptID, err
+}
+
+func (w *GenerateWorker) finishAttempt(attemptID int64, item generationRecord, operation string, duration time.Duration, attemptErr error, usage map[string]any, telemetry provider.Telemetry) {
 	outcome, code, message := "succeeded", "", ""
 	if attemptErr != nil {
 		outcome, message = "failed", boundedAttemptMessage(attemptErr.Error())
@@ -1710,17 +1849,18 @@ func (w *GenerateWorker) recordAttempt(ctx context.Context, item generationRecor
 			if telemetry.HTTPStatus == 0 {
 				telemetry.HTTPStatus = providerErr.Telemetry.HTTPStatus
 			}
-			if telemetry.HTTPStatus != 0 {
-				message = fmt.Sprintf("provider returned HTTP %d", telemetry.HTTPStatus)
-			}
 		}
 	}
 	telemetry = telemetry.Normalized()
 	usage = sanitizeAttemptUsage(usage)
-	writeCtx, cancelWrite := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Second)
+	writeCtx, cancelWrite := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancelWrite()
-	_, err := w.DB.Exec(writeCtx, `INSERT INTO provider_attempts(job_id,provider_id,operation,attempt_no,provider_request_id,http_status,duration_ms,outcome,error_code,error_message,usage)
-		VALUES($1,$2,$3,(SELECT count(*)+1 FROM provider_attempts WHERE job_id=$1 AND operation=$3),NULLIF($4,''),NULLIF($5,0),$6,$7,NULLIF($8,''),NULLIF($9,''),COALESCE($10,'{}'::jsonb))`, item.JobID, item.ProviderID, operation, telemetry.ProviderRequestID, telemetry.HTTPStatus, duration.Milliseconds(), outcome, code, message, usage)
+	command, err := w.DB.Exec(writeCtx, `UPDATE provider_attempts SET provider_request_id=NULLIF($2,''),http_status=NULLIF($3,0),
+		duration_ms=$4,outcome=$5,error_code=NULLIF($6,''),error_message=NULLIF($7,''),usage=COALESCE($8,'{}'::jsonb),finished_at=now()
+		WHERE id=$1 AND job_id=$9 AND operation=$10 AND outcome='started' AND finished_at IS NULL`, attemptID, telemetry.ProviderRequestID, telemetry.HTTPStatus, duration.Milliseconds(), outcome, code, message, usage, item.JobID, operation)
+	if err == nil && command.RowsAffected() != 1 {
+		err = fmt.Errorf("attempt lifecycle update affected %d rows", command.RowsAffected())
+	}
 	if err != nil && w.Log != nil {
 		w.Log.Warn("provider attempt telemetry could not be persisted",
 			"generation_job_id", item.JobID,

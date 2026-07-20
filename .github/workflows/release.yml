@@ -247,6 +247,39 @@ jobs:
           verify_attestations "$TOOLS_ARCHIVE" tools
           verify_attestations "$WEB_ARCHIVE" web
 
+      # Trivy accepts an OCI image layout directory, while Buildx emits a tarred
+      # OCI layout. Extracting does not alter the object graph that is published.
+      - name: Prepare OCI layouts for scanning
+        run: |
+          set -euo pipefail
+
+          prepare_layout() {
+            local archive="$1"
+            local layout="$2"
+            mkdir -p "$layout"
+            tar --extract --file "$archive" --directory "$layout" \
+              --no-same-owner --no-same-permissions
+            test -f "$layout/oci-layout"
+            test -f "$layout/index.json"
+          }
+
+          api_layout="$RUNNER_TEMP/cornfield-api-oci"
+          worker_layout="$RUNNER_TEMP/cornfield-worker-oci"
+          tools_layout="$RUNNER_TEMP/cornfield-tools-oci"
+          web_layout="$RUNNER_TEMP/cornfield-web-oci"
+
+          prepare_layout "$API_ARCHIVE" "$api_layout"
+          prepare_layout "$WORKER_ARCHIVE" "$worker_layout"
+          prepare_layout "$TOOLS_ARCHIVE" "$tools_layout"
+          prepare_layout "$WEB_ARCHIVE" "$web_layout"
+
+          {
+            echo "API_LAYOUT=${api_layout}"
+            echo "WORKER_LAYOUT=${worker_layout}"
+            echo "TOOLS_LAYOUT=${tools_layout}"
+            echo "WEB_LAYOUT=${web_layout}"
+          } >> "$GITHUB_ENV"
+
       # The vulnerability gate runs before any job has packages:write. Unfixed
       # findings are excluded; fixed HIGH/CRITICAL findings block publication.
       - name: Scan API image
@@ -256,7 +289,7 @@ jobs:
         with:
           version: ${{ env.TRIVY_VERSION }}
           scan-type: image
-          input: ${{ env.API_ARCHIVE }}
+          input: ${{ env.API_LAYOUT }}
           scanners: vuln
           severity: HIGH,CRITICAL
           ignore-unfixed: true
@@ -271,7 +304,7 @@ jobs:
         with:
           version: ${{ env.TRIVY_VERSION }}
           scan-type: image
-          input: ${{ env.WORKER_ARCHIVE }}
+          input: ${{ env.WORKER_LAYOUT }}
           scanners: vuln
           severity: HIGH,CRITICAL
           ignore-unfixed: true
@@ -286,7 +319,7 @@ jobs:
         with:
           version: ${{ env.TRIVY_VERSION }}
           scan-type: image
-          input: ${{ env.TOOLS_ARCHIVE }}
+          input: ${{ env.TOOLS_LAYOUT }}
           scanners: vuln
           severity: HIGH,CRITICAL
           ignore-unfixed: true
@@ -301,7 +334,7 @@ jobs:
         with:
           version: ${{ env.TRIVY_VERSION }}
           scan-type: image
-          input: ${{ env.WEB_ARCHIVE }}
+          input: ${{ env.WEB_LAYOUT }}
           scanners: vuln
           severity: HIGH,CRITICAL
           ignore-unfixed: true

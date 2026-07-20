@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -79,6 +80,10 @@ func TestProductionCatalogIsValid(t *testing.T) {
 	if len(catalog.Models) != 10 || catalog.Hash == "" {
 		t.Fatalf("unexpected catalog: %+v", catalog)
 	}
+	flash, ok := catalog.Find("openrouter-gemini-3-1-flash-image")
+	if !ok || slices.Contains(flash.AspectRatiosForResolution("4K"), "1:4") || !slices.Contains(flash.AspectRatiosForResolution("2K"), "1:4") {
+		t.Fatalf("unexpected Nano Banana 2 resolution-specific ratios: %+v", flash.Capabilities.AspectRatiosByResolution)
+	}
 }
 
 func TestCatalogRejectsIncoherentProviderCapabilities(t *testing.T) {
@@ -107,6 +112,16 @@ func TestCatalogRejectsIncoherentProviderCapabilities(t *testing.T) {
 				model.Capabilities.Resolutions = []string{"1K", "2K"}
 			},
 			want: "selectable resolutions",
+		},
+		{
+			name: "resolution-specific ratios for unknown resolution",
+			mutate: func(model *Model) {
+				model.RequestParameters = []string{"aspect_ratio", "resolution", "n", "input_references"}
+				model.Capabilities.AspectRatios = []string{"1:1"}
+				model.Capabilities.Resolutions = []string{"1K"}
+				model.Capabilities.AspectRatiosByResolution = map[string][]string{"4K": {"1:1"}}
+			},
+			want: "unknown resolution",
 		},
 		{
 			name: "multiple outputs without n",

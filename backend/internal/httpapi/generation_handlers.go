@@ -463,7 +463,8 @@ func (s *Server) createGeneration(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusUnprocessableEntity, "CAPABILITY_INVALID", err.Error(), false, r)
 		return
 	}
-	ratioValid := len(model.Capabilities.AspectRatios) == 0 && input.AspectRatio == "auto" || slices.Contains(model.Capabilities.AspectRatios, input.AspectRatio)
+	allowedRatios := model.AspectRatiosForResolution(input.Resolution)
+	ratioValid := len(allowedRatios) == 0 && input.AspectRatio == "auto" || slices.Contains(allowedRatios, input.AspectRatio)
 	resolutionValid := len(model.Capabilities.Resolutions) == 0 && input.Resolution == "auto" || slices.Contains(model.Capabilities.Resolutions, input.Resolution) || model.Provider == "legnext" && len(model.Capabilities.MidjourneyVersions) > 0
 	if promptLength < 1 || promptLength > 8192 || !ratioValid || !resolutionValid || input.DrawCount < model.Capabilities.DrawCount.Min || input.DrawCount > model.Capabilities.DrawCount.Max {
 		writeError(w, http.StatusUnprocessableEntity, "CAPABILITY_INVALID", "生成参数不在模型支持范围内", false, r)

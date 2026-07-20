@@ -52,6 +52,7 @@ GRANT UPDATE (deleted_at) ON generation_outputs TO studio_api;
 GRANT UPDATE (status, session_version, updated_at) ON users TO studio_api;
 GRANT DELETE ON upload_sessions, generation_rate_limits TO studio_worker;
 GRANT DELETE ON assets TO studio_worker;
+GRANT SELECT (status) ON users TO studio_worker;
 GRANT UPDATE (metadata) ON audit_logs TO studio_worker;
 GRANT UPDATE (username, display_name, password_hash, status, must_change_password,
     temporary_password_expires_at, updated_at) ON users TO studio_worker;
@@ -62,6 +63,7 @@ REVOKE UPDATE (purge_pending) ON assets FROM studio_api;
 REVOKE UPDATE (deleted_at) ON generation_outputs FROM studio_api;
 REVOKE DELETE ON upload_sessions, generation_rate_limits FROM studio_worker;
 REVOKE DELETE ON assets FROM studio_worker;
+REVOKE SELECT (status) ON users FROM studio_worker;
 REVOKE UPDATE (metadata) ON audit_logs FROM studio_worker;
 REVOKE UPDATE (username, display_name, password_hash, status, must_change_password,
     temporary_password_expires_at, updated_at) ON users FROM studio_worker;

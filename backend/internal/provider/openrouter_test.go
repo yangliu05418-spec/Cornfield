@@ -112,6 +112,30 @@ func TestOpenRouterQualityAndPromptAspectRatio(t *testing.T) {
 	}
 }
 
+func TestOpenRouterExplicitSizeSuppressesResolutionAndAspectRatio(t *testing.T) {
+	var payload map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatal(err)
+		}
+		_, _ = w.Write([]byte(`{"data":[{"b64_json":"cG5n","media_type":"image/png"}]}`))
+	}))
+	defer server.Close()
+	adapter := NewOpenRouter("test-key", "")
+	adapter.BaseURL = server.URL
+	adapter.Client = server.Client()
+	_, err := adapter.Submit(context.Background(), CanonicalRequest{
+		Model: "bytedance-seed/seedream-4.5", Prompt: "a corn field", AspectRatio: "16:9", Resolution: "2K", Size: "2560x1440",
+		ExpectedImages: 1, RequestParameters: []string{"size", "resolution", "aspect_ratio", "n"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if payload["size"] != "2560x1440" || payload["resolution"] != nil || payload["aspect_ratio"] != nil {
+		t.Fatalf("payload = %#v", payload)
+	}
+}
+
 func TestOpenRouterSubmitRejectsUngatedReferenceImages(t *testing.T) {
 	adapter := NewOpenRouter("test-key", "")
 	_, err := adapter.Submit(context.Background(), CanonicalRequest{

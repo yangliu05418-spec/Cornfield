@@ -73,11 +73,18 @@ func (o *OpenRouter) Submit(ctx context.Context, input CanonicalRequest) (Submis
 	if supports("n") && input.ExpectedImages > 0 {
 		payload["n"] = input.ExpectedImages
 	}
-	if supports("aspect_ratio") && input.AspectRatio != "" {
-		payload["aspect_ratio"] = input.AspectRatio
-	}
-	if supports("resolution") && input.Resolution != "" {
-		payload["resolution"] = input.Resolution
+	if input.Size != "" {
+		if !supports("size") {
+			return Submission{}, &Error{Code: "UNSUPPORTED_PARAMETER", Message: "model does not support explicit size"}
+		}
+		payload["size"] = input.Size
+	} else {
+		if supports("aspect_ratio") && input.AspectRatio != "" {
+			payload["aspect_ratio"] = input.AspectRatio
+		}
+		if supports("resolution") && input.Resolution != "" {
+			payload["resolution"] = input.Resolution
+		}
 	}
 	if supports("output_format") {
 		payload["output_format"] = "png"

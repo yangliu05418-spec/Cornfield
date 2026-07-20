@@ -868,6 +868,10 @@ func canonicalRequestFromSnapshot(item generationRecord) provider.CanonicalReque
 	if model.PromptSuffix != "" {
 		prompt += " " + model.PromptSuffix
 	}
+	var explicitSize string
+	if overrides := model.SizeOverrides[item.Resolution]; overrides != nil {
+		explicitSize = overrides[item.AspectRatio]
+	}
 	return provider.CanonicalRequest{
 		JobID:             item.JobID.String(),
 		Model:             model.ProviderModel,
@@ -875,6 +879,7 @@ func canonicalRequestFromSnapshot(item generationRecord) provider.CanonicalReque
 		AspectRatio:       item.AspectRatio,
 		PromptAspectRatio: model.PromptAspectRatio,
 		Resolution:        item.Resolution,
+		Size:              explicitSize,
 		ExpectedImages:    model.OutputsPerDraw,
 		RequestParameters: append([]string(nil), model.RequestParameters...),
 		Options:           item.Options,

@@ -423,6 +423,20 @@ func TestGenerationProtocolUsesImmutableModelSnapshot(t *testing.T) {
 	}
 }
 
+func TestCanonicalRequestUsesSnapshotSizeOverride(t *testing.T) {
+	item := generationRecord{
+		JobID: uuid.New(), Prompt: "a cornfield", AspectRatio: "16:9", Resolution: "2K", ExpectedOutputs: 1,
+		ModelSnapshot: modelconfig.Model{
+			ProviderModel: "bytedance-seed/seedream-4.5", OutputsPerDraw: 1,
+			SizeOverrides: map[string]map[string]string{"2K": {"16:9": "2560x1440"}},
+		},
+	}
+	request := canonicalRequestFromSnapshot(item)
+	if request.Size != "2560x1440" || request.Resolution != "2K" || request.AspectRatio != "16:9" {
+		t.Fatalf("request = %+v", request)
+	}
+}
+
 func TestDecodeModelSnapshotRejectsOutputDrift(t *testing.T) {
 	model := modelconfig.Model{
 		ID: "image-model", Provider: "openrouter", ProviderModel: "provider/model", OutputsPerDraw: 1,

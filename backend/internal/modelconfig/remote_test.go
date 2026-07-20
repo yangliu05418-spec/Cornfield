@@ -85,3 +85,14 @@ func TestVerifyOpenRouterRemoteReportsMissingParameter(t *testing.T) {
 		t.Fatalf("report = %+v", report)
 	}
 }
+
+func TestOpenRouterSizeAliasRequiresResolutionAndAspectRatio(t *testing.T) {
+	supported := map[string]openRouterParameter{"resolution": {}, "aspect_ratio": {}}
+	if !openRouterEndpointSupports("size", supported) {
+		t.Fatal("size alias was not accepted for a convertible endpoint")
+	}
+	delete(supported, "aspect_ratio")
+	if openRouterEndpointSupports("size", supported) {
+		t.Fatal("size alias was accepted without aspect_ratio")
+	}
+}

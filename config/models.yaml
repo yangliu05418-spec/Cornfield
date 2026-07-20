@@ -1,4 +1,4 @@
-revision: 5
+revision: 6
 models:
   - id: legnext-midjourney-v7
     display_name: Midjourney V7
@@ -166,16 +166,33 @@ models:
     provider_model: bytedance-seed/seedream-4.5
     enabled: true
     order: 70
-    request_parameters: ["resolution", "aspect_ratio", "n", "input_references"]
+    request_parameters: ["size", "resolution", "aspect_ratio", "n", "input_references"]
     outputs_per_draw: 1
     capabilities:
       text_to_image: true
       image_to_image: true
       aspect_ratios: ["1:1", "1:2", "2:1", "2:3", "3:2", "3:4", "4:3", "4:5", "5:4", "9:16", "16:9", "9:20", "20:9", "9:21", "21:9"]
-      resolutions: ["1K", "2K", "4K"]
+      resolutions: ["2K", "4K"]
       max_reference_images: 14
       max_reference_bytes: 26214400
       draw_count: { min: 1, max: 4, default: 1 }
+    size_overrides:
+      2K:
+        "1:1": "2048x2048"
+        "1:2": "1440x2880"
+        "2:1": "2880x1440"
+        "2:3": "1664x2496"
+        "3:2": "2496x1664"
+        "3:4": "1728x2304"
+        "4:3": "2304x1728"
+        "4:5": "1792x2240"
+        "5:4": "2240x1792"
+        "9:16": "1440x2560"
+        "16:9": "2560x1440"
+        "9:20": "1344x3008"
+        "20:9": "3008x1344"
+        "9:21": "1296x3024"
+        "21:9": "3024x1296"
     policy: { submit_timeout_seconds: 300, generation_timeout_seconds: 360, max_concurrency: 4, max_safe_retries: 2, breaker_min_requests: 10, breaker_failure_ratio: 0.5, breaker_cooldown_seconds: 30, allowed_output_hosts: [] }
 
   - id: openrouter-flux-2-pro

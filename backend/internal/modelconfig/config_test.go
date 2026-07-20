@@ -227,6 +227,38 @@ func TestMaxSubmitTimeoutUsesEnabledModels(t *testing.T) {
 	}
 }
 
+func TestSeedreamExplicitSizeCatalog(t *testing.T) {
+	catalog, err := Load(filepath.Join("..", "..", "..", "config", "models.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	model, ok := catalog.Find("openrouter-seedream-4-5")
+	if !ok {
+		t.Fatal("Seedream model missing")
+	}
+	if strings.Join(model.Capabilities.Resolutions, ",") != "2K,4K" {
+		t.Fatalf("resolutions = %#v", model.Capabilities.Resolutions)
+	}
+	if got := model.SizeOverrides["2K"]["16:9"]; got != "2560x1440" {
+		t.Fatalf("16:9 2K override = %q", got)
+	}
+	if len(model.SizeOverrides["2K"]) != len(model.Capabilities.AspectRatios) {
+		t.Fatalf("size override count = %d, ratios = %d", len(model.SizeOverrides["2K"]), len(model.Capabilities.AspectRatios))
+	}
+}
+
+func TestSeedreamSizeOverridesRejectUnsafeArea(t *testing.T) {
+	model := validOpenRouterModel()
+	model.ProviderModel = "bytedance-seed/seedream-4.5"
+	model.RequestParameters = []string{"size", "resolution", "aspect_ratio", "n", "input_references"}
+	model.Capabilities.AspectRatios = []string{"16:9"}
+	model.Capabilities.Resolutions = []string{"2K"}
+	model.SizeOverrides = map[string]map[string]string{"2K": {"16:9": "2048x1152"}}
+	if err := validateCapabilities(model); err == nil || !strings.Contains(err.Error(), "minimum pixel area") {
+		t.Fatalf("validateCapabilities() = %v", err)
+	}
+}
+
 func validOpenRouterModel() Model {
 	return Model{
 		ID:                "openrouter-test",

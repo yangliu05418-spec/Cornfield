@@ -13,6 +13,7 @@ type CanonicalRequest struct {
 	AspectRatio       string
 	PromptAspectRatio bool
 	Resolution        string
+	Size              string
 	ExpectedImages    int
 	ReferenceData     []string
 	ReferenceURLs     []string

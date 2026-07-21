@@ -92,6 +92,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /api/v1/generations/{id}/cancel", s.requireAuth(s.requireCSRF(http.HandlerFunc(s.cancelBatch))))
 	mux.Handle("POST /api/v1/generations/{id}/retry", s.requireAuth(s.requireCSRF(http.HandlerFunc(s.retryBatch))))
 	mux.Handle("POST /api/v1/generations/{id}/jobs/{jobID}/cancel", s.requireAuth(s.requireCSRF(http.HandlerFunc(s.cancelJob))))
+	mux.Handle("DELETE /api/v1/generations/{id}/jobs/{jobID}", s.requireAuth(s.requireCSRF(http.HandlerFunc(s.dismissJob))))
 	mux.Handle("GET /api/v1/events", s.requireAuth(http.HandlerFunc(s.events)))
 	mux.Handle("POST /api/v1/uploads", s.requireAuth(s.requireCSRF(http.HandlerFunc(s.createUpload))))
 	mux.Handle("PUT /api/v1/uploads/{id}/content", s.requireAuth(s.requireCSRF(http.HandlerFunc(s.uploadContent))))

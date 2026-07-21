@@ -279,7 +279,8 @@ func (o *OpenRouter) Probe(ctx context.Context) Health {
 
 func httpProviderError(res *http.Response, secrets ...string) error {
 	message := fmt.Sprintf("provider returned HTTP %d", res.StatusCode)
-	if detail := readProviderErrorDetail(res.Body, secrets); detail != "" {
+	detail := readProviderErrorDetail(res.Body, secrets)
+	if detail != "" {
 		message += ": " + detail
 	}
 	retryable := res.StatusCode == http.StatusTooManyRequests || res.StatusCode >= 500
@@ -287,9 +288,29 @@ func httpProviderError(res *http.Response, secrets ...string) error {
 	// authorization failure; neither proves the whole credential is unusable.
 	// Only definitive key/quota failures pause every queued request.
 	pause := res.StatusCode == http.StatusUnauthorized || res.StatusCode == http.StatusPaymentRequired
-	providerError := &Error{Code: fmt.Sprintf("PROVIDER_HTTP_%d", res.StatusCode), Message: message, Retryable: retryable, PauseProvider: pause, Telemetry: responseTelemetryExcluding(res, secrets)}
+	code := fmt.Sprintf("PROVIDER_HTTP_%d", res.StatusCode)
+	if contentPolicyErrorDetail(detail) {
+		code = "CONTENT_POLICY_REJECTED"
+		retryable = false
+		pause = false
+	}
+	providerError := &Error{Code: code, Message: message, Retryable: retryable, PauseProvider: pause, Telemetry: responseTelemetryExcluding(res, secrets)}
 	providerError.RetryAfter = parseRetryAfter(res.Header.Get("Retry-After"), time.Now())
 	return providerError
+}
+
+func contentPolicyErrorDetail(detail string) bool {
+	detail = strings.ToLower(strings.TrimSpace(detail))
+	for _, marker := range []string{
+		"content policy", "content moderated", "request moderated",
+		"sensitive information", "sensitive content", "safety policy",
+		"safety system", "moderation policy",
+	} {
+		if strings.Contains(detail, marker) {
+			return true
+		}
+	}
+	return false
 }
 
 var (

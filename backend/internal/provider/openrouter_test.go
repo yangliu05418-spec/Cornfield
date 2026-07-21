@@ -213,6 +213,22 @@ func TestOpenRouterErrorDetailIsBoundedAndRedacted(t *testing.T) {
 	}
 }
 
+func TestOpenRouterContentPolicyClassificationUsesExplicitDetail(t *testing.T) {
+	for _, test := range []struct {
+		detail string
+		want   bool
+	}{
+		{detail: "The output image may contain sensitive information", want: true},
+		{detail: "request rejected by the safety system", want: true},
+		{detail: "invalid width and height", want: false},
+		{detail: "permission denied", want: false},
+	} {
+		if got := contentPolicyErrorDetail(test.detail); got != test.want {
+			t.Errorf("contentPolicyErrorDetail(%q) = %v, want %v", test.detail, got, test.want)
+		}
+	}
+}
+
 func TestOpenRouterAcceptedEmptyResultIsUncertain(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = w.Write([]byte(`{"id":"generation-1","data":[]}`))

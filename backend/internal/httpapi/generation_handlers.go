@@ -293,6 +293,7 @@ type jobResponse struct {
 	ErrorMessage    *string                    `json:"error_message,omitempty"`
 	Outputs         []generationOutputResponse `json:"outputs"`
 	DeletedOutputs  []int                      `json:"deleted_outputs,omitempty"`
+	DismissedAt     *time.Time                 `json:"dismissed_at,omitempty"`
 }
 
 type generationOutputResponse struct {
@@ -667,7 +668,7 @@ func (s *Server) listGenerations(w http.ResponseWriter, r *http.Request) {
 		batchIDs[index] = items[index].ID
 	}
 
-	jobRows, err := s.db.Query(r.Context(), `SELECT batch_id,id,draw_index,status,expected_outputs,error_code,error_message
+	jobRows, err := s.db.Query(r.Context(), `SELECT batch_id,id,draw_index,status,expected_outputs,error_code,error_message,dismissed_at
 		FROM generation_jobs WHERE batch_id=ANY($1) ORDER BY batch_id,draw_index,id`, batchIDs)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "DATABASE_ERROR", "读取任务失败", true, r)
@@ -676,11 +677,12 @@ func (s *Server) listGenerations(w http.ResponseWriter, r *http.Request) {
 	for jobRows.Next() {
 		var batchID uuid.UUID
 		var job jobResponse
-		if err = jobRows.Scan(&batchID, &job.ID, &job.DrawIndex, &job.Status, &job.ExpectedOutputs, &job.ErrorCode, &job.ErrorMessage); err != nil {
+		if err = jobRows.Scan(&batchID, &job.ID, &job.DrawIndex, &job.Status, &job.ExpectedOutputs, &job.ErrorCode, &job.ErrorMessage, &job.DismissedAt); err != nil {
 			jobRows.Close()
 			writeError(w, http.StatusInternalServerError, "DATABASE_ERROR", "读取任务失败", true, r)
 			return
 		}
+		job.ErrorMessage = publicJobError(job.ErrorCode)
 		assembler.addJob(batchID, job)
 	}
 	if err = jobRows.Err(); err != nil {
@@ -747,7 +749,7 @@ func (s *Server) loadBatch(ctx context.Context, id uuid.UUID, sess session) (bat
 	if err != nil {
 		return item, err
 	}
-	rows, err := s.db.Query(ctx, `SELECT id,draw_index,status,expected_outputs,error_code,error_message FROM generation_jobs WHERE batch_id=$1 ORDER BY draw_index`, id)
+	rows, err := s.db.Query(ctx, `SELECT id,draw_index,status,expected_outputs,error_code,error_message,dismissed_at FROM generation_jobs WHERE batch_id=$1 ORDER BY draw_index`, id)
 	if err != nil {
 		return item, err
 	}
@@ -755,10 +757,11 @@ func (s *Server) loadBatch(ctx context.Context, id uuid.UUID, sess session) (bat
 	jobIndexes := make(map[uuid.UUID]int, item.DrawCount)
 	for rows.Next() {
 		var job jobResponse
-		if err := rows.Scan(&job.ID, &job.DrawIndex, &job.Status, &job.ExpectedOutputs, &job.ErrorCode, &job.ErrorMessage); err != nil {
+		if err := rows.Scan(&job.ID, &job.DrawIndex, &job.Status, &job.ExpectedOutputs, &job.ErrorCode, &job.ErrorMessage, &job.DismissedAt); err != nil {
 			rows.Close()
 			return item, err
 		}
+		job.ErrorMessage = publicJobError(job.ErrorCode)
 		job.Outputs = make([]generationOutputResponse, 0, job.ExpectedOutputs)
 		jobIndexes[job.ID] = len(item.Jobs)
 		item.Jobs = append(item.Jobs, job)
@@ -795,6 +798,28 @@ func (s *Server) loadBatch(ctx context.Context, id uuid.UUID, sess session) (bat
 		}
 	}
 	return item, outputRows.Err()
+}
+
+func publicJobError(code *string) *string {
+	if code == nil {
+		return nil
+	}
+	message := "生成失败，请稍后重试"
+	switch *code {
+	case "CONTENT_POLICY_REJECTED":
+		message = "图片可能触发安全策略，请调整描述"
+	case "UNSUPPORTED_PARAMETER", "PROVIDER_HTTP_400", "PROVIDER_HTTP_413", "PROVIDER_HTTP_422":
+		message = "当前参数无法生成，请调整后重试"
+	case "PROVIDER_IMAGE_INVALID", "PROVIDER_RESPONSE_INVALID", "PROVIDER_EMPTY_RESULT", "PROVIDER_OUTPUT_COUNT_INVALID":
+		message = "生成结果无法处理，请调整参数后重试"
+	case "PROVIDER_HTTP_429", "SUBMIT_RETRIES_EXHAUSTED":
+		message = "生成服务繁忙，请稍后重试"
+	case "REFERENCE_READ_FAILED":
+		message = "参考图无法读取，请重新添加后重试"
+	case "SUBMISSION_UNCERTAIN", "SUBMISSION_INTERRUPTED", "RESULT_STAGING_FAILED":
+		message = "任务提交结果不确定，请等待核查或移除记录"
+	}
+	return &message
 }
 
 func (s *Server) cancelBatch(w http.ResponseWriter, r *http.Request) {
@@ -958,6 +983,64 @@ func (s *Server) cancelJob(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusAccepted, map[string]any{"status": status, "cancel_mode": cancelMode, "cost_may_have_been_incurred": cancelMode == "discard_result_only"})
 }
 
+func (s *Server) dismissJob(w http.ResponseWriter, r *http.Request) {
+	batchID, ok := parseUUIDParam(w, r, "id")
+	if !ok {
+		return
+	}
+	jobID, ok := parseUUIDParam(w, r, "jobID")
+	if !ok {
+		return
+	}
+	sess := currentSession(r)
+	tx, err := s.db.Begin(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "DATABASE_ERROR", "移除失败记录失败", true, r)
+		return
+	}
+	defer tx.Rollback(r.Context())
+
+	var ownerID uuid.UUID
+	var status string
+	var dismissedAt *time.Time
+	err = tx.QueryRow(r.Context(), `SELECT b.owner_user_id,j.status,j.dismissed_at
+		FROM generation_jobs j JOIN generation_batches b ON b.id=j.batch_id
+		WHERE b.id=$1 AND j.id=$2 AND (b.owner_user_id=$3 OR $4='admin') FOR UPDATE OF j`,
+		batchID, jobID, sess.UserID, sess.Role).Scan(&ownerID, &status, &dismissedAt)
+	if isNotFound(err) {
+		writeError(w, http.StatusNotFound, "JOB_NOT_FOUND", "抽卡任务不存在", false, r)
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "DATABASE_ERROR", "移除失败记录失败", true, r)
+		return
+	}
+	if !dismissibleJobStatus(status) {
+		writeError(w, http.StatusConflict, "JOB_NOT_DISMISSIBLE", "只能移除已经结束的失败记录", false, r)
+		return
+	}
+	if dismissedAt == nil {
+		if _, err = tx.Exec(r.Context(), `UPDATE generation_jobs SET dismissed_at=now(),updated_at=now() WHERE id=$1`, jobID); err != nil {
+			writeError(w, http.StatusInternalServerError, "DATABASE_ERROR", "移除失败记录失败", true, r)
+			return
+		}
+		if _, err = tx.Exec(r.Context(), `INSERT INTO job_events(owner_user_id,batch_id,job_id,event_type,payload)
+			VALUES($1,$2,$3,'job.dismissed',jsonb_build_object('status',$4::text,'dismissed',true))`, ownerID, batchID, jobID, status); err != nil {
+			writeError(w, http.StatusInternalServerError, "DATABASE_ERROR", "移除失败记录失败", true, r)
+			return
+		}
+	}
+	if err = tx.Commit(r.Context()); err != nil {
+		writeError(w, http.StatusInternalServerError, "DATABASE_ERROR", "移除失败记录失败", true, r)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func dismissibleJobStatus(status string) bool {
+	return status == "failed" || status == "submission_uncertain" || status == "cancelled"
+}
+
 func (s *Server) retryBatch(w http.ResponseWriter, r *http.Request) {
 	id, ok := parseUUIDParam(w, r, "id")
 	if !ok {
@@ -1011,7 +1094,7 @@ func (s *Server) retryBatch(w http.ResponseWriter, r *http.Request) {
 	}
 	rows, err := tx.Query(r.Context(), `UPDATE generation_jobs j SET status='queued',dispatch_state='pending',river_job_id=NULL,provider_job_id=NULL,
 		error_code=NULL,error_message=NULL,submission_uncertain=false,retryable=true,next_attempt_at=now(),attempt_count=0,
-		generation_deadline=NULL,execution_generation=execution_generation+1,dispatched_at=NULL,started_at=NULL,completed_at=NULL,cancel_mode=NULL,updated_at=now()
+		generation_deadline=NULL,execution_generation=execution_generation+1,dispatched_at=NULL,started_at=NULL,completed_at=NULL,cancel_mode=NULL,dismissed_at=NULL,updated_at=now()
 		WHERE j.batch_id=$1 AND j.status='failed' AND j.retryable=true AND NOT EXISTS(SELECT 1 FROM generation_outputs o WHERE o.job_id=j.id) RETURNING id`, id)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "DATABASE_ERROR", "重试任务失败", true, r)

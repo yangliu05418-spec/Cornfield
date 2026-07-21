@@ -226,21 +226,21 @@ func (s *Server) reconcileSubmission(w http.ResponseWriter, r *http.Request) {
 		var command pgconn.CommandTag
 		command, err = tx.Exec(r.Context(), `UPDATE generation_jobs SET status='failed',dispatch_state='finished',river_job_id=NULL,
 			submission_uncertain=false,retryable=false,generation_deadline=NULL,upstream_active_until=NULL,completed_at=now(),cancel_mode=NULL,
-			error_code='PROVIDER_RESULT_UNRECOVERABLE',error_message='Provider accepted the request, but its charged result cannot be recovered',updated_at=now()
+			error_code='PROVIDER_RESULT_UNRECOVERABLE',error_message='生成失败，请稍后重试',updated_at=now()
 			WHERE id=$1 AND status='submission_uncertain'`, jobID)
 		rowsAffected = command.RowsAffected()
 	} else if plan.ProviderJobID != nil {
 		var command pgconn.CommandTag
 		command, err = tx.Exec(r.Context(), `UPDATE generation_jobs SET status='queued',dispatch_state='pending',river_job_id=NULL,
 			provider_job_id=$2,submission_uncertain=false,retryable=true,next_attempt_at=now(),generation_deadline=$3,
-			upstream_active_until=$3,execution_generation=execution_generation+1,dispatched_at=NULL,completed_at=NULL,cancel_mode=NULL,error_code=NULL,error_message=NULL,updated_at=now()
+			upstream_active_until=$3,execution_generation=execution_generation+1,dispatched_at=NULL,completed_at=NULL,cancel_mode=NULL,error_code=NULL,error_message=NULL,dismissed_at=NULL,updated_at=now()
 			WHERE id=$1 AND status='submission_uncertain'`, jobID, *plan.ProviderJobID, *plan.UpstreamActiveUntil)
 		rowsAffected = command.RowsAffected()
 	} else {
 		var command pgconn.CommandTag
 		command, err = tx.Exec(r.Context(), `UPDATE generation_jobs SET status='queued',dispatch_state='pending',river_job_id=NULL,
 			provider_job_id=NULL,submission_uncertain=false,retryable=true,next_attempt_at=now(),generation_deadline=NULL,upstream_active_until=NULL,
-			attempt_count=0,execution_generation=execution_generation+1,dispatched_at=NULL,started_at=NULL,completed_at=NULL,cancel_mode=NULL,error_code=NULL,error_message=NULL,updated_at=now()
+			attempt_count=0,execution_generation=execution_generation+1,dispatched_at=NULL,started_at=NULL,completed_at=NULL,cancel_mode=NULL,error_code=NULL,error_message=NULL,dismissed_at=NULL,updated_at=now()
 			WHERE id=$1 AND status='submission_uncertain'`, jobID)
 		rowsAffected = command.RowsAffected()
 	}

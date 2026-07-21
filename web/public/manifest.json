@@ -3,7 +3,7 @@
   "name": "Cornfield Private Image Studio",
   "icons": [
     {
-      "src": "cornfield-mark.svg",
+      "src": "cornfield-cube.svg",
       "type": "image/svg+xml",
       "sizes": "any",
       "purpose": "any maskable"

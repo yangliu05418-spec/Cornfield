@@ -16,8 +16,20 @@ test('landing page uses the production static shell', async ({
   )
   await expect(page.locator('.landing-cube-mark').first()).toHaveAttribute(
     'src',
-    '/cornfield-mark.svg',
+    '/cornfield-cube.svg',
   )
+  await expect(page.locator('.landing-orbit-item')).toHaveCount(30)
+  await expect(page.locator('.landing-orbit-item').first()).toHaveCSS(
+    'animation-name',
+    'landing-orbit',
+  )
+  const filmImage = await page.locator('.landing-film-image').boundingBox()
+  const filmMark = await page
+    .locator('.landing-film-frame .landing-cube-mark')
+    .boundingBox()
+  expect(filmImage?.width).toBeGreaterThan(1_000)
+  expect(filmMark?.width).toBeLessThanOrEqual(24)
+  expect(filmMark?.height).toBeLessThanOrEqual(24)
   await expect(
     page.getByRole('link', { name: '进入工作室' }).first(),
   ).toHaveAttribute('href', '/app/login')
@@ -27,11 +39,13 @@ test('landing page uses the production static shell', async ({
       (scripts) => scripts.filter((script) => script.textContent.trim()).length,
     )
   expect(executableInlineScripts).toBe(0)
+  await page.screenshot({
+    path: testInfo.outputPath('landing-desktop.png'),
+    fullPage: true,
+  })
   await page.setViewportSize({ width: 390, height: 844 })
   for (const sentence of await page
-    .locator(
-      '.landing-hero h1 span, .landing-intro span, .landing-closing h2 span',
-    )
+    .locator('.landing-hero h1 span, .landing-closing h2 span')
     .all()) {
     expect(
       await sentence.evaluate(

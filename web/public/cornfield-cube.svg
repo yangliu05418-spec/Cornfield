@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Cornfield">
+  <g fill="none" stroke="#d1fe17" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M32 6 54 18.5 32 31 10 18.5 32 6Z"/>
+    <path d="M10 18.5V45.5L32 58V31L10 18.5Z"/>
+    <path d="M54 18.5V45.5L32 58V31L54 18.5Z"/>
+  </g>
+</svg>

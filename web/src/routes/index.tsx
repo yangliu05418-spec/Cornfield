@@ -1,15 +1,46 @@
 import { createFileRoute, Link } from '@tanstack/react-router'
 import { ArrowRight, Play, Search } from 'lucide-react'
+import type { CSSProperties } from 'react'
 
 export const Route = createFileRoute('/')({ component: LandingPage })
 
 const floatingFrames = [
-  ['horizon', '远处地平线上的光'],
-  ['figure', '巨大空间中的一人'],
-  ['fabric', '暗处悬浮的织物'],
-  ['water', '黑色水面上的微光'],
-  ['grass', '风中的旷野'],
-  ['room', '通向光的房间'],
+  ['horizon', 156, 1.32, -5, 0.82],
+  ['solitude', 82, 0.72, 4, 0.58],
+  ['curtain', 108, 0.88, -2, 0.9],
+  ['black-cube', 92, 1, 3, 0.46],
+  ['red-field', 132, 1.42, -4, 0.78],
+  ['tree', 84, 0.92, 3, 0.5],
+  ['passage', 132, 1.48, 2, 0.86],
+  ['figure', 86, 0.72, -3, 0.56],
+  ['doors', 122, 1.36, 4, 0.76],
+  ['fabric', 102, 0.88, -3, 0.72],
+  ['chair', 138, 1.44, -2, 0.9],
+  ['room', 82, 0.72, 4, 0.48],
+  ['grass', 118, 1.28, -3, 0.8],
+  ['water', 84, 0.78, 3, 0.52],
+  ['red-field', 140, 1.42, 2, 0.76],
+  ['solitude', 80, 0.72, -4, 0.4],
+  ['tree', 106, 0.92, 2, 0.72],
+  ['curtain', 86, 0.88, -3, 0.4],
+  ['horizon', 138, 1.32, 4, 0.76],
+  ['black-cube', 84, 1, -2, 0.46],
+  ['passage', 136, 1.48, 3, 0.76],
+  ['figure', 86, 0.72, -4, 0.56],
+  ['doors', 116, 1.36, 3, 0.84],
+  ['fabric', 80, 0.88, -2, 0.42],
+  ['chair', 74, 1.44, 4, 0.26],
+  ['water', 70, 0.78, -3, 0.24],
+  ['tree', 62, 0.92, 2, 0.18],
+  ['black-cube', 64, 1, -2, 0.16],
+  ['grass', 70, 1.28, 3, 0.2],
+  ['curtain', 68, 0.88, -3, 0.18],
+] as const
+
+const orbitRings = [
+  { x: '47%', y: '43%', duration: 38 },
+  { x: '42%', y: '37%', duration: 34 },
+  { x: '37%', y: '32%', duration: 31 },
 ] as const
 
 const visions = [
@@ -31,7 +62,7 @@ const visions = [
 ] as const
 
 function CubeMark() {
-  return <img className="landing-cube-mark" src="/cornfield-mark.svg" alt="" />
+  return <img className="landing-cube-mark" src="/cornfield-cube.svg" alt="" />
 }
 
 function LandingPage() {
@@ -66,14 +97,33 @@ function LandingPage() {
 
       <section className="landing-hero" aria-labelledby="landing-title">
         <div className="landing-collage" aria-hidden="true">
-          {floatingFrames.map(([image, alt]) => (
-            <img
-              key={image}
-              className={`landing-tile landing-tile-${image}`}
-              src={`/cornfield-${image}.webp`}
-              alt={alt}
-            />
-          ))}
+          {floatingFrames.map(
+            ([image, width, ratio, rotation, opacity], index) => (
+              <span
+                key={`${image}-${index}`}
+                className="landing-orbit-item"
+                style={
+                  {
+                    '--tile-width': `${width}px`,
+                    '--tile-ratio': ratio,
+                    '--tile-rotation': `${rotation}deg`,
+                    '--tile-opacity': opacity,
+                    '--orbit-x': orbitRings[index % orbitRings.length].x,
+                    '--orbit-y': orbitRings[index % orbitRings.length].y,
+                    '--orbit-start': `${(index / floatingFrames.length) * 100}%`,
+                    '--orbit-duration': `${orbitRings[index % orbitRings.length].duration}s`,
+                    '--tile-delay': `${index * 32}ms`,
+                  } as CSSProperties
+                }
+              >
+                <img
+                  className="landing-tile"
+                  src={`/cornfield-${image}.webp`}
+                  alt=""
+                />
+              </span>
+            ),
+          )}
         </div>
 
         <div className="landing-hero-copy">
@@ -82,20 +132,19 @@ function LandingPage() {
             <span>让想象先于现实。</span>
             <span>让图像抵达眼前。</span>
           </h1>
-          <p className="landing-intro">
-            <span>有些画面，先于语言存在。</span>
-            <span>让模型彼此靠近，让想象不必等待。</span>
-          </p>
           <div className="landing-hero-actions">
             <Link to="/app/login" className="landing-primary-button">
               进入工作室 <ArrowRight size={17} strokeWidth={1.5} />
             </Link>
             <a href="#film" className="landing-secondary-button">
-              <Play size={14} fill="currentColor" strokeWidth={0} />
-              看一束光如何抵达
+              探索创作方式
             </a>
           </div>
         </div>
+        <a href="#film" className="landing-film-link">
+          <Play size={12} fill="currentColor" strokeWidth={0} />
+          观看一束光如何抵达
+        </a>
       </section>
 
       <section className="landing-film" id="film" aria-labelledby="film-title">
@@ -104,7 +153,11 @@ function LandingPage() {
           <span>01 / 03</span>
         </div>
         <div className="landing-film-frame">
-          <img src="/cornfield-horizon.webp" alt="暮色下延伸至地平线的田野" />
+          <img
+            className="landing-film-image"
+            src="/cornfield-horizon.webp"
+            alt="暮色下延伸至地平线的田野"
+          />
           <div className="landing-film-scrim" aria-hidden="true" />
           <div className="landing-film-title" id="film-title">
             <span>观看</span>

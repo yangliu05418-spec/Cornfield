@@ -48,7 +48,7 @@ function LoginPage() {
         返回首页
       </Link>
       <section className="login-panel">
-        <img className="login-mark" src="/cornfield-mark.svg" alt="" />
+        <img className="login-mark" src="/cornfield-cube.svg" alt="" />
         <p className="eyebrow">PRIVATE WORKSPACE</p>
         <h1>回到创作现场</h1>
         <p className="login-copy">使用管理员分配的内部账号进入 Cornfield。</p>

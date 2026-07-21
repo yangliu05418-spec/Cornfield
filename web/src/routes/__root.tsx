@@ -22,7 +22,7 @@ export const Route = createRootRoute({
     ],
     links: [
       { rel: 'stylesheet', href: appCss },
-      { rel: 'icon', href: '/cornfield-mark.svg', type: 'image/svg+xml' },
+      { rel: 'icon', href: '/cornfield-cube.svg', type: 'image/svg+xml' },
       { rel: 'manifest', href: '/manifest.json' },
     ],
   }),

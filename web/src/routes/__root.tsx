@@ -13,11 +13,10 @@ export const Route = createRootRoute({
     meta: [
       { charSet: 'utf-8' },
       { name: 'viewport', content: 'width=device-width, initial-scale=1' },
-      { title: 'Cornfield — Private Image Studio' },
+      { title: 'Cornfield — 未来影像工作室' },
       {
         name: 'description',
-        content:
-          'A private, high-performance image generation workspace by Cornfield.',
+        content: '一间安静、私有、始终在场的图像创作工作室。',
       },
       { name: 'theme-color', content: '#0f1113' },
     ],

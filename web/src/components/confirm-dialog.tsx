@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react'
+import { useEffect, useId, useRef } from 'react'
 
 export function ConfirmDialog({
   open,
@@ -20,6 +20,8 @@ export function ConfirmDialog({
   onConfirm: () => void
 }) {
   const ref = useRef<HTMLDialogElement>(null)
+  const titleID = useId()
+  const descriptionID = useId()
   useEffect(() => {
     const dialog = ref.current
     if (!dialog) return
@@ -30,6 +32,8 @@ export function ConfirmDialog({
     <dialog
       ref={ref}
       className="confirm-dialog"
+      aria-labelledby={titleID}
+      aria-describedby={descriptionID}
       onCancel={(event) => {
         event.preventDefault()
         if (!busy) onCancel()
@@ -39,8 +43,8 @@ export function ConfirmDialog({
       }}
     >
       <p className="eyebrow">CONFIRM ACTION</p>
-      <h2>{title}</h2>
-      <p>{description}</p>
+      <h2 id={titleID}>{title}</h2>
+      <p id={descriptionID}>{description}</p>
       <div className="confirm-dialog-actions">
         <button
           type="button"

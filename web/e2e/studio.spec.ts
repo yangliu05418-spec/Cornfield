@@ -10,9 +10,13 @@ test('landing page uses the production static shell', async ({
   await page.setViewportSize({ width: 1440, height: 960 })
   await page.goto('/')
 
-  await expect(page).toHaveTitle('Cornfield — Private Image Studio')
+  await expect(page).toHaveTitle('Cornfield — 未来影像工作室')
   await expect(page.getByRole('heading', { level: 1 })).toContainText(
-    '让图像发生。',
+    '让想象先于现实。',
+  )
+  await expect(page.locator('.landing-cube-mark').first()).toHaveAttribute(
+    'src',
+    '/cornfield-mark.svg',
   )
   await expect(
     page.getByRole('link', { name: '进入工作室' }).first(),
@@ -23,6 +27,18 @@ test('landing page uses the production static shell', async ({
       (scripts) => scripts.filter((script) => script.textContent.trim()).length,
     )
   expect(executableInlineScripts).toBe(0)
+  await page.setViewportSize({ width: 390, height: 844 })
+  for (const sentence of await page
+    .locator(
+      '.landing-hero h1 span, .landing-intro span, .landing-closing h2 span',
+    )
+    .all()) {
+    expect(
+      await sentence.evaluate(
+        (element) => element.scrollWidth <= element.clientWidth,
+      ),
+    ).toBe(true)
+  }
   await page.screenshot({ path: testInfo.outputPath('landing.png') })
   expect(errors).toEqual([])
 })
@@ -102,6 +118,9 @@ test('account menu exposes password change', async ({ page }) => {
 
   await expect(page).toHaveURL(/\/app\/change-password$/)
   await expect(page.getByRole('heading', { name: '修改密码' })).toBeVisible()
+  await expect(page.getByRole('button', { name: '退出登录' })).toBeVisible()
+  await page.getByRole('link', { name: '返回工作区' }).click()
+  await expect(page).toHaveURL(/\/app\/create$/)
 })
 
 test('a protected API 401 clears the studio and returns to login', async ({
@@ -349,6 +368,20 @@ test('asset workspace creates folders, moves assets, and archives without deleti
   await page.goto('/app/assets')
 
   await expect(page.getByRole('heading', { name: '资产工作台' })).toBeVisible()
+  await page.getByRole('button', { name: '永久删除' }).first().click()
+  const confirm = page.getByRole('dialog', { name: '永久删除资产' })
+  await expect(confirm).toBeVisible()
+  const dialogBox = await confirm.boundingBox()
+  const viewport = page.viewportSize()
+  expect(dialogBox).not.toBeNull()
+  expect(viewport).not.toBeNull()
+  expect(
+    Math.abs(dialogBox!.x + dialogBox!.width / 2 - viewport!.width / 2),
+  ).toBeLessThan(2)
+  expect(
+    Math.abs(dialogBox!.y + dialogBox!.height / 2 - viewport!.height / 2),
+  ).toBeLessThan(2)
+  await page.keyboard.press('Escape')
   await page.getByRole('button', { name: '新建文件夹' }).click()
   await page.getByLabel('名称').fill('Campaign A')
   await page.getByRole('button', { name: '保存', exact: true }).click()
@@ -475,6 +508,9 @@ async function installStudioMocks(
           must_change_password: false,
         },
       })
+    }
+    if (pathname === '/api/v1/auth/logout' && request.method() === 'POST') {
+      return route.fulfill({ status: 204 })
     }
     if (pathname === '/api/v1/models') {
       return json(route, {

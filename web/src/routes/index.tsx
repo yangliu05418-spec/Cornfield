@@ -30,14 +30,8 @@ const visions = [
   },
 ] as const
 
-function DotMark() {
-  return (
-    <span className="landing-dot-mark" aria-hidden="true">
-      {Array.from({ length: 9 }, (_, index) => (
-        <i key={index} />
-      ))}
-    </span>
-  )
+function CubeMark() {
+  return <img className="landing-cube-mark" src="/cornfield-mark.svg" alt="" />
 }
 
 function LandingPage() {
@@ -45,7 +39,7 @@ function LandingPage() {
     <main className="landing landing-v2">
       <header className="landing-nav">
         <Link to="/" className="landing-wordmark" aria-label="Cornfield 首页">
-          <DotMark />
+          <CubeMark />
           <span>Cornfield</span>
         </Link>
 
@@ -85,13 +79,12 @@ function LandingPage() {
         <div className="landing-hero-copy">
           <p className="landing-eyebrow">CORNFIELD / 未来影像工作室</p>
           <h1 id="landing-title">
-            把尚未发生的图像，
-            <br />
-            带到眼前。
+            <span>让想象先于现实。</span>
+            <span>让图像抵达眼前。</span>
           </h1>
           <p className="landing-intro">
-            有些画面先于语言存在。我们为它留出一片安静的场域——让模型彼此靠近，
-            让想象不必等待。
+            <span>有些画面，先于语言存在。</span>
+            <span>让模型彼此靠近，让想象不必等待。</span>
           </p>
           <div className="landing-hero-actions">
             <Link to="/app/login" className="landing-primary-button">
@@ -119,7 +112,7 @@ function LandingPage() {
             <span>一束光的来处</span>
           </div>
           <p>关于时间、想象，以及尚未抵达的图像</p>
-          <DotMark />
+          <CubeMark />
         </div>
       </section>
 
@@ -129,7 +122,10 @@ function LandingPage() {
         aria-labelledby="visions-title"
       >
         <div className="landing-section-heading">
-          <h2 id="visions-title">创作不是抵达，是持续看见。</h2>
+          <h2 id="visions-title">
+            <span>创作不是抵达。</span>
+            <span>是持续看见。</span>
+          </h2>
           <span>02 / 03</span>
         </div>
         <div className="landing-vision-grid">
@@ -150,9 +146,8 @@ function LandingPage() {
       <section className="landing-closing" aria-labelledby="closing-title">
         <p>献给仍愿意凝视的人</p>
         <h2 id="closing-title">
-          先让光抵达。
-          <br />
-          再让意义发生。
+          <span>先让光抵达。</span>
+          <span>再让意义发生。</span>
         </h2>
         <Link to="/app/login" className="landing-primary-button">
           开始创作 <ArrowRight size={17} strokeWidth={1.5} />
@@ -161,7 +156,7 @@ function LandingPage() {
 
       <footer className="landing-footer">
         <Link to="/" className="landing-wordmark">
-          <DotMark />
+          <CubeMark />
           <span>Cornfield</span>
         </Link>
         <p>一间安静、私有、始终在场的图像工作室。</p>

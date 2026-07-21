@@ -1,5 +1,13 @@
 import { useVirtualizer } from '@tanstack/react-virtual'
-import { Copy, Download, ImagePlus, Maximize2, Trash2, X } from 'lucide-react'
+import {
+  Copy,
+  Download,
+  ImagePlus,
+  Maximize2,
+  RotateCcw,
+  Trash2,
+  X,
+} from 'lucide-react'
 import {
   forwardRef,
   useCallback,
@@ -30,6 +38,7 @@ export type WallItem = {
   asset?: Asset
   jobID?: string
   batchID?: string
+  modelID?: string
   status?: string
   prompt?: string
   errorMessage?: string
@@ -56,6 +65,7 @@ type JustifiedWallProps = {
   onCancel: (batchID: string, jobID: string) => void
   onDelete: (asset: Asset) => void
   onDismiss: (batchID: string, jobID: string) => void
+  onRetry: (batchID: string, jobID: string) => void
   onNotice?: (message: string) => void
   onLoadMore?: () => void
   hasMore?: boolean
@@ -149,6 +159,7 @@ export function buildWallItems(
           height: ratioHeight || 1,
           jobID: job.id,
           batchID: batch.id,
+          modelID: batch.model_id,
           status: job.status,
           prompt: batch.prompt,
           errorMessage: job.error_message,
@@ -182,6 +193,7 @@ export const JustifiedWall = forwardRef<
     onCancel,
     onDelete,
     onDismiss,
+    onRetry,
     onNotice,
     onLoadMore,
     hasMore = false,
@@ -378,6 +390,7 @@ export const JustifiedWall = forwardRef<
                     onCancel={onCancel}
                     onDelete={onDelete}
                     onDismiss={onDismiss}
+                    onRetry={onRetry}
                     onPreview={setPreview}
                     onNotice={onNotice}
                   />
@@ -416,6 +429,7 @@ function WallCard({
   onCancel,
   onDelete,
   onDismiss,
+  onRetry,
   onPreview,
   onNotice,
 }: {
@@ -425,6 +439,7 @@ function WallCard({
   onCancel: (batchID: string, jobID: string) => void
   onDelete: (asset: Asset) => void
   onDismiss: (batchID: string, jobID: string) => void
+  onRetry: (batchID: string, jobID: string) => void
   onPreview: (asset: Asset) => void
   onNotice?: (message: string) => void
 }) {
@@ -440,12 +455,12 @@ function WallCard({
       <article
         className={`wall-card placeholder${terminal ? ' terminal' : ''}`}
         style={style}
-        aria-label={`${statusLabel(item.status)}：${item.prompt ?? ''}`}
+        aria-label={`${statusLabel(item.status, item.modelID)}：${item.prompt ?? ''}`}
       >
         {!terminal && <div className="placeholder-shimmer" />}
         <div className="job-state">
           <span className="state-dot" />
-          {statusLabel(item.status)}
+          {statusLabel(item.status, item.modelID)}
         </div>
         {item.cancellable && item.jobID && item.batchID && (
           <button
@@ -459,6 +474,15 @@ function WallCard({
         )}
         {terminal && item.jobID && item.batchID && (
           <div className="failed-card-overlay">
+            {item.status === 'failed' && (
+              <button
+                type="button"
+                aria-label="重试或编辑参数"
+                onClick={() => onRetry(item.batchID!, item.jobID!)}
+              >
+                <RotateCcw size={14} />
+              </button>
+            )}
             <button
               type="button"
               aria-label="移除这次失败记录"
@@ -712,7 +736,7 @@ async function copyAsset(asset: Asset): Promise<boolean> {
   }
 }
 
-function statusLabel(status?: string) {
+function statusLabel(status?: string, modelID?: string) {
   const labels: Record<string, string> = {
     creating: '正在创建',
     queued: '排队中',
@@ -724,6 +748,10 @@ function statusLabel(status?: string) {
     cancelled: '已取消',
     failed: '生成失败',
     submission_uncertain: '需要核查',
+  }
+  if (modelID === 'legnext-midjourney') {
+    if (status === 'provider_pending') return 'Midjourney 生成中'
+    if (status === 'ingesting') return '正在准备 4 张图片'
   }
   return labels[status ?? ''] ?? '生成中'
 }

@@ -97,7 +97,7 @@ func TestGenerationTokenRefill(t *testing.T) {
 }
 
 func TestControlledLegnextFlags(t *testing.T) {
-	blocked := []string{"portrait --ar 16:9", "portrait\n--V=7", "portrait (--FAST)", "--repeat 4", "--r 3", "--stylize 200", "--future-flag=value", "https://example.com/reference.png portrait", "portrait <HTTP://example.com/a.jpg>"}
+	blocked := []string{"portrait --ar 16:9", "portrait\n--V=7", "portrait (--FAST)", "--repeat 4", "--r 3", "--stylize 200", "--future-flag=value", "https://example.com/reference.png portrait", "portrait <HTTP://example.com/a.jpg>", "a field {at dusk}", "a field } at dusk"}
 	for _, prompt := range blocked {
 		if !containsControlledLegnextInput(prompt) {
 			t.Fatalf("expected prompt to be blocked: %q", prompt)

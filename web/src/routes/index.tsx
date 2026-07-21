@@ -12,9 +12,9 @@ function LandingPage() {
           Cornfield
         </Link>
         <nav aria-label="公开导航">
-          <a href="#studio">Studio</a>
-          <a href="#system">System</a>
-          <a href="#principles">Principles</a>
+          <a href="#studio">工作室</a>
+          <a href="#system">创作系统</a>
+          <a href="#principles">设计原则</a>
         </nav>
         <div className="landing-counter">
           <span />
@@ -26,81 +26,69 @@ function LandingPage() {
         <div className="field-horizon" aria-hidden="true" />
         <p className="landing-kicker">
           <span />
-          CORNFIELD / PRIVATE IMAGE STUDIO
+          CORNFIELD / 私有图像工作室
         </p>
         <h1>
-          Make images.
+          让图像发生。
           <br />
-          Keep momentum.
+          让灵感持续。
           <br />
-          <em>Stay in flow.</em>
+          <em>保持创作流动。</em>
         </h1>
         <div className="landing-meta">
           <p>
-            ONE PLACE
+            一个工作台
             <br />
-            FOR EVERY MODEL
+            连接所有模型
           </p>
           <p>
-            TEXT → IMAGE
+            文字生成图像
             <br />
-            IMAGE → IMAGE
+            图像启发图像
           </p>
-          <p>
-            A high-throughput studio for teams who care about the work, not the
-            wait.
-          </p>
+          <p>为专注作品而非等待的团队，提供快速、稳定、持续流动的创作体验。</p>
           <Link to="/app/login" className="landing-enter">
-            ENTER STUDIO <ArrowUpRight size={13} />
+            进入工作室 <ArrowUpRight size={13} />
           </Link>
         </div>
       </section>
       <section className="landing-field" id="system">
-        <div className="field-index">SYSTEM / ALWAYS READY</div>
+        <div className="field-index">创作系统 / 随时就绪</div>
         <h2>
-          ONE WALL.
+          一面灵感墙。
           <br />
-          EVERY IDEA.
+          承接每个想法。
         </h2>
-        <p>The queue disappears. The work remains.</p>
+        <p>让队列退到幕后，让作品留在眼前。</p>
         <ArrowDownRight className="field-arrow" size={42} strokeWidth={1} />
       </section>
       <section className="landing-principles" id="principles">
         <p className="landing-kicker">
           <span />
-          BUILT FOR INTERNAL VELOCITY
+          为团队创作效率而生
         </p>
         <div className="principle-grid">
           <article>
             <span>01</span>
-            <h3>Fast by default</h3>
-            <p>
-              Local assets, direct delivery, and a wall that stays fluid at
-              scale.
-            </p>
+            <h3>生来迅捷</h3>
+            <p>本地资产直出，灵感墙在大量图片下依然流畅。</p>
           </article>
           <article>
             <span>02</span>
-            <h3>Failure is visible</h3>
-            <p>
-              Every draw has a state. Every upstream failure has a safe path
-              home.
-            </p>
+            <h3>状态清晰可见</h3>
+            <p>每次生成都有明确状态，每次上游异常都有安全的恢复路径。</p>
           </article>
           <article>
             <span>03</span>
-            <h3>Tools stay quiet</h3>
-            <p>
-              No points, plans, feeds, or noise. Just model, ratio, resolution,
-              and draw.
-            </p>
+            <h3>工具保持安静</h3>
+            <p>没有积分、套餐和信息噪音，只有模型、比例、画质与创作。</p>
           </article>
         </div>
       </section>
       <footer className="landing-footer">
         <span>CORNFIELD</span>
         <span>HONG KONG / 2026</span>
-        <Link to="/app/login">OPEN WORKSPACE →</Link>
+        <Link to="/app/login">进入工作室 →</Link>
       </footer>
     </main>
   )

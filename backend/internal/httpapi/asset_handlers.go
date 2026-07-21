@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"time"
 	"unicode"
 	"unicode/utf8"
@@ -239,6 +240,11 @@ func (s *Server) listAssets(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "INVALID_ASSET_VIEW", "资产视图无效", false, r)
 		return
 	}
+	query := strings.TrimSpace(r.URL.Query().Get("q"))
+	if query != "" && (!utf8.ValidString(query) || utf8.RuneCountInString(query) > 128) {
+		writeError(w, http.StatusBadRequest, "INVALID_SEARCH", "搜索内容必须在 1 到 128 个字符之间", false, r)
+		return
+	}
 	var folderID *uuid.UUID
 	if raw := r.URL.Query().Get("folder_id"); raw != "" {
 		parsed, parseErr := uuid.Parse(raw)
@@ -252,11 +258,13 @@ func (s *Server) listAssets(w http.ResponseWriter, r *http.Request) {
 		FROM assets a
 		LEFT JOIN generation_outputs o ON o.asset_id=a.id
 		LEFT JOIN generation_jobs j ON j.id=o.job_id
+		LEFT JOIN generation_batches b ON b.id=j.batch_id
 		WHERE a.owner_user_id=$1 AND a.purged_at IS NULL AND a.purge_pending=false
 		  AND ($2::timestamptz IS NULL OR (a.created_at,a.id)<($2,$3::uuid))
 		  AND ($4='all' OR ($4='active' AND a.archived_at IS NULL) OR ($4='archived' AND a.archived_at IS NOT NULL))
 		  AND ($5::uuid IS NULL OR a.folder_id=$5)
-		ORDER BY a.created_at DESC,a.id DESC LIMIT $6`, sess.UserID, cursorTime, cursorID, view, folderID, limit)
+		  AND ($6='' OR lower(COALESCE(a.original_filename,'')) LIKE '%'||lower($6)||'%' OR lower(COALESCE(b.prompt,'')) LIKE '%'||lower($6)||'%')
+		ORDER BY a.created_at DESC,a.id DESC LIMIT $7`, sess.UserID, cursorTime, cursorID, view, folderID, query, limit)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "DATABASE_ERROR", "读取资产失败", true, r)
 		return

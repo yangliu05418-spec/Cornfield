@@ -40,6 +40,12 @@ type legnextTask struct {
 	Meta struct {
 		Usage map[string]any `json:"usage"`
 	} `json:"meta"`
+	Error struct {
+		Code       json.RawMessage `json:"code"`
+		RawMessage string          `json:"raw_message"`
+		Message    string          `json:"message"`
+		Detail     any             `json:"detail"`
+	} `json:"error"`
 }
 
 func (task legnextTask) providerJobID() string {
@@ -162,10 +168,53 @@ func (l *Legnext) Poll(ctx context.Context, submission Submission) (Result, erro
 		}
 	}
 	if task.Status == "failed" {
-		result.ErrorCode = "LEGNEXT_JOB_FAILED"
-		result.ErrorText = "Legnext generation failed"
+		result.ErrorCode, result.ErrorText, result.ErrorRetryable = classifyLegnextTaskFailure(task, l.APIKey)
 	}
 	return result, nil
+}
+
+func classifyLegnextTaskFailure(task legnextTask, secrets ...string) (string, string, bool) {
+	remoteCode := legnextTaskErrorCode(task.Error.Code)
+	detail := strings.TrimSpace(task.Error.Message + " " + task.Error.RawMessage)
+	if task.Error.Detail != nil {
+		if encoded, err := json.Marshal(task.Error.Detail); err == nil && string(encoded) != "null" {
+			detail += " " + string(encoded)
+		}
+	}
+	detail = sanitizeProviderErrorDetail(detail, secrets)
+	if detail == "" {
+		detail = "Legnext generation failed"
+	}
+	lower := strings.ToLower(detail)
+	switch remoteCode {
+	case 400:
+		return "PROVIDER_HTTP_400", detail, false
+	case 403:
+		if strings.Contains(lower, "sensitive") || strings.Contains(lower, "content policy") || strings.Contains(lower, "moderation") || strings.Contains(lower, "safety") {
+			return "CONTENT_POLICY_REJECTED", detail, false
+		}
+		return "PROVIDER_HTTP_403", detail, false
+	case 413:
+		return "PROVIDER_HTTP_413", detail, false
+	case 422:
+		return "PROVIDER_HTTP_422", detail, false
+	case 429:
+		return "PROVIDER_HTTP_429", detail, true
+	default:
+		if remoteCode >= 500 && remoteCode <= 599 {
+			return "LEGNEXT_TASK_FAILED", detail, true
+		}
+		return "LEGNEXT_JOB_FAILED", detail, false
+	}
+}
+
+func legnextTaskErrorCode(raw json.RawMessage) int {
+	value := strings.Trim(strings.TrimSpace(string(raw)), `"`)
+	code, err := strconv.Atoi(value)
+	if err != nil {
+		return 0
+	}
+	return code
 }
 
 func (l *Legnext) Cancel(context.Context, Submission) (CancelResult, error) {

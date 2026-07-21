@@ -12,10 +12,10 @@ test('landing page uses the production static shell', async ({
 
   await expect(page).toHaveTitle('Cornfield — Private Image Studio')
   await expect(page.getByRole('heading', { level: 1 })).toContainText(
-    'Make images.',
+    '让图像发生。',
   )
   await expect(
-    page.getByRole('link', { name: 'ENTER STUDIO' }),
+    page.getByRole('link', { name: '进入工作室' }).first(),
   ).toHaveAttribute('href', '/app/login')
   const executableInlineScripts = await page
     .locator('script:not([src])')

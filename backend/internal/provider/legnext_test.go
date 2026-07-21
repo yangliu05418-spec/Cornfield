@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -228,8 +230,41 @@ func TestLegnextPollDoesNotExposeProviderErrorBody(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Poll: %v", err)
 	}
-	if result.ErrorText != "Legnext generation failed" {
-		t.Fatalf("error text = %q", result.ErrorText)
+	if strings.Contains(result.ErrorText, "must-not-survive") || !strings.Contains(result.ErrorText, "[image-data]") {
+		t.Fatalf("error body was not safely redacted: %q", result.ErrorText)
+	}
+}
+
+func TestLegnextPollClassifiesTerminalTaskFailures(t *testing.T) {
+	tests := []struct {
+		name      string
+		code      string
+		message   string
+		wantCode  string
+		retryable bool
+	}{
+		{name: "parameter", code: "400", message: "invalid prompt parameter", wantCode: "PROVIDER_HTTP_400"},
+		{name: "safety", code: "403", message: "sensitive content", wantCode: "CONTENT_POLICY_REJECTED"},
+		{name: "rate", code: `"429"`, message: "too many requests", wantCode: "PROVIDER_HTTP_429", retryable: true},
+		{name: "upstream", code: "500", message: "task failed", wantCode: "LEGNEXT_TASK_FAILED", retryable: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				_, _ = fmt.Fprintf(w, `{"job_id":"job-1","status":"failed","error":{"code":%s,"message":%q}}`, test.code, test.message)
+			}))
+			defer server.Close()
+			adapter := NewLegnext("test-key")
+			adapter.BaseURL = server.URL
+			adapter.Client = server.Client()
+			result, err := adapter.Poll(context.Background(), Submission{ProviderJobID: "job-1"})
+			if err != nil {
+				t.Fatalf("Poll: %v", err)
+			}
+			if result.ErrorCode != test.wantCode || result.ErrorRetryable != test.retryable {
+				t.Fatalf("classification = code %q retryable %t", result.ErrorCode, result.ErrorRetryable)
+			}
+		})
 	}
 }
 

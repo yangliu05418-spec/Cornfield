@@ -3,6 +3,7 @@ package httpapi
 import (
 	"errors"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 	"unicode"
@@ -12,6 +13,73 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 )
+
+func (s *Server) listSubmissionUncertain(w http.ResponseWriter, r *http.Request) {
+	limit := 50
+	if raw := r.URL.Query().Get("limit"); raw != "" {
+		parsed, err := strconv.Atoi(raw)
+		if err != nil || parsed < 1 || parsed > 100 {
+			writeError(w, http.StatusBadRequest, "INVALID_LIMIT", "分页大小必须在 1 到 100 之间", false, r)
+			return
+		}
+		limit = parsed
+	}
+	cursorTime, cursorID, err := decodeGenerationCursor(r.URL.Query().Get("cursor"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "INVALID_CURSOR", "分页游标无效", false, r)
+		return
+	}
+	rows, err := s.db.Query(r.Context(), `SELECT j.id,j.batch_id,u.id,u.username::text,b.model_id,v.config->>'provider',j.created_at,j.provider_job_id,
+		a.operation,a.outcome,a.error_code,a.error_message,a.http_status,a.finished_at
+		FROM generation_jobs j
+		JOIN generation_batches b ON b.id=j.batch_id
+		JOIN users u ON u.id=j.owner_user_id
+		JOIN model_capability_versions v ON v.model_id=b.model_id AND v.revision=b.capability_revision
+		LEFT JOIN LATERAL (
+			SELECT operation,outcome,error_code,error_message,http_status,finished_at
+			FROM provider_attempts WHERE job_id=j.id ORDER BY id DESC LIMIT 1
+		) a ON true
+		WHERE j.status='submission_uncertain'
+		  AND ($1::timestamptz IS NULL OR (j.created_at,j.id)<($1,$2::uuid))
+		ORDER BY j.created_at DESC,j.id DESC LIMIT $3`, cursorTime, cursorID, limit+1)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "DATABASE_ERROR", "无法读取需要核查的提交", true, r)
+		return
+	}
+	defer rows.Close()
+	items := make([]map[string]any, 0, limit+1)
+	for rows.Next() {
+		var jobID, batchID, userID uuid.UUID
+		var username, modelID, providerID string
+		var createdAt time.Time
+		var providerJobID, operation, outcome, errorCode, errorMessage *string
+		var httpStatus *int
+		var finishedAt *time.Time
+		if err = rows.Scan(&jobID, &batchID, &userID, &username, &modelID, &providerID, &createdAt, &providerJobID, &operation, &outcome, &errorCode, &errorMessage, &httpStatus, &finishedAt); err != nil {
+			writeError(w, http.StatusInternalServerError, "DATABASE_ERROR", "无法读取需要核查的提交", true, r)
+			return
+		}
+		items = append(items, map[string]any{
+			"id": jobID, "batch_id": batchID, "user_id": userID, "username": username,
+			"model_id": modelID, "provider_id": providerID, "created_at": createdAt,
+			"age_seconds": max(int(time.Since(createdAt).Seconds()), 0), "provider_job_id": providerJobID,
+			"latest_attempt": map[string]any{"operation": operation, "outcome": outcome, "error_code": errorCode, "error_message": errorMessage, "http_status": httpStatus, "finished_at": finishedAt},
+		})
+	}
+	if err = rows.Err(); err != nil {
+		writeError(w, http.StatusInternalServerError, "DATABASE_ERROR", "无法读取需要核查的提交", true, r)
+		return
+	}
+	nextCursor := ""
+	if len(items) > limit {
+		items = items[:limit]
+		last := items[len(items)-1]
+		lastCreated := last["created_at"].(time.Time)
+		lastID := last["id"].(uuid.UUID)
+		nextCursor = encodeGenerationCursor(lastCreated, lastID)
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": items, "next_cursor": nextCursor})
+}
 
 const (
 	maxProviderJobIDBytes       = 256

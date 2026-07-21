@@ -9,6 +9,7 @@ import type { InfiniteData } from '@tanstack/react-query'
 import {
   Archive,
   ArchiveRestore,
+  CheckSquare,
   Download,
   Folder,
   FolderPlus,
@@ -17,10 +18,11 @@ import {
   Trash2,
   X,
 } from 'lucide-react'
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import type { DragEvent, FormEvent } from 'react'
 
 import { AppShell } from '#/components/app-shell'
+import { ConfirmDialog } from '#/components/confirm-dialog'
 import { api } from '#/lib/api'
 import type { Asset, AssetFolder, AssetPage } from '#/lib/api'
 
@@ -37,6 +39,14 @@ type OrganizationChange = {
 function AssetsPage() {
   const queryClient = useQueryClient()
   const [search, setSearch] = useState('')
+  const [searchQuery, setSearchQuery] = useState('')
+  const [selected, setSelected] = useState<Set<string>>(new Set())
+  const [confirm, setConfirm] = useState<
+    | { kind: 'asset'; id: string }
+    | { kind: 'folder'; folder: AssetFolder }
+    | { kind: 'bulk-delete' }
+    | null
+  >(null)
   const [view, setView] = useState<AssetView>('active')
   const [folderID, setFolderID] = useState<string | null>(null)
   const [notice, setNotice] = useState('')
@@ -47,12 +57,17 @@ function AssetsPage() {
     queryKey: ['asset-folders'],
     queryFn: () => api<{ items: AssetFolder[] }>('/api/v1/asset-folders'),
   })
-  const queryKey = ['assets', 'library', view, folderID] as const
+  useEffect(() => {
+    const timer = window.setTimeout(() => setSearchQuery(search.trim()), 250)
+    return () => window.clearTimeout(timer)
+  }, [search])
+  const queryKey = ['assets', 'library', view, folderID, searchQuery] as const
   const assets = useInfiniteQuery({
     queryKey,
     queryFn: ({ pageParam }) => {
       const params = new URLSearchParams({ limit: '100', view })
       if (folderID) params.set('folder_id', folderID)
+      if (searchQuery) params.set('q', searchQuery)
       if (pageParam) params.set('cursor', pageParam)
       return api<AssetPage>(`/api/v1/assets?${params}`)
     },
@@ -122,13 +137,110 @@ function AssetsPage() {
     },
   })
   const items = useMemo(() => {
-    const normalizedSearch = search.trim().toLowerCase()
-    return (assets.data?.pages.flatMap((page) => page.items) ?? []).filter(
-      (asset) =>
-        !normalizedSearch ||
-        asset.original_filename?.toLowerCase().includes(normalizedSearch),
+    return assets.data?.pages.flatMap((page) => page.items) ?? []
+  }, [assets.data])
+  useEffect(() => {
+    const visible = new Set(items.map((asset) => asset.id))
+    setSelected(
+      (current) => new Set([...current].filter((id) => visible.has(id))),
     )
-  }, [assets.data, search])
+  }, [items])
+
+  async function bulkOrganization(body: {
+    folder_id?: string | null
+    archived?: boolean
+  }) {
+    const ids = [...selected]
+    await queryClient.cancelQueries({ queryKey })
+    const previous = queryClient.getQueryData<AssetPages>(queryKey)
+    queryClient.setQueryData<AssetPages>(queryKey, (current) => {
+      if (!current) return current
+      const chosen = new Set(ids)
+      return {
+        ...current,
+        pages: current.pages.map((page) => ({
+          ...page,
+          items: page.items.flatMap((asset) => {
+            if (!chosen.has(asset.id)) return [asset]
+            const updated = {
+              ...asset,
+              ...(body.folder_id !== undefined
+                ? { folder_id: body.folder_id ?? undefined }
+                : {}),
+              ...(body.archived !== undefined
+                ? {
+                    archived_at: body.archived
+                      ? new Date().toISOString()
+                      : undefined,
+                  }
+                : {}),
+            }
+            const visibleInView =
+              view === 'all' ||
+              (view === 'active' && !updated.archived_at) ||
+              (view === 'archived' && !!updated.archived_at)
+            const visibleInFolder = !folderID || updated.folder_id === folderID
+            return visibleInView && visibleInFolder ? [updated] : []
+          }),
+        })),
+      }
+    })
+    for (let offset = 0; offset < ids.length; offset += 100) {
+      try {
+        await api('/api/v1/assets/organization/bulk', {
+          method: 'PATCH',
+          body: JSON.stringify({
+            asset_ids: ids.slice(offset, offset + 100),
+            ...body,
+          }),
+        })
+      } catch (error) {
+        if (previous) queryClient.setQueryData(queryKey, previous)
+        setSelected(new Set(ids.slice(offset)))
+        throw error
+      }
+    }
+    setSelected(new Set())
+    await Promise.all([
+      queryClient.invalidateQueries({ queryKey: ['assets'] }),
+      queryClient.invalidateQueries({ queryKey: ['asset-folders'] }),
+    ])
+  }
+
+  async function bulkDelete() {
+    const ids = [...selected]
+    await queryClient.cancelQueries({ queryKey })
+    const previous = queryClient.getQueryData<AssetPages>(queryKey)
+    queryClient.setQueryData<AssetPages>(queryKey, (current) =>
+      current
+        ? {
+            ...current,
+            pages: current.pages.map((page) => ({
+              ...page,
+              items: page.items.filter((asset) => !selected.has(asset.id)),
+            })),
+          }
+        : current,
+    )
+    for (let offset = 0; offset < ids.length; offset += 100) {
+      try {
+        await api('/api/v1/assets/deletions', {
+          method: 'POST',
+          body: JSON.stringify({ asset_ids: ids.slice(offset, offset + 100) }),
+        })
+      } catch (error) {
+        if (previous) queryClient.setQueryData(queryKey, previous)
+        setSelected(new Set(ids.slice(offset)))
+        throw error
+      }
+    }
+    setSelected(new Set())
+    await Promise.all([
+      queryClient.invalidateQueries({ queryKey: ['assets'] }),
+      queryClient.invalidateQueries({ queryKey: ['generations'] }),
+      queryClient.invalidateQueries({ queryKey: ['asset-folders'] }),
+    ])
+  }
 
   function moveAsset(asset: Asset, targetFolderID: string | null) {
     organization.mutate({ asset, folder_id: targetFolderID })
@@ -142,7 +254,6 @@ function AssetsPage() {
     if (asset) moveAsset(asset, targetFolderID)
   }
   async function deleteAsset(id: string) {
-    if (!window.confirm('永久删除这张图片？此操作无法撤销。')) return
     try {
       await api(`/api/v1/assets/${id}`, { method: 'DELETE' })
       await Promise.all([
@@ -156,8 +267,6 @@ function AssetsPage() {
     }
   }
   async function deleteFolder(folder: AssetFolder) {
-    if (!window.confirm(`删除文件夹“${folder.name}”？其中图片会移回未归档。`))
-      return
     try {
       await api(`/api/v1/asset-folders/${folder.id}`, { method: 'DELETE' })
       if (folderID === folder.id) setFolderID(null)
@@ -258,7 +367,7 @@ function AssetsPage() {
                   <button
                     type="button"
                     aria-label={`删除 ${folder.name}`}
-                    onClick={() => void deleteFolder(folder)}
+                    onClick={() => setConfirm({ kind: 'folder', folder })}
                   >
                     <Trash2 size={12} />
                   </button>
@@ -268,6 +377,66 @@ function AssetsPage() {
           </aside>
 
           <section className="asset-collection">
+            {selected.size > 0 && (
+              <div
+                className="asset-bulk-toolbar"
+                role="toolbar"
+                aria-label="批量资产操作"
+              >
+                <strong>已选 {selected.size} 张</strong>
+                <button
+                  type="button"
+                  onClick={() =>
+                    setSelected(new Set(items.map((asset) => asset.id)))
+                  }
+                >
+                  全选已加载
+                </button>
+                <select
+                  aria-label="批量移动到文件夹"
+                  defaultValue=""
+                  onChange={(event) => {
+                    void bulkOrganization({
+                      folder_id:
+                        event.target.value === '__unfiled'
+                          ? null
+                          : event.target.value,
+                    }).catch((error: Error) => setNotice(error.message))
+                    event.currentTarget.value = ''
+                  }}
+                >
+                  <option value="" disabled>
+                    移动到…
+                  </option>
+                  <option value="__unfiled">未分组</option>
+                  {folderQuery.data?.items.map((folder) => (
+                    <option key={folder.id} value={folder.id}>
+                      {folder.name}
+                    </option>
+                  ))}
+                </select>
+                <button
+                  type="button"
+                  onClick={() =>
+                    void bulkOrganization({
+                      archived: view !== 'archived',
+                    }).catch((error: Error) => setNotice(error.message))
+                  }
+                >
+                  {view === 'archived' ? '取消归档' : '归档'}
+                </button>
+                <button
+                  type="button"
+                  className="bulk-danger"
+                  onClick={() => setConfirm({ kind: 'bulk-delete' })}
+                >
+                  永久删除
+                </button>
+                <button type="button" onClick={() => setSelected(new Set())}>
+                  清空选择
+                </button>
+              </div>
+            )}
             <div className="asset-grid">
               {items.map((asset) => (
                 <article
@@ -284,6 +453,22 @@ function AssetsPage() {
                   }}
                 >
                   <div className="asset-image">
+                    <label className="asset-select">
+                      <input
+                        type="checkbox"
+                        checked={selected.has(asset.id)}
+                        onChange={(event) =>
+                          setSelected((current) => {
+                            const next = new Set(current)
+                            if (event.target.checked) next.add(asset.id)
+                            else next.delete(asset.id)
+                            return next
+                          })
+                        }
+                      />
+                      <CheckSquare size={14} />
+                      <span className="sr-only">选择资产</span>
+                    </label>
                     <img
                       src={asset.thumb_640_url}
                       width={asset.width}
@@ -315,7 +500,9 @@ function AssetsPage() {
                       <button
                         type="button"
                         aria-label="永久删除"
-                        onClick={() => void deleteAsset(asset.id)}
+                        onClick={() =>
+                          setConfirm({ kind: 'asset', id: asset.id })
+                        }
                       >
                         <Trash2 size={14} />
                       </button>
@@ -387,6 +574,30 @@ function AssetsPage() {
             }
           />
         )}
+        <ConfirmDialog
+          open={confirm !== null}
+          title={confirm?.kind === 'folder' ? '删除文件夹' : '永久删除资产'}
+          description={
+            confirm?.kind === 'folder'
+              ? `文件夹“${confirm.folder.name}”会被删除，其中图片将移回未归档。`
+              : confirm?.kind === 'bulk-delete'
+                ? `将永久删除已选的 ${selected.size} 张图片，此操作无法撤销。`
+                : '这张图片将被永久删除，此操作无法撤销。'
+          }
+          confirmLabel="确认删除"
+          dangerous
+          onCancel={() => setConfirm(null)}
+          onConfirm={() => {
+            const action = confirm
+            setConfirm(null)
+            if (action?.kind === 'asset') void deleteAsset(action.id)
+            if (action?.kind === 'folder') void deleteFolder(action.folder)
+            if (action?.kind === 'bulk-delete')
+              void bulkDelete().catch((error: Error) =>
+                setNotice(error.message),
+              )
+          }}
+        />
       </main>
     </AppShell>
   )

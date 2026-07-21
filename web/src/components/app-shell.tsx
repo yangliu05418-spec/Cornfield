@@ -67,7 +67,7 @@ export function AppShell({ children }: { children: ReactNode }) {
     <div className="app-frame">
       <header className="app-nav">
         <Link to="/app/create" className="app-brand" aria-label="Cornfield">
-          <img className="brand-mark" src="/cornfield-mark.svg" alt="" />
+          <img className="brand-mark" src="/cornfield-cube.svg" alt="" />
           <span>Cornfield</span>
         </Link>
         <nav aria-label="主导航">

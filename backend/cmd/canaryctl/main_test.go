@@ -53,6 +53,25 @@ func TestProductionCatalogCanaryMatrix(t *testing.T) {
 	}
 }
 
+func TestLaunchProfileContainsTwentyFourCases(t *testing.T) {
+	catalog, err := modelconfig.Load(filepath.Join("..", "..", "..", "config", "models.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	groups := buildCanaryGroups(catalog, "launch", "release", 42, uuid.New())
+	total := 0
+	counts := make(map[string]int)
+	for _, group := range groups {
+		for _, item := range group {
+			total++
+			counts[item.Model.ID]++
+		}
+	}
+	if total != 24 || counts["legnext-midjourney"] != 20 || counts["openrouter-gemini-3-1-flash-image"] != 2 || counts["bfl-flux-2-max"] != 2 {
+		t.Fatalf("launch profile total=%d counts=%v", total, counts)
+	}
+}
+
 func TestRatioValidation(t *testing.T) {
 	if !ratioMatches(2560, 1440, "16:9", 0.001) {
 		t.Fatal("exact 16:9 size did not match")

@@ -75,6 +75,13 @@ type generationOutput struct {
 	Height  int       `json:"height"`
 }
 
+type assetPresentation struct {
+	ID          uuid.UUID `json:"id"`
+	BlurDataURL string    `json:"blur_data_url"`
+	Thumb320URL string    `json:"thumb_320_url"`
+	Thumb640URL string    `json:"thumb_640_url"`
+}
+
 type generationJob struct {
 	Status       string             `json:"status"`
 	ErrorCode    *string            `json:"error_code"`
@@ -102,6 +109,7 @@ type canaryCase struct {
 	ExpectedSize string
 	Prompt       string
 	PromptSHA256 string
+	Midjourney   *provider.MidjourneyOptions
 }
 
 type caseResult struct {
@@ -148,16 +156,22 @@ func main() {
 }
 
 func run() error {
-	var baseURL, username, passwordFile, releaseSHA, configPath, reportPath string
+	var baseURL, username, passwordFile, releaseSHA, configPath, reportPath, profile string
 	var allowHTTP bool
+	var archiveOutput bool
 	flag.StringVar(&baseURL, "base-url", "https://corn.kumadrama.com", "Cornfield HTTPS origin")
 	flag.StringVar(&username, "username", defaultUsername, "existing canary username")
 	flag.StringVar(&passwordFile, "password-file", "", "root-managed file containing the canary password")
 	flag.StringVar(&releaseSHA, "release", "", "deployed release commit SHA")
 	flag.StringVar(&configPath, "model-config", "./config/models.yaml", "deployed model catalog")
 	flag.StringVar(&reportPath, "report", "", "resumable JSON report path")
+	flag.StringVar(&profile, "profile", "matrix", "canary profile: matrix or launch")
+	flag.BoolVar(&archiveOutput, "archive-output", true, "archive generated canary assets")
 	flag.BoolVar(&allowHTTP, "allow-http", false, "allow HTTP for isolated tests only")
 	flag.Parse()
+	if profile != "matrix" && profile != "launch" {
+		return errors.New("--profile must be matrix or launch")
+	}
 
 	if passwordFile == "" || releaseSHA == "" {
 		return errors.New("--password-file and --release are required")
@@ -212,17 +226,11 @@ func run() error {
 	seed := deterministicSeed(releaseSHA)
 	allPassed := true
 	createPermits := newCreatePermitStream(ctx, 5*time.Second)
-	for _, model := range catalog.Models {
-		if !model.Enabled {
-			continue
-		}
-		cases := buildTextCases(model, catalog.Hash, releaseSHA, seed)
-		if model.Capabilities.ImageToImage {
-			cases = append(cases, buildImageCase(model, catalog.Hash, releaseSHA, seed, referenceID))
-		}
-		if err := runModel(ctx, client, store, folderID, cases, createPermits); err != nil {
+	caseGroups := buildCanaryGroups(catalog, profile, releaseSHA, seed, referenceID)
+	for _, cases := range caseGroups {
+		if err := runModel(ctx, client, store, folderID, archiveOutput, cases, createPermits); err != nil {
 			allPassed = false
-			fmt.Fprintf(os.Stderr, "model %s paused: %v\n", model.ID, err)
+			fmt.Fprintf(os.Stderr, "model %s paused: %v\n", cases[0].Model.ID, err)
 		}
 	}
 	if allPassed && store.allPassed() {
@@ -239,6 +247,65 @@ func run() error {
 		return nil
 	}
 	return errors.New("canary incomplete or failed; resume with the same --report")
+}
+
+func buildCanaryGroups(catalog *modelconfig.Catalog, profile, release string, seed int64, referenceID uuid.UUID) [][]canaryCase {
+	groups := make([][]canaryCase, 0)
+	for _, model := range catalog.Models {
+		if !model.Enabled {
+			continue
+		}
+		if profile == "launch" {
+			var cases []canaryCase
+			switch model.ID {
+			case "legnext-midjourney":
+				cases = buildLaunchMidjourneyCases(model, catalog.Hash, seed, referenceID)
+			case "openrouter-gemini-3-1-flash-image", "bfl-flux-2-max":
+				text := buildTextCases(model, catalog.Hash, release, seed)
+				if len(text) > 0 {
+					cases = append(cases, text[0])
+				}
+				cases = append(cases, buildImageCase(model, catalog.Hash, release, seed, referenceID))
+			}
+			if len(cases) > 0 {
+				groups = append(groups, cases)
+			}
+			continue
+		}
+		cases := buildTextCases(model, catalog.Hash, release, seed)
+		if model.Capabilities.ImageToImage {
+			cases = append(cases, buildImageCase(model, catalog.Hash, release, seed, referenceID))
+		}
+		groups = append(groups, cases)
+	}
+	return groups
+}
+
+func buildLaunchMidjourneyCases(model modelconfig.Model, revision string, seed int64, referenceID uuid.UUID) []canaryCase {
+	makeCase := func(name, resolution, ratio, prompt string, reference *uuid.UUID, raw, tile bool) canaryCase {
+		key := "launch|" + name
+		return canaryCase{
+			Key: key, Model: model, Revision: revision, Mode: map[bool]string{true: "image", false: "text"}[reference != nil],
+			AspectRatio: ratio, Resolution: resolution, ReferenceID: reference, Prompt: prompt, PromptSHA256: hashText(prompt),
+			Midjourney: &provider.MidjourneyOptions{Version: "8.1", Resolution: strings.ToLower(resolution), Speed: "fast", Stylize: 100, Raw: raw, Tile: tile},
+		}
+	}
+	cases := make([]canaryCase, 0, 20)
+	for _, resolution := range []string{"SD", "HD"} {
+		for _, ratio := range model.Capabilities.AspectRatios {
+			name := strings.ToLower(resolution) + "-" + strings.ReplaceAll(ratio, ":", "x")
+			cases = append(cases, makeCase(name, resolution, ratio, randomPrompt(seed, name, false), nil, false, false))
+		}
+		name := strings.ToLower(resolution) + "-image"
+		cases = append(cases, makeCase(name, resolution, "1:1", randomPrompt(seed, name, true), &referenceID, false, false))
+	}
+	cases = append(cases,
+		makeCase("chinese", "SD", "1:1", "雨后的玉米地，远处有一座极简白色观测站，电影光影", nil, false, false),
+		makeCase("structured", "SD", "16:9", "Cinematic editorial photograph of a quiet agricultural research station at blue hour, layered foreground crops, restrained amber practical lights, deep atmospheric perspective, realistic materials and subtle film grain", nil, false, false),
+		makeCase("raw", "SD", "3:2", randomPrompt(seed, "raw", false), nil, true, false),
+		makeCase("tile", "SD", "1:1", "seamless geometric corn leaf pattern, restrained green and warm gold", nil, false, true),
+	)
+	return cases
 }
 
 func newAPIClient(raw string, allowHTTP bool) (*apiClient, error) {
@@ -525,7 +592,7 @@ func newCreatePermitStream(ctx context.Context, interval time.Duration) <-chan s
 	return permits
 }
 
-func runModel(ctx context.Context, client *apiClient, store *reportStore, folderID uuid.UUID, cases []canaryCase, createPermit <-chan struct{}) error {
+func runModel(ctx context.Context, client *apiClient, store *reportStore, folderID uuid.UUID, archiveOutput bool, cases []canaryCase, createPermit <-chan struct{}) error {
 	pending := make([]canaryCase, 0, len(cases))
 	for _, item := range cases {
 		if !store.passed(item.Key) {
@@ -552,7 +619,7 @@ func runModel(ctx context.Context, client *apiClient, store *reportStore, folder
 					return
 				case <-createPermit:
 				}
-				result := client.runCase(modelCtx, folderID, item)
+				result := client.runCase(modelCtx, folderID, archiveOutput, item)
 				select {
 				case results <- result:
 				case <-ctx.Done():
@@ -602,7 +669,7 @@ func runModel(ctx context.Context, client *apiClient, store *reportStore, folder
 	return nil
 }
 
-func (c *apiClient) runCase(ctx context.Context, folderID uuid.UUID, item canaryCase) caseResult {
+func (c *apiClient) runCase(ctx context.Context, folderID uuid.UUID, archiveOutput bool, item canaryCase) caseResult {
 	started := time.Now().UTC()
 	result := caseResult{Key: item.Key, ModelID: item.Model.ID, Mode: item.Mode, AspectRatio: item.AspectRatio, Resolution: item.Resolution, Quality: item.Quality, PromptSHA256: item.PromptSHA256, Status: "failed", ExpectedOutputs: item.Model.OutputsPerDraw, StartedAt: started}
 	inputAssets := []uuid.UUID{}
@@ -611,7 +678,10 @@ func (c *apiClient) runCase(ctx context.Context, folderID uuid.UUID, item canary
 	}
 	options := provider.GenerationOptions{}
 	if len(item.Model.Capabilities.MidjourneyVersions) > 0 {
-		options.Midjourney = &provider.MidjourneyOptions{Version: "8.1", Resolution: strings.ToLower(item.Resolution), Speed: "fast", Stylize: 100}
+		options.Midjourney = item.Midjourney
+		if options.Midjourney == nil {
+			options.Midjourney = &provider.MidjourneyOptions{Version: "8.1", Resolution: strings.ToLower(item.Resolution), Speed: "fast", Stylize: 100}
+		}
 	}
 	if item.Quality != "" {
 		options.Image = &provider.ImageOptions{Quality: item.Quality}
@@ -679,7 +749,11 @@ func (c *apiClient) runCase(ctx context.Context, folderID uuid.UUID, item canary
 		}
 	}
 	for _, output := range result.Outputs {
-		if err := c.organize(ctx, output.AssetID, folderID); err != nil {
+		if err := c.validateAssetPresentation(ctx, output.AssetID); err != nil {
+			result.ErrorCode, result.ErrorMessage = "CANARY_PRESENTATION_INVALID", err.Error()
+			return finishResult(result, started)
+		}
+		if err := c.organize(ctx, output.AssetID, folderID, archiveOutput); err != nil {
 			result.ErrorCode, result.ErrorMessage = errorFields(err)
 			return finishResult(result, started)
 		}
@@ -712,8 +786,38 @@ func (c *apiClient) createGeneration(ctx context.Context, payload any, batch *ge
 	return lastErr
 }
 
-func (c *apiClient) organize(ctx context.Context, assetID, folderID uuid.UUID) error {
-	return c.json(ctx, http.MethodPatch, "/api/v1/assets/"+assetID.String()+"/organization", map[string]any{"folder_id": folderID, "archived": true}, nil, "")
+func (c *apiClient) organize(ctx context.Context, assetID, folderID uuid.UUID, archived ...bool) error {
+	archive := true
+	if len(archived) > 0 {
+		archive = archived[0]
+	}
+	return c.json(ctx, http.MethodPatch, "/api/v1/assets/"+assetID.String()+"/organization", map[string]any{"folder_id": folderID, "archived": archive}, nil, "")
+}
+
+func (c *apiClient) validateAssetPresentation(ctx context.Context, assetID uuid.UUID) error {
+	var asset assetPresentation
+	if err := c.json(ctx, http.MethodGet, "/api/v1/assets/"+assetID.String(), nil, &asset, ""); err != nil {
+		return err
+	}
+	if asset.BlurDataURL == "" || len(asset.BlurDataURL) > 4096 {
+		return fmt.Errorf("blur placeholder has invalid size %d", len(asset.BlurDataURL))
+	}
+	for _, variant := range []string{"320", "640"} {
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.base.ResolveReference(&url.URL{Path: "/api/v1/assets/" + assetID.String() + "/content", RawQuery: "variant=" + variant}).String(), nil)
+		if err != nil {
+			return err
+		}
+		res, err := c.http.Do(req)
+		if err != nil {
+			return err
+		}
+		_, _ = io.Copy(io.Discard, io.LimitReader(res.Body, 1<<20))
+		res.Body.Close()
+		if res.StatusCode != http.StatusOK || res.Header.Get("Content-Type") != "image/webp" || strings.HasPrefix(res.Header.Get("X-Cornfield-Variant"), "fallback-") {
+			return fmt.Errorf("variant %s returned HTTP %d %q fallback=%q", variant, res.StatusCode, res.Header.Get("Content-Type"), res.Header.Get("X-Cornfield-Variant"))
+		}
+	}
+	return nil
 }
 
 func openReport(path, release, revision, username string) (*reportStore, error) {

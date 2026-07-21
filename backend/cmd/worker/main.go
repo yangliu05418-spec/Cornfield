@@ -90,7 +90,8 @@ func main() {
 	generateWorker := &studioWorker.GenerateWorker{
 		DB: db, Config: cfg, Blobs: store, Adapters: adapters,
 		ProviderSem: providerSem,
-		IngestSem:   make(chan struct{}, 4), ThumbSem: make(chan struct{}, 2), HTTPClient: downloadClient, Log: logger, Breaker: studioWorker.NewBreaker(),
+		IngestSem:   make(chan struct{}, 4), ThumbSem: make(chan struct{}, 2), OptionalThumbQueue: make(chan string, 256),
+		HTTPClient: downloadClient, Log: logger, Breaker: studioWorker.NewBreaker(),
 	}
 	workers := river.NewWorkers()
 	river.AddWorker(workers, generateWorker)
@@ -110,6 +111,7 @@ func main() {
 	go scheduler.Run(ctx)
 	go scheduler.ListenNotifications(ctx)
 	go (&studioWorker.Maintenance{DB: db, Blobs: store, AssetRoot: cfg.AssetRoot, Log: logger, Generator: generateWorker}).Run(ctx)
+	go generateWorker.RunOptionalThumbnails(ctx, 2)
 	go generateWorker.RunSubmissionRecovery(ctx)
 	deletionWake := make(chan struct{}, 1)
 	deletions := &studioWorker.DeletionProcessor{DB: db, Blobs: store, AssetRoot: cfg.AssetRoot, Log: logger, Wake: deletionWake}

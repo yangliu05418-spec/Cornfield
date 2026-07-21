@@ -118,9 +118,23 @@ func (v *UploadValidator) processOne(ctx context.Context) bool {
 		v.Log.Warn("upload immutable commit failed", "upload_id", id, "error", err)
 		return false
 	}
+	blurDataURL, err := v.Generator.ensurePresentationVariants(ctx, key)
+	if err != nil {
+		v.Log.Warn("upload presentation variants failed", "upload_id", id, "error", err)
+		_ = tx.Rollback(ctx)
+		maintenance := &Maintenance{DB: v.DB, Blobs: v.Blobs, AssetRoot: v.AssetRoot, Log: v.Log}
+		referenced, referenceErr := maintenance.storageDigestReferenced(ctx, digest)
+		if referenceErr == nil && !referenced {
+			_, _ = deleteCanonicalContent(v.AssetRoot, key, digest, time.Now())
+		}
+		v.fail(ctx, id, "UPLOAD_VARIANT_FAILED")
+		contentLease.Release()
+		leaseReleased = true
+		return true
+	}
 	var assetID uuid.UUID
-	err = tx.QueryRow(ctx, `INSERT INTO assets(owner_user_id,kind,storage_key,sha256,media_type,original_filename,width,height,byte_size)
-		VALUES($1,'upload',$2,$3,$4,$5,$6,$7,$8) RETURNING id`, ownerID, key, digest, media, filename, width, height, size).Scan(&assetID)
+	err = tx.QueryRow(ctx, `INSERT INTO assets(owner_user_id,kind,storage_key,sha256,media_type,original_filename,width,height,byte_size,blur_data_url)
+		VALUES($1,'upload',$2,$3,$4,$5,$6,$7,$8,$9) RETURNING id`, ownerID, key, digest, media, filename, width, height, size, blurDataURL).Scan(&assetID)
 	if err == nil {
 		command, updateErr := tx.Exec(ctx, `UPDATE upload_sessions SET status='ready',asset_id=$2,updated_at=now()
 			WHERE id=$1 AND status='validating' AND expires_at>now()`, id, assetID)
@@ -155,7 +169,7 @@ func (v *UploadValidator) processOne(ctx context.Context) bool {
 	}
 	contentLease.Release()
 	leaseReleased = true
-	v.Generator.makeThumbnails(ctx, key)
+	v.Generator.queueOptionalThumbnail(key)
 	return true
 }
 

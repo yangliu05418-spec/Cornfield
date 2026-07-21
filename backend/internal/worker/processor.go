@@ -3,6 +3,7 @@ package worker
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -27,6 +28,7 @@ import (
 	"github.com/riverqueue/river"
 	"github.com/riverqueue/river/rivertype"
 	_ "golang.org/x/image/webp"
+	"golang.org/x/sync/errgroup"
 
 	"internal-image-studio/internal/blob"
 	"internal-image-studio/internal/config"
@@ -46,16 +48,17 @@ func (GenerateArgs) Kind() string { return "generation.execute" }
 
 type GenerateWorker struct {
 	river.WorkerDefaults[GenerateArgs]
-	DB          *pgxpool.Pool
-	Config      config.Config
-	Blobs       *blob.Local
-	Adapters    map[string]provider.Adapter
-	ProviderSem map[string]chan struct{}
-	IngestSem   chan struct{}
-	ThumbSem    chan struct{}
-	HTTPClient  *http.Client
-	Log         *slog.Logger
-	Breaker     *Breaker
+	DB                 *pgxpool.Pool
+	Config             config.Config
+	Blobs              *blob.Local
+	Adapters           map[string]provider.Adapter
+	ProviderSem        map[string]chan struct{}
+	IngestSem          chan struct{}
+	ThumbSem           chan struct{}
+	OptionalThumbQueue chan string
+	HTTPClient         *http.Client
+	Log                *slog.Logger
+	Breaker            *Breaker
 }
 
 type generationRecord struct {
@@ -97,6 +100,13 @@ type stagedGenerationOutput struct {
 	Width       int
 	Height      int
 	ByteSize    int64
+	BlurDataURL string
+}
+
+type preparedGenerationOutput struct {
+	output    stagedGenerationOutput
+	tempPath  string
+	extension string
 }
 
 type stagedResultError struct {
@@ -276,7 +286,14 @@ func (w *GenerateWorker) Work(ctx context.Context, riverJob *river.Job[GenerateA
 						}
 						return river.JobCancel(nil)
 					}
-					return w.ingest(ctx, record, finalResult)
+					staged, stageErr := w.stageResult(ctx, record, finalResult, valueOrPointer(record.ProviderJobID))
+					if stageErr != nil {
+						return stageErr
+					}
+					if !staged {
+						return river.JobCancel(nil)
+					}
+					return w.ingestStaged(ctx, record)
 				case "failed":
 					return w.fail(ctx, record, valueOr(finalResult.ErrorCode, "PROVIDER_JOB_FAILED"), valueOr(finalResult.ErrorText, "上游生成失败"), false)
 				}
@@ -366,7 +383,7 @@ func (w *GenerateWorker) Work(ctx context.Context, riverJob *river.Job[GenerateA
 			return w.handleProviderError(ctx, record, model, submitErr, true)
 		}
 		if submission.Completed {
-			staged, stageErr := w.stageSynchronousResult(ctx, record, submission)
+			staged, stageErr := w.stageResult(ctx, record, submission.Result, submission.ProviderJobID)
 			if stageErr != nil {
 				var invalid *stagedResultError
 				if errors.As(stageErr, &invalid) {
@@ -466,7 +483,21 @@ func (w *GenerateWorker) Work(ctx context.Context, riverJob *river.Job[GenerateA
 			}
 			return river.JobCancel(nil)
 		}
-		return w.ingest(ctx, record, result)
+		staged, stageErr := w.stageResult(ctx, record, result, valueOrPointer(record.ProviderJobID))
+		if stageErr != nil {
+			var invalid *stagedResultError
+			if errors.As(stageErr, &invalid) {
+				return w.fail(ctx, record, invalid.code, invalid.message, false)
+			}
+			return stageErr
+		}
+		if !staged {
+			if err := w.markCancelled(ctx, record, true); err != nil {
+				return err
+			}
+			return river.JobCancel(nil)
+		}
+		return w.ingestStaged(ctx, record)
 	case "failed":
 		return w.fail(ctx, record, valueOr(result.ErrorCode, "PROVIDER_JOB_FAILED"), valueOr(result.ErrorText, "上游生成失败"), false)
 	default:
@@ -628,24 +659,21 @@ func submissionFromRecord(item generationRecord) provider.Submission {
 	}
 }
 
-// stageSynchronousResult durably associates an already-paid synchronous
-// response with the business job before the job enters ingesting. Image bytes
-// are committed to the immutable store and their metadata is committed in the
-// same database transaction as the state transition.
-func (w *GenerateWorker) stageSynchronousResult(ctx context.Context, item generationRecord, submission provider.Submission) (bool, error) {
-	images := submission.Result.Images
+// stageResult durably associates already-paid provider output with the business
+// job. Both synchronous and polled providers use this path, so River retries can
+// only resume ingestion and can never create a second upstream generation.
+func (w *GenerateWorker) stageResult(ctx context.Context, item generationRecord, result provider.Result, providerJobID string) (bool, error) {
+	images := result.Images
 	if len(images) == 0 {
 		return false, &stagedResultError{code: "PROVIDER_EMPTY_RESULT", message: "上游没有返回图片"}
 	}
 	if providerOutputCountExceeded(len(images), item.ExpectedOutputs) {
 		return false, &stagedResultError{code: "PROVIDER_OUTPUT_COUNT_INVALID", message: "上游返回的图片数量超过模型协议"}
 	}
-	type pendingStagedOutput struct {
-		output    stagedGenerationOutput
-		tempPath  string
-		extension string
+	pending, prepareErr := w.prepareGenerationOutputs(ctx, item, images)
+	if prepareErr != nil {
+		return false, prepareErr
 	}
-	pending := make([]pendingStagedOutput, 0, len(images))
 	defer func() {
 		for _, candidate := range pending {
 			if candidate.tempPath != "" {
@@ -653,29 +681,6 @@ func (w *GenerateWorker) stageSynchronousResult(ctx context.Context, item genera
 			}
 		}
 	}()
-	for index, output := range images {
-		data := output.Bytes
-		if len(data) == 0 && output.URL != "" {
-			var err error
-			data, output.MediaType, err = w.download(ctx, item, output.URL)
-			if err != nil {
-				return false, err
-			}
-		}
-		media, extension, width, height, err := validateProviderImage(data)
-		if err != nil {
-			return false, &stagedResultError{code: "PROVIDER_IMAGE_INVALID", message: err.Error()}
-		}
-		tempPath := filepath.Join(w.Config.AssetRoot, "uploads", "tmp", fmt.Sprintf("stage-%s-%d-%s.part", item.JobID, index, uuid.NewString()))
-		if err = writeSynced(tempPath, data); err != nil {
-			return false, err
-		}
-		pending = append(pending, pendingStagedOutput{
-			tempPath: tempPath, extension: extension,
-			output: stagedGenerationOutput{OutputIndex: index, MediaType: media, Width: width, Height: height},
-		})
-	}
-
 	contentLease := w.Blobs.AcquireContentLease()
 	defer contentLease.Release()
 	prepared := make([]stagedGenerationOutput, 0, len(pending))
@@ -691,7 +696,6 @@ func (w *GenerateWorker) stageSynchronousResult(ctx context.Context, item genera
 		candidate.output.ByteSize = size
 		prepared = append(prepared, candidate.output)
 	}
-
 	tx, err := w.DB.Begin(ctx)
 	if err != nil {
 		return false, err
@@ -708,8 +712,8 @@ func (w *GenerateWorker) stageSynchronousResult(ctx context.Context, item genera
 		return false, fmt.Errorf("cannot stage synchronous result in status %s", status)
 	}
 	for _, output := range prepared {
-		if _, err = tx.Exec(ctx, `INSERT INTO generation_staged_outputs(job_id,output_index,storage_key,sha256,media_type,width,height,byte_size)
-			VALUES($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT (job_id,output_index) DO NOTHING`, item.JobID, output.OutputIndex, output.StorageKey, output.SHA256, output.MediaType, output.Width, output.Height, output.ByteSize); err != nil {
+		if _, err = tx.Exec(ctx, `INSERT INTO generation_staged_outputs(job_id,output_index,storage_key,sha256,media_type,width,height,byte_size,blur_data_url)
+			VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9) ON CONFLICT (job_id,output_index) DO UPDATE SET blur_data_url=excluded.blur_data_url`, item.JobID, output.OutputIndex, output.StorageKey, output.SHA256, output.MediaType, output.Width, output.Height, output.ByteSize, output.BlurDataURL); err != nil {
 			return false, err
 		}
 	}
@@ -722,7 +726,7 @@ func (w *GenerateWorker) stageSynchronousResult(ctx context.Context, item genera
 	}
 	if status == "submitting" {
 		if _, err = tx.Exec(ctx, `UPDATE generation_jobs SET provider_job_id=COALESCE(provider_job_id,NULLIF($2,'')),status='ingesting',updated_at=now()
-			WHERE id=$1 AND status='submitting'`, item.JobID, submission.ProviderJobID); err != nil {
+			WHERE id=$1 AND status='submitting'`, item.JobID, providerJobID); err != nil {
 			return false, err
 		}
 		if _, err = tx.Exec(ctx, `INSERT INTO job_events(owner_user_id,batch_id,job_id,event_type,payload)
@@ -736,6 +740,58 @@ func (w *GenerateWorker) stageSynchronousResult(ctx context.Context, item genera
 	return true, nil
 }
 
+func (w *GenerateWorker) prepareGenerationOutputs(ctx context.Context, item generationRecord, images []provider.Image) ([]preparedGenerationOutput, error) {
+	pending := make([]preparedGenerationOutput, len(images))
+	group, groupCtx := errgroup.WithContext(ctx)
+	group.SetLimit(min(4, len(images)))
+	for index, image := range images {
+		index, image := index, image
+		group.Go(func() error {
+			candidate, err := w.prepareGenerationOutput(groupCtx, item, index, image)
+			if err != nil {
+				return err
+			}
+			pending[index] = candidate
+			return nil
+		})
+	}
+	if err := group.Wait(); err != nil {
+		for _, candidate := range pending {
+			if candidate.tempPath != "" {
+				_ = os.Remove(candidate.tempPath)
+			}
+		}
+		return nil, err
+	}
+	return pending, nil
+}
+
+func (w *GenerateWorker) prepareGenerationOutput(ctx context.Context, item generationRecord, index int, output provider.Image) (preparedGenerationOutput, error) {
+	tempPath := filepath.Join(w.Config.AssetRoot, "uploads", "tmp", fmt.Sprintf("stage-%s-%d-%s.part", item.JobID, index, uuid.NewString()))
+	var err error
+	if len(output.Bytes) > 0 {
+		err = writeSynced(tempPath, output.Bytes)
+	} else if output.URL != "" {
+		err = w.downloadToFile(ctx, item, output.URL, tempPath)
+	} else {
+		err = errors.New("provider output has no image data")
+	}
+	if err != nil {
+		_ = os.Remove(tempPath)
+		return preparedGenerationOutput{}, err
+	}
+	media, extension, width, height, err := validateProviderImageFile(tempPath)
+	if err != nil {
+		_ = os.Remove(tempPath)
+		return preparedGenerationOutput{}, &stagedResultError{code: "PROVIDER_IMAGE_INVALID", message: err.Error()}
+	}
+	return preparedGenerationOutput{
+		tempPath:  tempPath,
+		extension: extension,
+		output:    stagedGenerationOutput{OutputIndex: index, MediaType: media, Width: width, Height: height},
+	}, nil
+}
+
 func (w *GenerateWorker) stagedOutputCount(ctx context.Context, jobID uuid.UUID) (int, error) {
 	var count int
 	err := w.DB.QueryRow(ctx, `SELECT count(*)::int FROM generation_staged_outputs WHERE job_id=$1`, jobID).Scan(&count)
@@ -743,7 +799,7 @@ func (w *GenerateWorker) stagedOutputCount(ctx context.Context, jobID uuid.UUID)
 }
 
 func (w *GenerateWorker) loadStagedOutputs(ctx context.Context, jobID uuid.UUID) ([]stagedGenerationOutput, error) {
-	rows, err := w.DB.Query(ctx, `SELECT output_index,storage_key,sha256,media_type,width,height,byte_size
+	rows, err := w.DB.Query(ctx, `SELECT output_index,storage_key,sha256,media_type,width,height,byte_size,COALESCE(blur_data_url,'')
 		FROM generation_staged_outputs WHERE job_id=$1 ORDER BY output_index`, jobID)
 	if err != nil {
 		return nil, err
@@ -752,7 +808,7 @@ func (w *GenerateWorker) loadStagedOutputs(ctx context.Context, jobID uuid.UUID)
 	outputs := make([]stagedGenerationOutput, 0)
 	for rows.Next() {
 		var output stagedGenerationOutput
-		if err = rows.Scan(&output.OutputIndex, &output.StorageKey, &output.SHA256, &output.MediaType, &output.Width, &output.Height, &output.ByteSize); err != nil {
+		if err = rows.Scan(&output.OutputIndex, &output.StorageKey, &output.SHA256, &output.MediaType, &output.Width, &output.Height, &output.ByteSize, &output.BlurDataURL); err != nil {
 			return nil, err
 		}
 		outputs = append(outputs, output)
@@ -921,7 +977,7 @@ func (w *GenerateWorker) handleProviderError(ctx context.Context, item generatio
 	}
 	defer tx.Rollback(ctx)
 	command, updateErr := tx.Exec(ctx, `UPDATE generation_jobs SET status='dispatched',next_attempt_at=now()+$2::interval,
-		error_code=$3,error_message=$4,retryable=true,updated_at=now() WHERE id=$1 AND status='submitting'`, item.JobID, pgInterval(delay), providerErr.Code, providerErr.Message)
+		error_code=$3,error_message=$4,retryable=true,updated_at=now() WHERE id=$1 AND status='submitting'`, item.JobID, pgInterval(delay), providerErr.Code, userFacingGenerationError(providerErr.Code))
 	if updateErr != nil {
 		return updateErr
 	}
@@ -1046,6 +1102,7 @@ func (w *GenerateWorker) recoverUnfinishedSubmissions(ctx context.Context) {
 }
 
 func (w *GenerateWorker) markUncertain(ctx context.Context, item generationRecord, code, message string, upstreamMayBeActive bool) error {
+	publicMessage := "任务提交结果不确定，请等待核查或移除记录"
 	deadline := uncertainStateDeadline(time.Now(), item, upstreamMayBeActive)
 	tx, err := w.DB.Begin(ctx)
 	if err != nil {
@@ -1076,7 +1133,7 @@ func (w *GenerateWorker) markUncertain(ctx context.Context, item generationRecor
 		return err
 	}
 	if _, err = tx.Exec(ctx, `UPDATE generation_jobs SET status='submission_uncertain',submission_uncertain=true,error_code=$2,error_message=$3,
-		dispatch_state='finished',upstream_active_until=$4,completed_at=now(),updated_at=now() WHERE id=$1`, item.JobID, code, message, deadline); err != nil {
+		dispatch_state='finished',upstream_active_until=$4,completed_at=now(),updated_at=now() WHERE id=$1`, item.JobID, code, publicMessage, deadline); err != nil {
 		return err
 	}
 	if _, err = tx.Exec(ctx, `INSERT INTO job_events(owner_user_id,batch_id,job_id,event_type,payload) VALUES($1,$2,$3,'job.submission_uncertain',jsonb_build_object('status','submission_uncertain','error_code',$4::text))`, item.OwnerID, item.BatchID, item.JobID, code); err != nil {
@@ -1092,7 +1149,8 @@ func (w *GenerateWorker) fail(ctx context.Context, item generationRecord, code, 
 	return w.failWithUpstreamLease(ctx, item, code, message, retryable, nil)
 }
 
-func (w *GenerateWorker) failWithUpstreamLease(ctx context.Context, item generationRecord, code, message string, retryable bool, upstreamActiveUntil *time.Time) error {
+func (w *GenerateWorker) failWithUpstreamLease(ctx context.Context, item generationRecord, code, _ string, retryable bool, upstreamActiveUntil *time.Time) error {
+	message := userFacingGenerationError(code)
 	tx, err := w.DB.Begin(ctx)
 	if err != nil {
 		return err
@@ -1119,6 +1177,23 @@ func (w *GenerateWorker) failWithUpstreamLease(ctx context.Context, item generat
 		return err
 	}
 	return tx.Commit(ctx)
+}
+
+func userFacingGenerationError(code string) string {
+	switch code {
+	case "CONTENT_POLICY_REJECTED":
+		return "图片可能触发安全策略，请调整描述"
+	case "UNSUPPORTED_PARAMETER", "PROVIDER_HTTP_400", "PROVIDER_HTTP_413", "PROVIDER_HTTP_422":
+		return "当前参数无法生成，请调整后重试"
+	case "PROVIDER_IMAGE_INVALID", "PROVIDER_RESPONSE_INVALID", "PROVIDER_EMPTY_RESULT", "PROVIDER_OUTPUT_COUNT_INVALID":
+		return "生成结果无法处理，请调整参数后重试"
+	case "PROVIDER_HTTP_429", "SUBMIT_RETRIES_EXHAUSTED":
+		return "生成服务繁忙，请稍后重试"
+	case "REFERENCE_READ_FAILED":
+		return "参考图无法读取，请重新添加后重试"
+	default:
+		return "生成失败，请稍后重试"
+	}
 }
 
 func (w *GenerateWorker) markCancelled(ctx context.Context, item generationRecord, lateResult bool) error {
@@ -1375,7 +1450,8 @@ func (w *GenerateWorker) ingestStaged(ctx context.Context, item generationRecord
 	if len(staged) == 0 {
 		return w.fail(ctx, item, "STAGED_RESULT_MISSING", "已接收的同步生成结果缺少可恢复暂存数据", false)
 	}
-	for _, output := range staged {
+	for index := range staged {
+		output := &staged[index]
 		path, resolveErr := w.Blobs.Resolve(output.StorageKey)
 		if resolveErr != nil {
 			return resolveErr
@@ -1386,6 +1462,16 @@ func (w *GenerateWorker) ingestStaged(ctx context.Context, item generationRecord
 		}
 		if info.Size() != output.ByteSize {
 			return fmt.Errorf("staged output size mismatch for index %d", output.OutputIndex)
+		}
+		if output.BlurDataURL == "" || !w.presentationVariantsReady(output.StorageKey) {
+			blurDataURL, presentationErr := w.ensurePresentationVariants(ctx, output.StorageKey)
+			if presentationErr != nil {
+				return presentationErr
+			}
+			output.BlurDataURL = blurDataURL
+			if _, updateErr := w.DB.Exec(ctx, `UPDATE generation_staged_outputs SET blur_data_url=$3 WHERE job_id=$1 AND output_index=$2`, item.JobID, output.OutputIndex, blurDataURL); updateErr != nil {
+				return updateErr
+			}
 		}
 	}
 	select {
@@ -1442,8 +1528,8 @@ func (w *GenerateWorker) ingestStaged(ctx context.Context, item generationRecord
 			continue
 		}
 		var assetID uuid.UUID
-		if err = tx.QueryRow(ctx, `INSERT INTO assets(owner_user_id,kind,storage_key,sha256,media_type,width,height,byte_size)
-			VALUES($1,'generation',$2,$3,$4,$5,$6,$7) RETURNING id`, item.OwnerID, output.StorageKey, output.SHA256, output.MediaType, output.Width, output.Height, output.ByteSize).Scan(&assetID); err != nil {
+		if err = tx.QueryRow(ctx, `INSERT INTO assets(owner_user_id,kind,storage_key,sha256,media_type,width,height,byte_size,blur_data_url)
+			VALUES($1,'generation',$2,$3,$4,$5,$6,$7,$8) RETURNING id`, item.OwnerID, output.StorageKey, output.SHA256, output.MediaType, output.Width, output.Height, output.ByteSize, output.BlurDataURL).Scan(&assetID); err != nil {
 			return err
 		}
 		if _, err = tx.Exec(ctx, `INSERT INTO generation_outputs(job_id,asset_id,output_index) VALUES($1,$2,$3)`, item.JobID, assetID, output.OutputIndex); err != nil {
@@ -1452,24 +1538,36 @@ func (w *GenerateWorker) ingestStaged(ctx context.Context, item generationRecord
 		newKeys = append(newKeys, output.StorageKey)
 	}
 
-	outputRows, err := tx.Query(ctx, `SELECT o.asset_id,o.output_index,a.width,a.height,a.media_type
+	outputRows, err := tx.Query(ctx, `SELECT o.asset_id,o.output_index,a.width,a.height,a.media_type,a.byte_size,a.sha256,COALESCE(a.blur_data_url,''),a.created_at
 		FROM generation_outputs o JOIN assets a ON a.id=o.asset_id WHERE o.job_id=$1 ORDER BY o.output_index`, item.JobID)
 	if err != nil {
 		return err
 	}
 	eventOutputs := make([]map[string]any, 0, item.ExpectedOutputs)
+	eventAssets := make([]map[string]any, 0, item.ExpectedOutputs)
 	for outputRows.Next() {
 		var assetID uuid.UUID
 		var outputIndex, width, height int
-		var mediaType string
-		if err = outputRows.Scan(&assetID, &outputIndex, &width, &height, &mediaType); err != nil {
+		var mediaType, digest, blurDataURL string
+		var byteSize int64
+		var createdAt time.Time
+		if err = outputRows.Scan(&assetID, &outputIndex, &width, &height, &mediaType, &byteSize, &digest, &blurDataURL, &createdAt); err != nil {
 			outputRows.Close()
 			return err
 		}
 		eventOutputs = append(eventOutputs, map[string]any{
 			"asset_id": assetID, "output_index": outputIndex, "width": width, "height": height, "media_type": mediaType,
-			"thumb_320_url": "/api/v1/assets/" + assetID.String() + "/content?variant=320",
-			"thumb_640_url": "/api/v1/assets/" + assetID.String() + "/content?variant=640",
+			"thumb_320_url":  "/api/v1/assets/" + assetID.String() + "/content?variant=320",
+			"thumb_640_url":  "/api/v1/assets/" + assetID.String() + "/content?variant=640",
+			"thumb_1280_url": "/api/v1/assets/" + assetID.String() + "/content?variant=1280",
+		})
+		baseURL := "/api/v1/assets/" + assetID.String() + "/content"
+		eventAssets = append(eventAssets, map[string]any{
+			"id": assetID, "kind": "generation", "job_id": item.JobID, "batch_id": item.BatchID,
+			"output_index": outputIndex, "width": width, "height": height, "media_type": mediaType,
+			"byte_size": byteSize, "sha256": digest, "blur_data_url": blurDataURL,
+			"url": baseURL, "thumb_320_url": baseURL + "?variant=320", "thumb_640_url": baseURL + "?variant=640",
+			"thumb_1280_url": baseURL + "?variant=1280", "created_at": createdAt,
 		})
 	}
 	if err = outputRows.Err(); err != nil {
@@ -1478,6 +1576,10 @@ func (w *GenerateWorker) ingestStaged(ctx context.Context, item generationRecord
 	}
 	outputRows.Close()
 	encodedOutputs, err := json.Marshal(eventOutputs)
+	if err != nil {
+		return err
+	}
+	encodedAssets, err := json.Marshal(eventAssets)
 	if err != nil {
 		return err
 	}
@@ -1488,7 +1590,7 @@ func (w *GenerateWorker) ingestStaged(ctx context.Context, item generationRecord
 		return err
 	}
 	if _, err = tx.Exec(ctx, `INSERT INTO job_events(owner_user_id,batch_id,job_id,event_type,payload)
-		VALUES($1,$2,$3,'job.succeeded',jsonb_build_object('status','succeeded','output_count',$4::integer,'outputs',$5::jsonb))`, item.OwnerID, item.BatchID, item.JobID, len(eventOutputs), string(encodedOutputs)); err != nil {
+		VALUES($1,$2,$3,'job.succeeded',jsonb_build_object('status','succeeded','output_count',$4::integer,'outputs',$5::jsonb,'assets',$6::jsonb))`, item.OwnerID, item.BatchID, item.JobID, len(eventOutputs), string(encodedOutputs), string(encodedAssets)); err != nil {
 		return err
 	}
 	if _, err = reconcileWorkerBatch(ctx, tx, item.BatchID); err != nil {
@@ -1498,165 +1600,7 @@ func (w *GenerateWorker) ingestStaged(ctx context.Context, item generationRecord
 		return err
 	}
 	for _, key := range newKeys {
-		w.makeThumbnails(ctx, key)
-	}
-	return nil
-}
-
-func (w *GenerateWorker) ingest(ctx context.Context, item generationRecord, result provider.Result) error {
-	select {
-	case w.IngestSem <- struct{}{}:
-		defer func() { <-w.IngestSem }()
-	case <-ctx.Done():
-		return ctx.Err()
-	}
-	if len(result.Images) == 0 {
-		return w.fail(ctx, item, "PROVIDER_EMPTY_RESULT", "上游没有返回图片", safeForManualResubmit(item))
-	}
-	if providerOutputCountExceeded(len(result.Images), item.ExpectedOutputs) {
-		return w.fail(ctx, item, "PROVIDER_OUTPUT_COUNT_INVALID", "上游返回的图片数量超过模型协议", false)
-	}
-	type prepared struct {
-		tempPath         string
-		extension, media string
-		width, height    int
-		key, digest      string
-		size             int64
-	}
-	preparedImages := make([]prepared, 0, len(result.Images))
-	defer func() {
-		for _, output := range preparedImages {
-			if output.tempPath != "" {
-				_ = os.Remove(output.tempPath)
-			}
-		}
-	}()
-	for index, output := range result.Images {
-		data := output.Bytes
-		if len(data) == 0 && output.URL != "" {
-			var err error
-			data, output.MediaType, err = w.download(ctx, item, output.URL)
-			if err != nil {
-				return err
-			}
-		}
-		media, extension, width, height, err := validateProviderImage(data)
-		if err != nil {
-			return w.fail(ctx, item, "PROVIDER_IMAGE_INVALID", err.Error(), false)
-		}
-		tempPath := filepath.Join(w.Config.AssetRoot, "uploads", "tmp", fmt.Sprintf("%s-%d-%s.part", item.JobID, index, uuid.NewString()))
-		if err := writeSynced(tempPath, data); err != nil {
-			return err
-		}
-		preparedImages = append(preparedImages, prepared{tempPath: tempPath, extension: extension, media: media, width: width, height: height})
-	}
-
-	tx, err := w.DB.Begin(ctx)
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback(ctx)
-	var status string
-	if err = tx.QueryRow(ctx, `SELECT status FROM generation_jobs WHERE id=$1 FOR UPDATE`, item.JobID).Scan(&status); err != nil {
-		return err
-	}
-	if status == "cancelled" || status == "cancelling" {
-		if status == "cancelling" {
-			if _, err = tx.Exec(ctx, `UPDATE generation_jobs SET status='cancelled',dispatch_state='finished',completed_at=now(),updated_at=now() WHERE id=$1`, item.JobID); err != nil {
-				return err
-			}
-			if _, err = tx.Exec(ctx, `INSERT INTO job_events(owner_user_id,batch_id,job_id,event_type,payload) VALUES($1,$2,$3,'job.cancelled',jsonb_build_object('status','cancelled','late_result_discarded',true))`, item.OwnerID, item.BatchID, item.JobID); err != nil {
-				return err
-			}
-		}
-		if _, err = reconcileWorkerBatch(ctx, tx, item.BatchID); err != nil {
-			return err
-		}
-		return tx.Commit(ctx)
-	}
-	if status == "succeeded" {
-		return tx.Commit(ctx)
-	}
-	if status != "ingesting" && status != "provider_pending" {
-		return fmt.Errorf("cannot ingest generation job in status %s", status)
-	}
-	contentLease := w.Blobs.AcquireContentLease()
-	leaseReleased := false
-	defer func() {
-		if !leaseReleased {
-			contentLease.Release()
-		}
-	}()
-	newKeys := make([]string, 0, len(preparedImages))
-	for index := range preparedImages {
-		output := &preparedImages[index]
-		var exists bool
-		if err = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM generation_outputs WHERE job_id=$1 AND output_index=$2)`, item.JobID, index).Scan(&exists); err != nil {
-			return err
-		}
-		if exists {
-			continue
-		}
-		output.key, output.digest, output.size, err = contentLease.PutImmutable(output.tempPath, output.extension)
-		if err != nil {
-			return err
-		}
-		output.tempPath = ""
-		var assetID uuid.UUID
-		if err = tx.QueryRow(ctx, `INSERT INTO assets(owner_user_id,kind,storage_key,sha256,media_type,width,height,byte_size) VALUES($1,'generation',$2,$3,$4,$5,$6,$7) RETURNING id`, item.OwnerID, output.key, output.digest, output.media, output.width, output.height, output.size).Scan(&assetID); err != nil {
-			return err
-		}
-		if _, err = tx.Exec(ctx, `INSERT INTO generation_outputs(job_id,asset_id,output_index) VALUES($1,$2,$3)`, item.JobID, assetID, index); err != nil {
-			return err
-		}
-		newKeys = append(newKeys, output.key)
-	}
-	outputRows, err := tx.Query(ctx, `SELECT o.asset_id,o.output_index,a.width,a.height,a.media_type
-		FROM generation_outputs o JOIN assets a ON a.id=o.asset_id WHERE o.job_id=$1 ORDER BY o.output_index`, item.JobID)
-	if err != nil {
-		return err
-	}
-	eventOutputs := make([]map[string]any, 0, item.ExpectedOutputs)
-	for outputRows.Next() {
-		var assetID uuid.UUID
-		var outputIndex, width, height int
-		var mediaType string
-		if err = outputRows.Scan(&assetID, &outputIndex, &width, &height, &mediaType); err != nil {
-			outputRows.Close()
-			return err
-		}
-		eventOutputs = append(eventOutputs, map[string]any{
-			"asset_id": assetID, "output_index": outputIndex, "width": width, "height": height, "media_type": mediaType,
-			"thumb_320_url": "/api/v1/assets/" + assetID.String() + "/content?variant=320",
-			"thumb_640_url": "/api/v1/assets/" + assetID.String() + "/content?variant=640",
-		})
-	}
-	if err = outputRows.Err(); err != nil {
-		outputRows.Close()
-		return err
-	}
-	outputRows.Close()
-	encodedOutputs, err := json.Marshal(eventOutputs)
-	if err != nil {
-		return err
-	}
-	outputCount := len(eventOutputs)
-	if _, err = tx.Exec(ctx, `UPDATE generation_jobs SET status='succeeded',dispatch_state='finished',completed_at=now(),error_code=NULL,error_message=NULL,updated_at=now() WHERE id=$1`, item.JobID); err != nil {
-		return err
-	}
-	if _, err = tx.Exec(ctx, `INSERT INTO job_events(owner_user_id,batch_id,job_id,event_type,payload) VALUES($1,$2,$3,'job.succeeded',jsonb_build_object('status','succeeded','output_count',$4::integer,'outputs',$5::jsonb))`, item.OwnerID, item.BatchID, item.JobID, outputCount, string(encodedOutputs)); err != nil {
-		return err
-	}
-	if _, err = reconcileWorkerBatch(ctx, tx, item.BatchID); err != nil {
-		return err
-	}
-	if err = tx.Commit(ctx); err != nil {
-		return err
-	}
-	contentLease.Release()
-	leaseReleased = true
-	for _, key := range newKeys {
-		w.makeThumbnails(ctx, key)
+		w.queueOptionalThumbnail(key)
 	}
 	return nil
 }
@@ -1740,19 +1684,13 @@ func reconcileWorkerBatch(ctx context.Context, tx pgx.Tx, batchID uuid.UUID) (st
 	return status, nil
 }
 
-func (w *GenerateWorker) download(ctx context.Context, item generationRecord, rawURL string) ([]byte, string, error) {
+func (w *GenerateWorker) downloadToFile(ctx context.Context, item generationRecord, rawURL, target string) (err error) {
 	parsed, err := url.Parse(rawURL)
 	if err != nil || parsed.Scheme != "https" {
-		return nil, "", &provider.Error{Code: "OUTPUT_URL_REJECTED", Message: "invalid output URL"}
+		return &provider.Error{Code: "OUTPUT_URL_REJECTED", Message: "invalid output URL"}
 	}
-	allowed := false
-	for _, host := range item.ModelSnapshot.Policy.AllowedOutputHosts {
-		if outputHostAllowed(parsed.Hostname(), host) {
-			allowed = true
-		}
-	}
-	if !allowed {
-		return nil, "", &provider.Error{Code: "OUTPUT_HOST_REJECTED", Message: "output host is not allowlisted"}
+	if !generationOutputURLAllowed(parsed, item.ModelSnapshot.Policy.AllowedOutputHosts) {
+		return &provider.Error{Code: "OUTPUT_HOST_REJECTED", Message: "output host is not allowlisted"}
 	}
 	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
 	res, err := w.HTTPClient.Do(req)
@@ -1760,17 +1698,49 @@ func (w *GenerateWorker) download(ctx context.Context, item generationRecord, ra
 		// net/http wraps transport failures in url.Error, whose string contains
 		// the complete provider URL. CDN query parameters can be bearer tokens,
 		// so never let that error cross into River or structured logs.
-		return nil, "", errors.New("provider result download failed")
+		return errors.New("provider result download failed")
 	}
 	defer res.Body.Close()
+	if res.Request == nil || res.Request.URL == nil || !generationOutputURLAllowed(res.Request.URL, item.ModelSnapshot.Policy.AllowedOutputHosts) {
+		return &provider.Error{Code: "OUTPUT_HOST_REJECTED", Message: "redirected output host is not allowlisted"}
+	}
 	if res.StatusCode < 200 || res.StatusCode >= 300 {
-		return nil, "", fmt.Errorf("download result: HTTP %d", res.StatusCode)
+		return fmt.Errorf("download result: HTTP %d", res.StatusCode)
 	}
-	data, err := io.ReadAll(io.LimitReader(res.Body, 50*1024*1024+1))
-	if err != nil || len(data) > 50*1024*1024 {
-		return nil, "", errors.New("result image exceeds limit")
+	f, err := os.OpenFile(target, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o640)
+	if err != nil {
+		return err
 	}
-	return data, res.Header.Get("Content-Type"), nil
+	defer func() {
+		closeErr := f.Close()
+		if err == nil {
+			err = closeErr
+		}
+		if err != nil {
+			_ = os.Remove(target)
+		}
+	}()
+	const maximum = int64(50 * 1024 * 1024)
+	written, err := io.Copy(f, io.LimitReader(res.Body, maximum+1))
+	if err != nil {
+		return errors.New("provider result download failed")
+	}
+	if written > maximum {
+		return errors.New("result image exceeds limit")
+	}
+	return f.Sync()
+}
+
+func generationOutputURLAllowed(parsed *url.URL, patterns []string) bool {
+	if parsed == nil || parsed.Scheme != "https" {
+		return false
+	}
+	for _, pattern := range patterns {
+		if outputHostAllowed(parsed.Hostname(), pattern) {
+			return true
+		}
+	}
+	return false
 }
 
 func outputHostAllowed(host, pattern string) bool {
@@ -1786,7 +1756,58 @@ func outputHostAllowed(host, pattern string) bool {
 	return region != "" && !strings.Contains(region, ".")
 }
 
-func (w *GenerateWorker) makeThumbnails(ctx context.Context, key string) {
+func (w *GenerateWorker) ensurePresentationVariants(ctx context.Context, key string) (string, error) {
+	select {
+	case w.ThumbSem <- struct{}{}:
+		defer func() { <-w.ThumbSem }()
+	case <-ctx.Done():
+		return "", ctx.Err()
+	}
+	original, err := w.Blobs.Resolve(key)
+	if err != nil {
+		return "", err
+	}
+	for _, size := range []string{"320", "640"} {
+		if err := createThumbnailVariant(ctx, original, size, 82); err != nil {
+			return "", fmt.Errorf("create required thumbnail %s: %w", size, err)
+		}
+	}
+	for _, placeholder := range []struct {
+		size    string
+		quality int
+	}{{"24", 35}, {"16", 25}} {
+		blurPath := thumbnailTempPath(filepath.Dir(original), "blur")
+		if err := runVIPSThumbnail(ctx, original, blurPath, placeholder.size, placeholder.quality); err != nil {
+			_ = os.Remove(blurPath)
+			return "", fmt.Errorf("create blur placeholder: %w", err)
+		}
+		blur, readErr := os.ReadFile(blurPath)
+		_ = os.Remove(blurPath)
+		if readErr != nil {
+			return "", readErr
+		}
+		dataURL := "data:image/webp;base64," + base64.StdEncoding.EncodeToString(blur)
+		if len(dataURL) <= 4096 {
+			return dataURL, nil
+		}
+	}
+	return "", errors.New("blur placeholder exceeds 4 KiB")
+}
+
+func (w *GenerateWorker) presentationVariantsReady(key string) bool {
+	original, err := w.Blobs.Resolve(key)
+	if err != nil {
+		return false
+	}
+	for _, size := range []string{"320", "640"} {
+		if _, err := os.Stat(filepath.Join(filepath.Dir(original), "thumb-"+size+".webp")); err != nil {
+			return false
+		}
+	}
+	return true
+}
+
+func (w *GenerateWorker) makeOptionalThumbnail(ctx context.Context, key, size string) {
 	select {
 	case w.ThumbSem <- struct{}{}:
 		defer func() { <-w.ThumbSem }()
@@ -1794,32 +1815,82 @@ func (w *GenerateWorker) makeThumbnails(ctx context.Context, key string) {
 		return
 	}
 	original, err := w.Blobs.Resolve(key)
-	if err != nil {
+	if err == nil {
+		err = createThumbnailVariant(ctx, original, size, 82)
+	}
+	if err != nil && w.Log != nil {
+		w.Log.Warn("optional thumbnail failed", "error", err, "asset", key, "variant", size)
+	}
+}
+
+func (w *GenerateWorker) queueOptionalThumbnail(key string) {
+	if w.OptionalThumbQueue == nil {
 		return
 	}
-	for _, size := range []string{"320", "640", "1280"} {
-		final := filepath.Join(filepath.Dir(original), "thumb-"+size+".webp")
-		if _, err := os.Stat(final); err == nil {
-			continue
-		}
-		temp := thumbnailTempPath(filepath.Dir(original), size)
-		thumbCtx, cancelThumb := context.WithTimeout(ctx, 60*time.Second)
-		command := exec.CommandContext(thumbCtx, "vipsthumbnail", original, "--size", size+"x", "--output", temp+"[Q=82,strip]")
-		command.Env = append(os.Environ(), "VIPS_CONCURRENCY=2", "VIPS_DISC_THRESHOLD=268435456", "MALLOC_ARENA_MAX=2")
-		if output, err := command.CombinedOutput(); err != nil {
-			cancelThumb()
-			w.Log.Warn("thumbnail failed", "error", err, "detail", string(output), "asset", key)
-			_ = os.Remove(temp)
-			continue
-		}
-		cancelThumb()
-		if err := os.Rename(temp, final); err != nil {
-			if w.Log != nil {
-				w.Log.Warn("thumbnail publish failed", "error", err, "asset", key, "variant", size)
-			}
-			_ = os.Remove(temp)
+	select {
+	case w.OptionalThumbQueue <- key:
+	default:
+		if w.Log != nil {
+			w.Log.Warn("optional thumbnail queue full", "asset", key)
 		}
 	}
+}
+
+func (w *GenerateWorker) RunOptionalThumbnails(ctx context.Context, concurrency int) {
+	if w.OptionalThumbQueue == nil || concurrency < 1 {
+		return
+	}
+	done := make(chan struct{}, concurrency)
+	for range concurrency {
+		go func() {
+			defer func() { done <- struct{}{} }()
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case key := <-w.OptionalThumbQueue:
+					w.makeOptionalThumbnail(ctx, key, "1280")
+				}
+			}
+		}()
+	}
+	for range concurrency {
+		<-done
+	}
+}
+
+func (w *GenerateWorker) makeThumbnails(ctx context.Context, key string) {
+	if _, err := w.ensurePresentationVariants(ctx, key); err != nil {
+		if w.Log != nil {
+			w.Log.Warn("required thumbnails failed", "error", err, "asset", key)
+		}
+		return
+	}
+	w.makeOptionalThumbnail(ctx, key, "1280")
+}
+
+func createThumbnailVariant(ctx context.Context, original, size string, quality int) error {
+	final := filepath.Join(filepath.Dir(original), "thumb-"+size+".webp")
+	if _, err := os.Stat(final); err == nil {
+		return nil
+	}
+	temp := thumbnailTempPath(filepath.Dir(original), size)
+	defer os.Remove(temp)
+	if err := runVIPSThumbnail(ctx, original, temp, size, quality); err != nil {
+		return err
+	}
+	return os.Rename(temp, final)
+}
+
+func runVIPSThumbnail(ctx context.Context, original, output, size string, quality int) error {
+	thumbCtx, cancelThumb := context.WithTimeout(ctx, 60*time.Second)
+	defer cancelThumb()
+	command := exec.CommandContext(thumbCtx, "vipsthumbnail", original, "--size", size+"x", "--output", fmt.Sprintf("%s[Q=%d,strip]", output, quality))
+	command.Env = append(os.Environ(), "VIPS_CONCURRENCY=2", "VIPS_DISC_THRESHOLD=268435456", "MALLOC_ARENA_MAX=2")
+	if outputBytes, err := command.CombinedOutput(); err != nil {
+		return fmt.Errorf("vipsthumbnail: %w: %s", err, strings.TrimSpace(string(outputBytes)))
+	}
+	return nil
 }
 
 func thumbnailTempPath(directory, size string) string {
@@ -2142,6 +2213,52 @@ func validateProviderImage(data []byte) (media, extension string, width, height 
 		return "", "", 0, 0, errors.New("provider image format changed during full decoding")
 	}
 	return media, extension, width, height, nil
+}
+
+func validateProviderImageFile(path string) (media, extension string, width, height int, err error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return "", "", 0, 0, err
+	}
+	defer f.Close()
+	header := make([]byte, 512)
+	n, readErr := io.ReadFull(f, header)
+	if readErr != nil && !errors.Is(readErr, io.ErrUnexpectedEOF) {
+		return "", "", 0, 0, errors.New("provider returned an invalid image")
+	}
+	contentType := http.DetectContentType(header[:n])
+	if _, err = f.Seek(0, io.SeekStart); err != nil {
+		return "", "", 0, 0, err
+	}
+	config, format, err := image.DecodeConfig(f)
+	if err != nil || config.Width < 1 || config.Height < 1 || config.Width > 8192 || config.Height > 8192 || int64(config.Width)*int64(config.Height) > 64*1024*1024 {
+		return "", "", 0, 0, errors.New("provider returned an invalid or oversized image")
+	}
+	switch format {
+	case "jpeg":
+		media, extension = "image/jpeg", "jpg"
+	case "png":
+		media, extension = "image/png", "png"
+	case "webp":
+		media, extension = "image/webp", "webp"
+	default:
+		return "", "", 0, 0, errors.New("provider returned an unsupported image format")
+	}
+	if contentType != media {
+		return "", "", 0, 0, errors.New("provider image MIME mismatch")
+	}
+	if _, err = f.Seek(0, io.SeekStart); err != nil {
+		return "", "", 0, 0, err
+	}
+	decoded, decodedFormat, err := image.Decode(f)
+	if err != nil {
+		return "", "", 0, 0, errors.New("provider returned a truncated or corrupt image")
+	}
+	bounds := decoded.Bounds()
+	if bounds.Dx() != config.Width || bounds.Dy() != config.Height || decodedFormat != format {
+		return "", "", 0, 0, errors.New("provider image changed during full decoding")
+	}
+	return media, extension, config.Width, config.Height, nil
 }
 
 func writeSynced(path string, data []byte) (err error) {

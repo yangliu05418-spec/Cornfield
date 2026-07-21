@@ -271,6 +271,11 @@ func refillGenerationTokens(tokens float64, updatedAt, now time.Time) float64 {
 }
 
 func containsControlledLegnextInput(prompt string) bool {
+	// Midjourney arrangement syntax is owned by the service as well. Legnext
+	// documents braces as unsupported for V8.1; reject them before a paid draw.
+	if strings.ContainsAny(prompt, "{}") {
+		return true
+	}
 	for _, field := range strings.Fields(strings.ToLower(prompt)) {
 		field = strings.Trim(field, "\"'`()[]{}<>,.;")
 		// Cornfield owns every Midjourney switch in V1. Rejecting the entire

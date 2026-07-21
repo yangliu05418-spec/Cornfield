@@ -13,11 +13,13 @@ import (
 	"io"
 	"log/slog"
 	"math"
+	"math/rand/v2"
 	"net/http"
 	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -265,8 +267,11 @@ func (w *GenerateWorker) Work(ctx context.Context, riverJob *river.Job[GenerateA
 			cancelFinalPoll()
 			release()
 			breakerKey := record.ProviderID + ":" + record.ModelID
-			w.recordPassiveBreaker(ctx, record, model, breakerKey, finalPollErr)
-			w.finishAttempt(attemptID, record, "deadline_poll", time.Since(started), finalPollErr, finalResult.Usage, finalResult.Telemetry)
+			finalObservedErr := observedResultError(finalResult, finalPollErr)
+			if finalPollErr != nil || terminalProviderResult(finalResult.Status) {
+				w.recordPassiveBreaker(ctx, record, model, breakerKey, finalObservedErr)
+			}
+			w.finishAttempt(attemptID, record, "deadline_poll", time.Since(started), finalObservedErr, finalResult.Usage, finalResult.Telemetry)
 			var finalProviderErr *provider.Error
 			if errors.As(finalPollErr, &finalProviderErr) && finalProviderErr.PauseProvider {
 				if pauseErr := w.pauseProvider(ctx, record, model, finalProviderErr); pauseErr != nil {
@@ -295,7 +300,7 @@ func (w *GenerateWorker) Work(ctx context.Context, riverJob *river.Job[GenerateA
 					}
 					return w.ingestStaged(ctx, record)
 				case "failed":
-					return w.fail(ctx, record, valueOr(finalResult.ErrorCode, "PROVIDER_JOB_FAILED"), valueOr(finalResult.ErrorText, "上游生成失败"), false)
+					return w.fail(ctx, record, valueOr(finalResult.ErrorCode, "PROVIDER_JOB_FAILED"), valueOr(finalResult.ErrorText, "上游生成失败"), finalResult.ErrorRetryable)
 				}
 			}
 			cancelResult, cancelErr := w.cancelRemote(ctx, record, adapter, submission)
@@ -456,8 +461,11 @@ func (w *GenerateWorker) Work(ctx context.Context, riverJob *river.Job[GenerateA
 	result, pollErr := adapter.Poll(pollCtx, submissionFromRecord(record))
 	cancelPoll()
 	release()
-	w.recordPassiveBreaker(ctx, record, model, breakerKey, pollErr)
-	w.finishAttempt(attemptID, record, "poll", time.Since(started), pollErr, result.Usage, result.Telemetry)
+	observedErr := observedResultError(result, pollErr)
+	if pollErr != nil || terminalProviderResult(result.Status) {
+		w.recordPassiveBreaker(ctx, record, model, breakerKey, observedErr)
+	}
+	w.finishAttempt(attemptID, record, "poll", time.Since(started), observedErr, result.Usage, result.Telemetry)
 	if pollErr != nil {
 		if status, statusErr := w.currentStatus(ctx, record.JobID); statusErr == nil && (status == "cancelling" || status == "cancelled") {
 			tracked, cancelErr := w.completeCancellation(ctx, record, adapter, submissionFromRecord(record), false)
@@ -499,9 +507,30 @@ func (w *GenerateWorker) Work(ctx context.Context, riverJob *river.Job[GenerateA
 		}
 		return w.ingestStaged(ctx, record)
 	case "failed":
-		return w.fail(ctx, record, valueOr(result.ErrorCode, "PROVIDER_JOB_FAILED"), valueOr(result.ErrorText, "上游生成失败"), false)
+		return w.fail(ctx, record, valueOr(result.ErrorCode, "PROVIDER_JOB_FAILED"), valueOr(result.ErrorText, "上游生成失败"), result.ErrorRetryable)
 	default:
 		return river.JobSnooze(boundedSnooze(3*time.Second, record.GenerationDeadline))
+	}
+}
+
+func terminalProviderResult(status string) bool {
+	switch strings.ToLower(strings.TrimSpace(status)) {
+	case "completed", "succeeded", "failed":
+		return true
+	default:
+		return false
+	}
+}
+
+func observedResultError(result provider.Result, transportErr error) error {
+	if transportErr != nil || strings.ToLower(strings.TrimSpace(result.Status)) != "failed" {
+		return transportErr
+	}
+	return &provider.Error{
+		Code:      valueOr(result.ErrorCode, "PROVIDER_JOB_FAILED"),
+		Message:   valueOr(result.ErrorText, "provider generation failed"),
+		Retryable: result.ErrorRetryable,
+		Telemetry: result.Telemetry,
 	}
 }
 
@@ -772,7 +801,19 @@ func (w *GenerateWorker) prepareGenerationOutput(ctx context.Context, item gener
 	if len(output.Bytes) > 0 {
 		err = writeSynced(tempPath, output.Bytes)
 	} else if output.URL != "" {
+		operation := fmt.Sprintf("download_%d", index)
+		var attemptID int64
+		if w.DB != nil {
+			attemptID, err = w.beginAttempt(ctx, item, operation)
+			if err != nil {
+				return preparedGenerationOutput{}, err
+			}
+		}
+		started := time.Now()
 		err = w.downloadToFile(ctx, item, output.URL, tempPath)
+		if attemptID != 0 {
+			w.finishAttempt(attemptID, item, operation, time.Since(started), err, nil, provider.Telemetry{})
+		}
 	} else {
 		err = errors.New("provider output has no image data")
 	}
@@ -1187,7 +1228,7 @@ func userFacingGenerationError(code string) string {
 		return "当前参数无法生成，请调整后重试"
 	case "PROVIDER_IMAGE_INVALID", "PROVIDER_RESPONSE_INVALID", "PROVIDER_EMPTY_RESULT", "PROVIDER_OUTPUT_COUNT_INVALID":
 		return "生成结果无法处理，请调整参数后重试"
-	case "PROVIDER_HTTP_429", "SUBMIT_RETRIES_EXHAUSTED":
+	case "PROVIDER_HTTP_429", "LEGNEXT_TASK_FAILED", "SUBMIT_RETRIES_EXHAUSTED":
 		return "生成服务繁忙，请稍后重试"
 	case "REFERENCE_READ_FAILED":
 		return "参考图无法读取，请重新添加后重试"
@@ -1425,8 +1466,11 @@ func (w *GenerateWorker) observeTerminalUpstream(ctx context.Context, item gener
 	result, pollErr := adapter.Poll(pollCtx, submissionFromRecord(item))
 	cancelPoll()
 	release()
-	w.recordPassiveBreaker(ctx, item, item.ModelSnapshot, item.ProviderID+":"+item.ModelID, pollErr)
-	w.finishAttempt(attemptID, item, "cancelled_poll", time.Since(started), pollErr, result.Usage, result.Telemetry)
+	observedErr := observedResultError(result, pollErr)
+	if pollErr != nil || terminalProviderResult(result.Status) {
+		w.recordPassiveBreaker(ctx, item, item.ModelSnapshot, item.ProviderID+":"+item.ModelID, observedErr)
+	}
+	w.finishAttempt(attemptID, item, "cancelled_poll", time.Since(started), observedErr, result.Usage, result.Telemetry)
 	if pollErr == nil && providerResultTerminal(result.Status) {
 		if err := w.clearUpstreamLease(ctx, item.JobID); err != nil {
 			return err
@@ -1692,24 +1736,54 @@ func (w *GenerateWorker) downloadToFile(ctx context.Context, item generationReco
 	if !generationOutputURLAllowed(parsed, item.ModelSnapshot.Policy.AllowedOutputHosts) {
 		return &provider.Error{Code: "OUTPUT_HOST_REJECTED", Message: "output host is not allowlisted"}
 	}
+	var lastErr error
+	for attempt := 0; attempt < 3; attempt++ {
+		lastErr, retry, retryAfter := w.downloadToFileOnce(ctx, item, rawURL, target)
+		if lastErr == nil || !retry || attempt == 2 {
+			return lastErr
+		}
+		if retryAfter <= 0 {
+			// Keep result recovery responsive while spreading concurrent four-image
+			// retries. This path never resubmits the paid generation request.
+			ceiling := 250 * time.Millisecond * time.Duration(1<<attempt)
+			retryAfter = time.Duration(rand.Int64N(int64(ceiling) + 1))
+		}
+		timer := time.NewTimer(retryAfter)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return ctx.Err()
+		case <-timer.C:
+		}
+	}
+	return lastErr
+}
+
+func (w *GenerateWorker) downloadToFileOnce(ctx context.Context, item generationRecord, rawURL, target string) (err error, retry bool, retryAfter time.Duration) {
 	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
 	res, err := w.HTTPClient.Do(req)
 	if err != nil {
 		// net/http wraps transport failures in url.Error, whose string contains
 		// the complete provider URL. CDN query parameters can be bearer tokens,
 		// so never let that error cross into River or structured logs.
-		return errors.New("provider result download failed")
+		return &provider.Error{Code: "OUTPUT_DOWNLOAD_FAILED", Message: "provider result download failed", Retryable: true}, true, 0
 	}
 	defer res.Body.Close()
 	if res.Request == nil || res.Request.URL == nil || !generationOutputURLAllowed(res.Request.URL, item.ModelSnapshot.Policy.AllowedOutputHosts) {
-		return &provider.Error{Code: "OUTPUT_HOST_REJECTED", Message: "redirected output host is not allowlisted"}
+		return &provider.Error{Code: "OUTPUT_HOST_REJECTED", Message: "redirected output host is not allowlisted"}, false, 0
 	}
 	if res.StatusCode < 200 || res.StatusCode >= 300 {
-		return fmt.Errorf("download result: HTTP %d", res.StatusCode)
+		providerErr := &provider.Error{Code: fmt.Sprintf("OUTPUT_HTTP_%d", res.StatusCode), Message: fmt.Sprintf("download result: HTTP %d", res.StatusCode), Telemetry: provider.Telemetry{HTTPStatus: res.StatusCode}}
+		retry = res.StatusCode == http.StatusRequestTimeout || res.StatusCode == http.StatusTooManyRequests || res.StatusCode >= 500
+		if retry {
+			retryAfter = parseDownloadRetryAfter(res.Header.Get("Retry-After"), time.Now())
+			providerErr.Retryable = true
+		}
+		return providerErr, retry, retryAfter
 	}
 	f, err := os.OpenFile(target, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o640)
 	if err != nil {
-		return err
+		return err, false, 0
 	}
 	defer func() {
 		closeErr := f.Close()
@@ -1723,12 +1797,30 @@ func (w *GenerateWorker) downloadToFile(ctx context.Context, item generationReco
 	const maximum = int64(50 * 1024 * 1024)
 	written, err := io.Copy(f, io.LimitReader(res.Body, maximum+1))
 	if err != nil {
-		return errors.New("provider result download failed")
+		return &provider.Error{Code: "OUTPUT_DOWNLOAD_FAILED", Message: "provider result download failed", Retryable: true}, true, 0
 	}
 	if written > maximum {
-		return errors.New("result image exceeds limit")
+		return errors.New("result image exceeds limit"), false, 0
 	}
-	return f.Sync()
+	if err = f.Sync(); err != nil {
+		return err, false, 0
+	}
+	return nil, false, 0
+}
+
+func parseDownloadRetryAfter(value string, now time.Time) time.Duration {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return 0
+	}
+	if seconds, err := strconv.Atoi(value); err == nil && seconds >= 0 {
+		return time.Duration(seconds) * time.Second
+	}
+	when, err := http.ParseTime(value)
+	if err != nil || !when.After(now) {
+		return 0
+	}
+	return when.Sub(now)
 }
 
 func generationOutputURLAllowed(parsed *url.URL, patterns []string) bool {
@@ -2049,7 +2141,7 @@ func (w *GenerateWorker) recordBreaker(ctx context.Context, item generationRecor
 	}
 	opened, until := w.Breaker.RecordPolicy(key, attemptErr == nil, model.Policy.BreakerMinRequests, model.Policy.BreakerFailureRatio, time.Duration(model.Policy.BreakerCooldownSeconds)*time.Second)
 	if opened {
-		if _, err := w.DB.Exec(ctx, `UPDATE providers SET state='degraded',breaker_open_until=$2,last_error_at=now(),updated_at=now() WHERE id=$1 AND state<>'paused'`, item.ProviderID, until); err != nil && w.Log != nil {
+		if _, err := w.DB.Exec(ctx, `UPDATE providers SET state='degraded',breaker_open_until=$2,last_error_code=$3,last_error_at=now(),updated_at=now() WHERE id=$1 AND state<>'paused'`, item.ProviderID, until, providerErrorCode(attemptErr)); err != nil && w.Log != nil {
 			w.Log.Warn("provider breaker state update failed", "provider", item.ProviderID, "error", err)
 		}
 	} else if attemptErr == nil {
@@ -2065,7 +2157,7 @@ func breakerExemptError(err error) bool {
 		return false
 	}
 	switch providerErr.Code {
-	case "CONTENT_POLICY_REJECTED", "UNSUPPORTED_PARAMETER", "REFERENCE_URL_INVALID":
+	case "CONTENT_POLICY_REJECTED", "UNSUPPORTED_PARAMETER", "REFERENCE_URL_INVALID", "PROVIDER_HTTP_400", "PROVIDER_HTTP_413", "PROVIDER_HTTP_422":
 		return true
 	}
 	switch providerErr.Telemetry.HTTPStatus {
@@ -2090,7 +2182,7 @@ func (w *GenerateWorker) recordPassiveBreaker(ctx context.Context, item generati
 	}
 	opened, until := w.Breaker.RecordPassivePolicy(key, attemptErr == nil, model.Policy.BreakerMinRequests, model.Policy.BreakerFailureRatio, time.Duration(model.Policy.BreakerCooldownSeconds)*time.Second)
 	if opened {
-		if _, err := w.DB.Exec(ctx, `UPDATE providers SET state='degraded',breaker_open_until=$2,last_error_at=now(),updated_at=now() WHERE id=$1 AND state<>'paused'`, item.ProviderID, until); err != nil && w.Log != nil {
+		if _, err := w.DB.Exec(ctx, `UPDATE providers SET state='degraded',breaker_open_until=$2,last_error_code=$3,last_error_at=now(),updated_at=now() WHERE id=$1 AND state<>'paused'`, item.ProviderID, until, providerErrorCode(attemptErr)); err != nil && w.Log != nil {
 			w.Log.Warn("provider passive breaker state update failed", "provider", item.ProviderID, "error", err)
 		}
 	} else if attemptErr == nil {
@@ -2098,6 +2190,14 @@ func (w *GenerateWorker) recordPassiveBreaker(ctx context.Context, item generati
 			w.Log.Warn("provider passive breaker recovery update failed", "provider", item.ProviderID, "error", err)
 		}
 	}
+}
+
+func providerErrorCode(err error) string {
+	var providerErr *provider.Error
+	if errors.As(err, &providerErr) {
+		return providerErr.Code
+	}
+	return "PROVIDER_REQUEST_FAILED"
 }
 
 func (w *GenerateWorker) acquireProvider(ctx context.Context, providerID string) (func(), error) {

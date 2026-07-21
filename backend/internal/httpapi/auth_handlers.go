@@ -27,10 +27,7 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	input.Username = auth.NormalizeUsername(input.Username)
-	host, _, _ := net.SplitHostPort(r.RemoteAddr)
-	if host == "" {
-		host = r.RemoteAddr
-	}
+	host := loginClientIP(r)
 	key := hashForAudit(strings.ToLower(input.Username) + ":" + host)
 	if !s.rateLimiter.Allow(key) {
 		writeError(w, http.StatusTooManyRequests, "LOGIN_RATE_LIMITED", "尝试次数过多，请稍后再试", true, r)
@@ -111,6 +108,23 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 		"user":       map[string]any{"id": user.ID, "username": user.Username, "display_name": user.DisplayName, "role": user.Role, "must_change_password": user.MustChange},
 		"csrf_token": csrf,
 	})
+}
+
+// loginClientIP trusts X-Real-IP only because the API is bound to loopback and
+// the sole caller is Cornfield's Nginx, which overwrites the header after its
+// Cloudflare real-IP module has validated the peer network.
+func loginClientIP(r *http.Request) string {
+	if forwarded := strings.TrimSpace(r.Header.Get("X-Real-IP")); net.ParseIP(forwarded) != nil {
+		return forwarded
+	}
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err == nil && net.ParseIP(host) != nil {
+		return host
+	}
+	if net.ParseIP(r.RemoteAddr) != nil {
+		return r.RemoteAddr
+	}
+	return "unknown"
 }
 
 func (s *Server) me(w http.ResponseWriter, r *http.Request) {

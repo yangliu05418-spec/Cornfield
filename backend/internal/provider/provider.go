@@ -59,7 +59,11 @@ type Result struct {
 	Usage     map[string]any
 	ErrorCode string
 	ErrorText string
-	Telemetry Telemetry
+	// ErrorRetryable only controls an explicit user-initiated retry after the
+	// provider has reached a terminal failure. Workers never resubmit a paid
+	// task automatically from this flag.
+	ErrorRetryable bool
+	Telemetry      Telemetry
 }
 
 // Telemetry contains bounded, non-secret transport metadata that can be used

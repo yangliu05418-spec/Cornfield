@@ -1,10 +1,23 @@
 package httpapi
 
 import (
+	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 )
+
+func TestLoginClientIPUsesNginxRealIP(t *testing.T) {
+	request := &http.Request{RemoteAddr: "127.0.0.1:4567", Header: make(http.Header)}
+	request.Header.Set("X-Real-IP", "203.0.113.9")
+	if got := loginClientIP(request); got != "203.0.113.9" {
+		t.Fatalf("loginClientIP = %q", got)
+	}
+	request.Header.Set("X-Real-IP", "not-an-ip")
+	if got := loginClientIP(request); got != "127.0.0.1" {
+		t.Fatalf("invalid forwarded IP fallback = %q", got)
+	}
+}
 
 func TestDecodeJSONRejectsTrailingValue(t *testing.T) {
 	request := httptest.NewRequest("POST", "/", strings.NewReader(`{"name":"first"} {"name":"second"}`))

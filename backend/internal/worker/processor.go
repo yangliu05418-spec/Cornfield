@@ -1738,7 +1738,7 @@ func (w *GenerateWorker) downloadToFile(ctx context.Context, item generationReco
 	}
 	var lastErr error
 	for attempt := 0; attempt < 3; attempt++ {
-		lastErr, retry, retryAfter := w.downloadToFileOnce(ctx, item, rawURL, target)
+		retry, retryAfter, lastErr := w.downloadToFileOnce(ctx, item, rawURL, target)
 		if lastErr == nil || !retry || attempt == 2 {
 			return lastErr
 		}
@@ -1759,18 +1759,18 @@ func (w *GenerateWorker) downloadToFile(ctx context.Context, item generationReco
 	return lastErr
 }
 
-func (w *GenerateWorker) downloadToFileOnce(ctx context.Context, item generationRecord, rawURL, target string) (err error, retry bool, retryAfter time.Duration) {
+func (w *GenerateWorker) downloadToFileOnce(ctx context.Context, item generationRecord, rawURL, target string) (retry bool, retryAfter time.Duration, err error) {
 	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
 	res, err := w.HTTPClient.Do(req)
 	if err != nil {
 		// net/http wraps transport failures in url.Error, whose string contains
 		// the complete provider URL. CDN query parameters can be bearer tokens,
 		// so never let that error cross into River or structured logs.
-		return &provider.Error{Code: "OUTPUT_DOWNLOAD_FAILED", Message: "provider result download failed", Retryable: true}, true, 0
+		return true, 0, &provider.Error{Code: "OUTPUT_DOWNLOAD_FAILED", Message: "provider result download failed", Retryable: true}
 	}
 	defer res.Body.Close()
 	if res.Request == nil || res.Request.URL == nil || !generationOutputURLAllowed(res.Request.URL, item.ModelSnapshot.Policy.AllowedOutputHosts) {
-		return &provider.Error{Code: "OUTPUT_HOST_REJECTED", Message: "redirected output host is not allowlisted"}, false, 0
+		return false, 0, &provider.Error{Code: "OUTPUT_HOST_REJECTED", Message: "redirected output host is not allowlisted"}
 	}
 	if res.StatusCode < 200 || res.StatusCode >= 300 {
 		providerErr := &provider.Error{Code: fmt.Sprintf("OUTPUT_HTTP_%d", res.StatusCode), Message: fmt.Sprintf("download result: HTTP %d", res.StatusCode), Telemetry: provider.Telemetry{HTTPStatus: res.StatusCode}}
@@ -1779,11 +1779,11 @@ func (w *GenerateWorker) downloadToFileOnce(ctx context.Context, item generation
 			retryAfter = parseDownloadRetryAfter(res.Header.Get("Retry-After"), time.Now())
 			providerErr.Retryable = true
 		}
-		return providerErr, retry, retryAfter
+		return retry, retryAfter, providerErr
 	}
 	f, err := os.OpenFile(target, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o640)
 	if err != nil {
-		return err, false, 0
+		return false, 0, err
 	}
 	defer func() {
 		closeErr := f.Close()
@@ -1797,15 +1797,15 @@ func (w *GenerateWorker) downloadToFileOnce(ctx context.Context, item generation
 	const maximum = int64(50 * 1024 * 1024)
 	written, err := io.Copy(f, io.LimitReader(res.Body, maximum+1))
 	if err != nil {
-		return &provider.Error{Code: "OUTPUT_DOWNLOAD_FAILED", Message: "provider result download failed", Retryable: true}, true, 0
+		return true, 0, &provider.Error{Code: "OUTPUT_DOWNLOAD_FAILED", Message: "provider result download failed", Retryable: true}
 	}
 	if written > maximum {
-		return errors.New("result image exceeds limit"), false, 0
+		return false, 0, errors.New("result image exceeds limit")
 	}
 	if err = f.Sync(); err != nil {
-		return err, false, 0
+		return false, 0, err
 	}
-	return nil, false, 0
+	return false, 0, nil
 }
 
 func parseDownloadRetryAfter(value string, now time.Time) time.Duration {

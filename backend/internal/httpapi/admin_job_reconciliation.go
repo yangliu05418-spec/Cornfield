@@ -48,8 +48,6 @@ func (s *Server) listSubmissionUncertain(w http.ResponseWriter, r *http.Request)
 	}
 	defer rows.Close()
 	items := make([]map[string]any, 0, limit+1)
-	var lastCreated time.Time
-	var lastID uuid.UUID
 	for rows.Next() {
 		var jobID, batchID, userID uuid.UUID
 		var username, modelID, providerID string
@@ -67,7 +65,6 @@ func (s *Server) listSubmissionUncertain(w http.ResponseWriter, r *http.Request)
 			"age_seconds": max(int(time.Since(createdAt).Seconds()), 0), "provider_job_id": providerJobID,
 			"latest_attempt": map[string]any{"operation": operation, "outcome": outcome, "error_code": errorCode, "error_message": errorMessage, "http_status": httpStatus, "finished_at": finishedAt},
 		})
-		lastCreated, lastID = createdAt, jobID
 	}
 	if err = rows.Err(); err != nil {
 		writeError(w, http.StatusInternalServerError, "DATABASE_ERROR", "无法读取需要核查的提交", true, r)
@@ -77,8 +74,8 @@ func (s *Server) listSubmissionUncertain(w http.ResponseWriter, r *http.Request)
 	if len(items) > limit {
 		items = items[:limit]
 		last := items[len(items)-1]
-		lastCreated = last["created_at"].(time.Time)
-		lastID = last["id"].(uuid.UUID)
+		lastCreated := last["created_at"].(time.Time)
+		lastID := last["id"].(uuid.UUID)
 		nextCursor = encodeGenerationCursor(lastCreated, lastID)
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"items": items, "next_cursor": nextCursor})

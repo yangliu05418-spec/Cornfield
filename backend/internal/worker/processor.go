@@ -1507,16 +1507,25 @@ func (w *GenerateWorker) ingestStaged(ctx context.Context, item generationRecord
 		if info.Size() != output.ByteSize {
 			return fmt.Errorf("staged output size mismatch for index %d", output.OutputIndex)
 		}
-		if output.BlurDataURL == "" || !w.presentationVariantsReady(output.StorageKey) {
-			blurDataURL, presentationErr := w.ensurePresentationVariants(ctx, output.StorageKey)
+	}
+	variants, variantsCtx := errgroup.WithContext(ctx)
+	for index := range staged {
+		output := &staged[index]
+		if output.BlurDataURL != "" && w.presentationVariantsReady(output.StorageKey) {
+			continue
+		}
+		variants.Go(func() error {
+			blurDataURL, presentationErr := w.ensurePresentationVariants(variantsCtx, output.StorageKey)
 			if presentationErr != nil {
 				return presentationErr
 			}
 			output.BlurDataURL = blurDataURL
-			if _, updateErr := w.DB.Exec(ctx, `UPDATE generation_staged_outputs SET blur_data_url=$3 WHERE job_id=$1 AND output_index=$2`, item.JobID, output.OutputIndex, blurDataURL); updateErr != nil {
-				return updateErr
-			}
-		}
+			_, updateErr := w.DB.Exec(variantsCtx, `UPDATE generation_staged_outputs SET blur_data_url=$3 WHERE job_id=$1 AND output_index=$2`, item.JobID, output.OutputIndex, blurDataURL)
+			return updateErr
+		})
+	}
+	if err := variants.Wait(); err != nil {
+		return err
 	}
 	select {
 	case w.IngestSem <- struct{}{}:

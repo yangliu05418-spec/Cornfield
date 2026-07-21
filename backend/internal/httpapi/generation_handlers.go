@@ -296,6 +296,7 @@ type jobResponse struct {
 	ExpectedOutputs int                        `json:"expected_outputs"`
 	ErrorCode       *string                    `json:"error_code,omitempty"`
 	ErrorMessage    *string                    `json:"error_message,omitempty"`
+	Retryable       bool                       `json:"retryable"`
 	Outputs         []generationOutputResponse `json:"outputs"`
 	DeletedOutputs  []int                      `json:"deleted_outputs,omitempty"`
 	DismissedAt     *time.Time                 `json:"dismissed_at,omitempty"`
@@ -326,6 +327,7 @@ type batchResponse struct {
 	CreatedAt        time.Time                  `json:"created_at"`
 	Jobs             []jobResponse              `json:"jobs"`
 	Options          provider.GenerationOptions `json:"options"`
+	InputAssetIDs    []uuid.UUID                `json:"input_asset_ids,omitempty"`
 }
 
 type generationJobLocation struct {
@@ -673,7 +675,7 @@ func (s *Server) listGenerations(w http.ResponseWriter, r *http.Request) {
 		batchIDs[index] = items[index].ID
 	}
 
-	jobRows, err := s.db.Query(r.Context(), `SELECT batch_id,id,draw_index,status,expected_outputs,error_code,error_message,dismissed_at
+	jobRows, err := s.db.Query(r.Context(), `SELECT batch_id,id,draw_index,status,expected_outputs,error_code,error_message,retryable,dismissed_at
 		FROM generation_jobs WHERE batch_id=ANY($1) ORDER BY batch_id,draw_index,id`, batchIDs)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "DATABASE_ERROR", "读取任务失败", true, r)
@@ -682,7 +684,7 @@ func (s *Server) listGenerations(w http.ResponseWriter, r *http.Request) {
 	for jobRows.Next() {
 		var batchID uuid.UUID
 		var job jobResponse
-		if err = jobRows.Scan(&batchID, &job.ID, &job.DrawIndex, &job.Status, &job.ExpectedOutputs, &job.ErrorCode, &job.ErrorMessage, &job.DismissedAt); err != nil {
+		if err = jobRows.Scan(&batchID, &job.ID, &job.DrawIndex, &job.Status, &job.ExpectedOutputs, &job.ErrorCode, &job.ErrorMessage, &job.Retryable, &job.DismissedAt); err != nil {
 			jobRows.Close()
 			writeError(w, http.StatusInternalServerError, "DATABASE_ERROR", "读取任务失败", true, r)
 			return
@@ -754,7 +756,7 @@ func (s *Server) loadBatch(ctx context.Context, id uuid.UUID, sess session) (bat
 	if err != nil {
 		return item, err
 	}
-	rows, err := s.db.Query(ctx, `SELECT id,draw_index,status,expected_outputs,error_code,error_message,dismissed_at FROM generation_jobs WHERE batch_id=$1 ORDER BY draw_index`, id)
+	rows, err := s.db.Query(ctx, `SELECT id,draw_index,status,expected_outputs,error_code,error_message,retryable,dismissed_at FROM generation_jobs WHERE batch_id=$1 ORDER BY draw_index`, id)
 	if err != nil {
 		return item, err
 	}
@@ -762,7 +764,7 @@ func (s *Server) loadBatch(ctx context.Context, id uuid.UUID, sess session) (bat
 	jobIndexes := make(map[uuid.UUID]int, item.DrawCount)
 	for rows.Next() {
 		var job jobResponse
-		if err := rows.Scan(&job.ID, &job.DrawIndex, &job.Status, &job.ExpectedOutputs, &job.ErrorCode, &job.ErrorMessage, &job.DismissedAt); err != nil {
+		if err := rows.Scan(&job.ID, &job.DrawIndex, &job.Status, &job.ExpectedOutputs, &job.ErrorCode, &job.ErrorMessage, &job.Retryable, &job.DismissedAt); err != nil {
 			rows.Close()
 			return item, err
 		}
@@ -776,6 +778,9 @@ func (s *Server) loadBatch(ctx context.Context, id uuid.UUID, sess session) (bat
 		return item, err
 	}
 	rows.Close()
+	if err = s.db.QueryRow(ctx, `SELECT COALESCE(array_agg(asset_id ORDER BY position),'{}'::uuid[]) FROM generation_input_assets WHERE batch_id=$1`, id).Scan(&item.InputAssetIDs); err != nil {
+		return item, err
+	}
 	outputRows, err := s.db.Query(ctx, `SELECT o.job_id,o.asset_id,o.output_index,a.width,a.height,a.media_type,
 		(o.deleted_at IS NOT NULL OR a.purged_at IS NOT NULL OR a.purge_pending)
 		FROM generation_outputs o JOIN generation_jobs j ON j.id=o.job_id JOIN assets a ON a.id=o.asset_id

@@ -33,6 +33,7 @@ export type WallItem = {
   status?: string
   prompt?: string
   errorMessage?: string
+  errorCode?: string
   outputIndex?: number
   cancellable?: boolean
 }
@@ -54,6 +55,7 @@ type JustifiedWallProps = {
   onReference: (asset: Asset) => void
   onCancel: (batchID: string, jobID: string) => void
   onDelete: (asset: Asset) => void
+  onDismiss: (batchID: string, jobID: string) => void
   onNotice?: (message: string) => void
   onLoadMore?: () => void
   hasMore?: boolean
@@ -120,6 +122,7 @@ export function buildWallItems(
   for (const batch of batches) {
     const [ratioWidth, ratioHeight] = batch.aspect_ratio.split(':').map(Number)
     for (const job of batch.jobs) {
+      if (job.dismissed_at) continue
       const deletedOutputs = new Set(job.deleted_outputs ?? [])
       for (let output = 0; output < job.expected_outputs; output++) {
         if (deletedOutputs.has(output)) continue
@@ -149,6 +152,7 @@ export function buildWallItems(
           status: job.status,
           prompt: batch.prompt,
           errorMessage: job.error_message,
+          errorCode: job.error_code,
           outputIndex: output,
           cancellable: !terminal && !batch.id.startsWith('optimistic:'),
         })
@@ -177,6 +181,7 @@ export const JustifiedWall = forwardRef<
     onReference,
     onCancel,
     onDelete,
+    onDismiss,
     onNotice,
     onLoadMore,
     hasMore = false,
@@ -372,6 +377,7 @@ export const JustifiedWall = forwardRef<
                     onReference={onReference}
                     onCancel={onCancel}
                     onDelete={onDelete}
+                    onDismiss={onDismiss}
                     onPreview={setPreview}
                     onNotice={onNotice}
                   />
@@ -409,6 +415,7 @@ function WallCard({
   onReference,
   onCancel,
   onDelete,
+  onDismiss,
   onPreview,
   onNotice,
 }: {
@@ -417,9 +424,11 @@ function WallCard({
   onReference: (asset: Asset) => void
   onCancel: (batchID: string, jobID: string) => void
   onDelete: (asset: Asset) => void
+  onDismiss: (batchID: string, jobID: string) => void
   onPreview: (asset: Asset) => void
   onNotice?: (message: string) => void
 }) {
+  const [imageLoaded, setImageLoaded] = useState(false)
   const style = {
     left: item.left,
     width: item.renderWidth,
@@ -448,9 +457,24 @@ function WallCard({
             <X size={13} />
           </button>
         )}
+        {terminal && item.jobID && item.batchID && (
+          <div className="failed-card-overlay">
+            <button
+              type="button"
+              aria-label="移除这次失败记录"
+              onClick={() => onDismiss(item.batchID!, item.jobID!)}
+            >
+              <Trash2 size={14} />
+            </button>
+          </div>
+        )}
         <div className="placeholder-copy">
           <span>{item.outputIndex! + 1}</span>
-          <p>{item.errorMessage || item.prompt}</p>
+          <p>
+            {terminal
+              ? generationErrorMessage(item.errorCode, item.errorMessage)
+              : item.prompt}
+          </p>
         </div>
       </article>
     )
@@ -492,6 +516,7 @@ function WallCard({
       onKeyDown={openFromCard}
     >
       <img
+        className={imageLoaded ? 'is-loaded' : ''}
         src={asset.thumb_640_url}
         srcSet={`${asset.thumb_320_url} 320w, ${asset.thumb_640_url} 640w, ${asset.thumb_1280_url} 1280w`}
         sizes={`${Math.ceil(item.renderWidth)}px`}
@@ -500,6 +525,7 @@ function WallCard({
         loading={priority ? 'eager' : 'lazy'}
         fetchPriority={priority ? 'high' : 'auto'}
         decoding="async"
+        onLoad={() => setImageLoaded(true)}
         alt="生成资产"
       />
       <div className="card-overlay">
@@ -532,6 +558,28 @@ function WallCard({
       </div>
     </article>
   )
+}
+
+function generationErrorMessage(code?: string, _fallback?: string): string {
+  switch (code) {
+    case 'CONTENT_POLICY_REJECTED':
+      return '图片可能触发安全策略，请调整描述'
+    case 'UNSUPPORTED_PARAMETER':
+    case 'PROVIDER_HTTP_400':
+    case 'PROVIDER_HTTP_413':
+    case 'PROVIDER_HTTP_422':
+      return '当前参数无法生成，请调整后重试'
+    case 'PROVIDER_IMAGE_INVALID':
+    case 'PROVIDER_RESPONSE_INVALID':
+      return '生成结果无法处理，请调整参数后重试'
+    case 'PROVIDER_HTTP_429':
+      return '生成服务繁忙，请稍后重试'
+    case 'SUBMISSION_UNCERTAIN':
+    case 'SUBMISSION_INTERRUPTED':
+      return '任务提交结果不确定，请等待核查或移除记录'
+    default:
+      return '生成失败，请稍后重试'
+  }
 }
 
 function PreviewDialog({

@@ -20,6 +20,7 @@ import type {
   Asset,
   AssetPage,
   GenerationBatch,
+  GenerationJob,
   GenerationOptions,
   MidjourneyOptions,
   Model,
@@ -57,6 +58,22 @@ type PendingSubmission = {
     draw_count: number
     input_asset_ids: string[]
     options: GenerationOptions
+  }
+}
+
+type JobEventEnvelope = {
+  id: number
+  type: string
+  batch_id?: string
+  job_id?: string
+  payload?: {
+    status?: string
+    error_code?: string
+    message?: string
+    completed_outputs?: number
+    dismissed?: boolean
+    outputs?: GenerationJob['outputs']
+    assets?: Asset[]
   }
 }
 
@@ -99,6 +116,76 @@ function mergeAsset(queryClient: QueryClient, asset: Asset): void {
   })
 }
 
+export function mergeGenerationBatch(
+  queryClient: QueryClient,
+  incoming: GenerationBatch,
+): void {
+  queryClient.setQueryData<GenerationPages>(['generations'], (current) => {
+    if (!current?.pages.length) {
+      return {
+        pages: [{ items: [incoming], next_cursor: '' }],
+        pageParams: [''],
+      }
+    }
+    const found = current.pages.some((page) =>
+      page.items.some((batch) => batch.id === incoming.id),
+    )
+    const pages = current.pages.map((page) => ({
+      ...page,
+      items: page.items.map((batch) => {
+        if (batch.id !== incoming.id) return batch
+        return incoming
+      }),
+    }))
+    if (!found) pages[0] = { ...pages[0], items: [incoming, ...pages[0].items] }
+    return { ...current, pages }
+  })
+}
+
+export function applyGenerationEvent(
+  queryClient: QueryClient,
+  event: JobEventEnvelope,
+): void {
+  const payload = event.payload ?? {}
+  for (const asset of payload.assets ?? []) mergeAsset(queryClient, asset)
+  if (!event.batch_id) return
+  queryClient.setQueryData<GenerationPages>(['generations'], (current) => {
+    if (!current) return current
+    return {
+      ...current,
+      pages: current.pages.map((page) => ({
+        ...page,
+        items: page.items.map((batch) => {
+          if (batch.id !== event.batch_id) return batch
+          const jobs = batch.jobs.map((job) => {
+            if (!event.job_id || job.id !== event.job_id) return job
+            return {
+              ...job,
+              ...(payload.status ? { status: payload.status } : {}),
+              ...(payload.error_code ? { error_code: payload.error_code } : {}),
+              ...(payload.message ? { error_message: payload.message } : {}),
+              ...(payload.outputs ? { outputs: payload.outputs } : {}),
+              ...(payload.dismissed
+                ? { dismissed_at: new Date().toISOString() }
+                : {}),
+            }
+          })
+          return {
+            ...batch,
+            jobs,
+            ...(payload.completed_outputs !== undefined
+              ? { completed_outputs: payload.completed_outputs }
+              : {}),
+            ...(!event.job_id && payload.status
+              ? { status: payload.status }
+              : {}),
+          }
+        }),
+      })),
+    }
+  })
+}
+
 function isNetworkFailure(reason: unknown): boolean {
   return reason instanceof TypeError
 }
@@ -129,7 +216,7 @@ function CreatePage() {
   const uploadControllers = useRef(new Set<AbortController>())
   const assetRefreshInFlight = useRef<Promise<void> | null>(null)
   const assetRefreshVersion = useRef(0)
-  const completionRevision = useRef<string | null>(null)
+  const assetRecoveryRevision = useRef('')
   const me = useQuery({ queryKey: ['me'], queryFn: getMe, retry: false })
   const models = useQuery({
     queryKey: ['models'],
@@ -235,25 +322,35 @@ function CreatePage() {
     generations.hasNextPage,
     generations.isFetchingNextPage,
   ])
-  const completedOutputsRevision = useMemo(
-    () =>
-      (generations.data?.pages ?? [])
-        .flatMap((page) => page.items)
-        .filter((batch) => batch.completed_outputs > 0)
-        .map((batch) => `${batch.id}:${batch.completed_outputs}`)
-        .join('|'),
-    [generations.data?.pages],
-  )
+  const missingCompletedAssetRevision = useMemo(() => {
+    if (!assets.isSuccess) return ''
+    const cachedAssetIDs = new Set(
+      assets.data.pages.flatMap((page) => page.items.map((asset) => asset.id)),
+    )
+    return (generations.data?.pages ?? [])
+      .flatMap((page) => page.items)
+      .filter((batch) => {
+        if (batch.completed_outputs < 1) return false
+        const outputAssetIDs = batch.jobs.flatMap((job) =>
+          (job.outputs ?? []).map((output) => output.asset_id),
+        )
+        return (
+          outputAssetIDs.length < batch.completed_outputs ||
+          outputAssetIDs.some((id) => !cachedAssetIDs.has(id))
+        )
+      })
+      .map((batch) => `${batch.id}:${batch.completed_outputs}`)
+      .join('|')
+  }, [assets.data?.pages, assets.isSuccess, generations.data?.pages])
   useEffect(() => {
-    if (completionRevision.current === null) {
-      completionRevision.current = completedOutputsRevision
-      if (completedOutputsRevision) void refreshAssetHead()
+    if (!missingCompletedAssetRevision) {
+      assetRecoveryRevision.current = ''
       return
     }
-    if (completionRevision.current === completedOutputsRevision) return
-    completionRevision.current = completedOutputsRevision
+    if (assetRecoveryRevision.current === missingCompletedAssetRevision) return
+    assetRecoveryRevision.current = missingCompletedAssetRevision
     void refreshAssetHead()
-  }, [completedOutputsRevision, refreshAssetHead])
+  }, [missingCompletedAssetRevision, refreshAssetHead])
   useEffect(() => {
     if (!activeModel) return
     if (!modelID) setModelID(activeModel.id)
@@ -291,19 +388,35 @@ function CreatePage() {
         ? `/api/v1/events?after=${encodeURIComponent(lastEventID)}`
         : '/api/v1/events',
     )
-    let refreshTimer = 0
-    let refreshAssets = false
-    const scheduleRefresh = (includeAssets: boolean) => {
-      refreshAssets ||= includeAssets
-      if (refreshTimer) return
-      refreshTimer = window.setTimeout(() => {
-        refreshTimer = 0
-        void queryClient.invalidateQueries({ queryKey: ['generations'] })
-        if (refreshAssets) {
-          refreshAssets = false
-          void refreshAssetHead()
-        }
-      }, 200)
+    const reconcileTimers = new Map<string, number>()
+    const reconcileAssets = new Set<string>()
+    const reconcileInFlight = new Map<string, Promise<void>>()
+    const reconcileBatch = (batchID: string) => {
+      const existing = reconcileInFlight.get(batchID)
+      if (existing) return existing
+      const request = api<GenerationBatch>(`/api/v1/generations/${batchID}`)
+        .then((batch) => mergeGenerationBatch(queryClient, batch))
+        .then(() =>
+          reconcileAssets.delete(batchID) ? refreshAssetHead() : undefined,
+        )
+        .catch(() => {
+          void queryClient.invalidateQueries({ queryKey: ['generations'] })
+        })
+        .finally(() => reconcileInFlight.delete(batchID))
+      reconcileInFlight.set(batchID, request)
+      return request
+    }
+    const scheduleReconcile = (batchID: string, includeAssets: boolean) => {
+      if (includeAssets) reconcileAssets.add(batchID)
+      const existing = reconcileTimers.get(batchID)
+      if (existing) window.clearTimeout(existing)
+      reconcileTimers.set(
+        batchID,
+        window.setTimeout(() => {
+          reconcileTimers.delete(batchID)
+          void reconcileBatch(batchID)
+        }, 2_000),
+      )
     }
     const updateCursor = (event: MessageEvent<string>) => {
       let cursor = event.lastEventId
@@ -325,24 +438,30 @@ function CreatePage() {
       if (event.lastEventId) {
         window.sessionStorage.setItem(eventCursorKey, event.lastEventId)
       }
-      let eventType = ''
       try {
-        eventType = (JSON.parse(event.data) as { type?: string }).type ?? ''
+        const envelope = JSON.parse(event.data) as JobEventEnvelope
+        applyGenerationEvent(queryClient, envelope)
+        if (envelope.batch_id) {
+          scheduleReconcile(
+            envelope.batch_id,
+            envelope.type === 'job.succeeded',
+          )
+        }
       } catch {
-        // The generations snapshot still recovers an event with invalid data.
+        void queryClient.invalidateQueries({ queryKey: ['generations'] })
+        void refreshAssetHead()
       }
-      scheduleRefresh(eventType === 'job.succeeded')
     })
     stream.addEventListener('reset', (event) => {
-      if (refreshTimer) {
-        window.clearTimeout(refreshTimer)
-        refreshTimer = 0
-      }
+      for (const timer of reconcileTimers.values()) window.clearTimeout(timer)
+      reconcileTimers.clear()
+      reconcileAssets.clear()
       updateCursor(event)
-      scheduleRefresh(true)
+      void queryClient.invalidateQueries({ queryKey: ['generations'] })
+      void refreshAssetHead()
     })
     return () => {
-      if (refreshTimer) window.clearTimeout(refreshTimer)
+      for (const timer of reconcileTimers.values()) window.clearTimeout(timer)
       stream.close()
     }
   }, [me.data?.user.id, queryClient, refreshAssetHead])
@@ -508,6 +627,40 @@ function CreatePage() {
       setNotice(reason instanceof Error ? reason.message : '删除失败')
     }
   }
+  async function dismissJob(batchID: string, jobID: string) {
+    if (!window.confirm('移除这次失败记录？任务审计仍会保留。')) return
+    const previous = queryClient.getQueryData<GenerationPages>(['generations'])
+    queryClient.setQueryData<GenerationPages>(['generations'], (current) => {
+      if (!current) return current
+      return {
+        ...current,
+        pages: current.pages.map((page) => ({
+          ...page,
+          items: page.items.map((batch) =>
+            batch.id !== batchID
+              ? batch
+              : {
+                  ...batch,
+                  jobs: batch.jobs.map((job) =>
+                    job.id === jobID
+                      ? { ...job, dismissed_at: new Date().toISOString() }
+                      : job,
+                  ),
+                },
+          ),
+        })),
+      }
+    })
+    try {
+      await api(`/api/v1/generations/${batchID}/jobs/${jobID}`, {
+        method: 'DELETE',
+      })
+      setNotice('失败记录已移除')
+    } catch (reason) {
+      queryClient.setQueryData(['generations'], previous)
+      setNotice(reason instanceof Error ? reason.message : '移除失败')
+    }
+  }
   async function cancel(batchID: string, jobID: string) {
     try {
       const result = await api<{
@@ -657,6 +810,7 @@ function CreatePage() {
           onReference={addReference}
           onCancel={cancel}
           onDelete={(asset) => void deleteAsset(asset)}
+          onDismiss={(batchID, jobID) => void dismissJob(batchID, jobID)}
           onNotice={setNotice}
           hasMore={assets.hasNextPage}
           isLoadingMore={assets.isFetchingNextPage}

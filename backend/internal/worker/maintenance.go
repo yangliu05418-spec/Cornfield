@@ -25,14 +25,65 @@ type Maintenance struct {
 
 func (m *Maintenance) Run(ctx context.Context) {
 	m.cleanup(ctx)
+	m.backfillBlurData(ctx, 25)
 	ticker := time.NewTicker(24 * time.Hour)
 	defer ticker.Stop()
+	blurTicker := time.NewTicker(30 * time.Second)
+	defer blurTicker.Stop()
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
 			m.cleanup(ctx)
+		case <-blurTicker.C:
+			m.backfillBlurData(ctx, 25)
+		}
+	}
+}
+
+func (m *Maintenance) backfillBlurData(ctx context.Context, limit int) {
+	if m.Generator == nil || limit < 1 {
+		return
+	}
+	rows, err := m.DB.Query(ctx, `SELECT id,storage_key FROM assets
+		WHERE purged_at IS NULL AND purge_pending=false AND blur_data_url IS NULL
+		ORDER BY created_at,id LIMIT $1`, limit)
+	if err != nil {
+		m.Log.Warn("blur placeholder scan failed", "error", err)
+		return
+	}
+	type candidate struct {
+		id  uuid.UUID
+		key string
+	}
+	items := make([]candidate, 0, limit)
+	for rows.Next() {
+		var item candidate
+		if err = rows.Scan(&item.id, &item.key); err != nil {
+			rows.Close()
+			m.Log.Warn("blur placeholder scan failed", "error", err)
+			return
+		}
+		items = append(items, item)
+	}
+	err = rows.Err()
+	rows.Close()
+	if err != nil {
+		m.Log.Warn("blur placeholder scan failed", "error", err)
+		return
+	}
+	for _, item := range items {
+		if ctx.Err() != nil {
+			return
+		}
+		blurDataURL, generateErr := m.Generator.ensurePresentationVariants(ctx, item.key)
+		if generateErr != nil {
+			m.Log.Warn("blur placeholder backfill failed", "asset_id", item.id, "error", generateErr)
+			continue
+		}
+		if _, updateErr := m.DB.Exec(ctx, `UPDATE assets SET blur_data_url=$2 WHERE id=$1 AND blur_data_url IS NULL`, item.id, blurDataURL); updateErr != nil {
+			m.Log.Warn("blur placeholder update failed", "asset_id", item.id, "error", updateErr)
 		}
 	}
 }

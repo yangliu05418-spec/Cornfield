@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -21,7 +22,7 @@ func TestDownloadErrorDoesNotExposeSignedProviderURL(t *testing.T) {
 	item := generationRecord{ModelSnapshot: modelconfig.Model{Policy: modelconfig.Policy{
 		AllowedOutputHosts: []string{"cdn.legnext.ai"},
 	}}}
-	_, _, err := worker.download(context.Background(), item, "https://cdn.legnext.ai/output.png?token=url-secret")
+	err := worker.downloadToFile(context.Background(), item, "https://cdn.legnext.ai/output.png?token=url-secret", filepath.Join(t.TempDir(), "output.part"))
 	if err == nil {
 		t.Fatal("download unexpectedly succeeded")
 	}

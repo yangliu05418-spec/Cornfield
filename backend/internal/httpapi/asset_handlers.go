@@ -27,6 +27,7 @@ type assetResponse struct {
 	Height           int        `json:"height"`
 	ByteSize         int64      `json:"byte_size"`
 	SHA256           string     `json:"sha256"`
+	BlurDataURL      *string    `json:"blur_data_url,omitempty"`
 	URL              string     `json:"url"`
 	Thumb320URL      string     `json:"thumb_320_url"`
 	Thumb640URL      string     `json:"thumb_640_url"`
@@ -247,7 +248,7 @@ func (s *Server) listAssets(w http.ResponseWriter, r *http.Request) {
 		}
 		folderID = &parsed
 	}
-	rows, err := s.db.Query(r.Context(), `SELECT a.id,a.kind,a.media_type,a.original_filename,a.width,a.height,a.byte_size,a.sha256,a.created_at,o.job_id,o.output_index,j.batch_id,a.folder_id,a.archived_at
+	rows, err := s.db.Query(r.Context(), `SELECT a.id,a.kind,a.media_type,a.original_filename,a.width,a.height,a.byte_size,a.sha256,a.blur_data_url,a.created_at,o.job_id,o.output_index,j.batch_id,a.folder_id,a.archived_at
 		FROM assets a
 		LEFT JOIN generation_outputs o ON o.asset_id=a.id
 		LEFT JOIN generation_jobs j ON j.id=o.job_id
@@ -265,7 +266,7 @@ func (s *Server) listAssets(w http.ResponseWriter, r *http.Request) {
 	for rows.Next() {
 		var item assetResponse
 		var createdAt time.Time
-		if err := rows.Scan(&item.ID, &item.Kind, &item.MediaType, &item.OriginalFilename, &item.Width, &item.Height, &item.ByteSize, &item.SHA256, &createdAt, &item.JobID, &item.OutputIndex, &item.BatchID, &item.FolderID, &item.ArchivedAt); err != nil {
+		if err := rows.Scan(&item.ID, &item.Kind, &item.MediaType, &item.OriginalFilename, &item.Width, &item.Height, &item.ByteSize, &item.SHA256, &item.BlurDataURL, &createdAt, &item.JobID, &item.OutputIndex, &item.BatchID, &item.FolderID, &item.ArchivedAt); err != nil {
 			writeError(w, http.StatusInternalServerError, "DATABASE_ERROR", "读取资产失败", true, r)
 			return
 		}
@@ -319,13 +320,19 @@ func (s *Server) assetContent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	variantReady := variant == ""
+	servedVariant := "original"
 	if variant != "" {
-		candidate := filepath.ToSlash(filepath.Join(filepath.Dir(storageKey), "thumb-"+variant+".webp"))
-		if path, resolveErr := s.blobs.Resolve(candidate); resolveErr == nil {
-			if _, statErr := os.Stat(path); statErr == nil {
-				storageKey = candidate
-				item.MediaType = "image/webp"
-				variantReady = true
+		fallbacks := map[string][]string{"320": {"320"}, "640": {"640", "320"}, "1280": {"1280", "640", "320"}}[variant]
+		for _, candidateVariant := range fallbacks {
+			candidate := filepath.ToSlash(filepath.Join(filepath.Dir(storageKey), "thumb-"+candidateVariant+".webp"))
+			if path, resolveErr := s.blobs.Resolve(candidate); resolveErr == nil {
+				if _, statErr := os.Stat(path); statErr == nil {
+					storageKey = candidate
+					item.MediaType = "image/webp"
+					servedVariant = candidateVariant
+					variantReady = candidateVariant == variant
+					break
+				}
 			}
 		}
 	}
@@ -343,11 +350,10 @@ func (s *Server) assetContent(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	} else {
-		// Thumbnail generation is deliberately outside the database commit. If
-		// the first request wins that short race, serve the original without a
-		// durable cache key so it cannot poison the immutable variant URL.
+		// A smaller ready thumbnail is preferable to a multi-megabyte original.
+		// Never cache it under the requested immutable variant URL.
 		w.Header().Set("Cache-Control", "private, no-store")
-		w.Header().Set("X-Cornfield-Variant", "pending")
+		w.Header().Set("X-Cornfield-Variant", "fallback-"+servedVariant)
 	}
 	w.Header().Set("X-Accel-Redirect", "/_protected_assets/"+storageKey)
 	if r.URL.Query().Get("download") == "1" {
@@ -365,9 +371,9 @@ func (s *Server) loadAsset(r *http.Request, id uuid.UUID) (assetResponse, string
 	var item assetResponse
 	var key string
 	var createdAt time.Time
-	err := s.db.QueryRow(r.Context(), `SELECT a.id,a.kind,a.media_type,a.original_filename,a.width,a.height,a.byte_size,a.sha256,a.storage_key,a.created_at,o.job_id,o.output_index,j.batch_id,a.folder_id,a.archived_at
+	err := s.db.QueryRow(r.Context(), `SELECT a.id,a.kind,a.media_type,a.original_filename,a.width,a.height,a.byte_size,a.sha256,a.blur_data_url,a.storage_key,a.created_at,o.job_id,o.output_index,j.batch_id,a.folder_id,a.archived_at
 		FROM assets a LEFT JOIN generation_outputs o ON o.asset_id=a.id LEFT JOIN generation_jobs j ON j.id=o.job_id
-		WHERE a.id=$1 AND a.purged_at IS NULL AND a.purge_pending=false AND (a.owner_user_id=$2 OR $3='admin')`, id, sess.UserID, sess.Role).Scan(&item.ID, &item.Kind, &item.MediaType, &item.OriginalFilename, &item.Width, &item.Height, &item.ByteSize, &item.SHA256, &key, &createdAt, &item.JobID, &item.OutputIndex, &item.BatchID, &item.FolderID, &item.ArchivedAt)
+		WHERE a.id=$1 AND a.purged_at IS NULL AND a.purge_pending=false AND (a.owner_user_id=$2 OR $3='admin')`, id, sess.UserID, sess.Role).Scan(&item.ID, &item.Kind, &item.MediaType, &item.OriginalFilename, &item.Width, &item.Height, &item.ByteSize, &item.SHA256, &item.BlurDataURL, &key, &createdAt, &item.JobID, &item.OutputIndex, &item.BatchID, &item.FolderID, &item.ArchivedAt)
 	item.CreatedAt = createdAt.Format(time.RFC3339Nano)
 	item.setURLs()
 	return item, key, err

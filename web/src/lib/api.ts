@@ -68,6 +68,7 @@ export type GenerationJob = {
   error_message?: string
   outputs?: GenerationOutput[]
   deleted_outputs?: number[]
+  dismissed_at?: string
 }
 
 export type MidjourneyOptions = {

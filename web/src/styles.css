@@ -802,6 +802,11 @@ select {
   height: 100%;
   display: block;
   object-fit: cover;
+  opacity: 0;
+  transition: opacity 180ms ease;
+}
+.wall-card img.is-loaded {
+  opacity: 1;
 }
 .card-overlay {
   position: absolute;
@@ -828,6 +833,32 @@ select {
 }
 .wall-card:focus-within .card-overlay {
   opacity: 1;
+}
+.failed-card-overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: flex-start;
+  justify-content: flex-end;
+  padding: 8px;
+  opacity: 0;
+  transition: opacity 160ms ease;
+}
+.wall-card:hover .failed-card-overlay,
+.wall-card:focus-within .failed-card-overlay {
+  opacity: 1;
+}
+.failed-card-overlay button {
+  width: 29px;
+  height: 29px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: #fff;
+  border: 1px solid rgb(255 255 255 / 14%);
+  border-radius: 9px;
+  background: rgb(10 11 12 / 76%);
+  backdrop-filter: blur(10px);
 }
 .card-overlay > button,
 .card-overlay > div > button,

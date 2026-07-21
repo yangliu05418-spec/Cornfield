@@ -127,4 +127,24 @@ describe('buildWallItems', () => {
     expect(items).toHaveLength(3)
     expect(items.map((item) => item.outputIndex)).toEqual([0, 1, 3])
   })
+
+  it('removes every placeholder belonging to a dismissed draw', () => {
+    const batch = {
+      id: 'batch',
+      prompt: 'test',
+      aspect_ratio: '1:1',
+      status: 'failed',
+      jobs: [
+        {
+          id: 'job',
+          status: 'failed',
+          expected_outputs: 4,
+          dismissed_at: '2026-07-21T00:00:00Z',
+          draw_index: 0,
+        },
+      ],
+    } as unknown as GenerationBatch
+
+    expect(buildWallItems([], [batch])).toEqual([])
+  })
 })

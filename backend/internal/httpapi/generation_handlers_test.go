@@ -35,6 +35,33 @@ func TestGenerationRequestHash(t *testing.T) {
 	}
 }
 
+func TestPublicJobErrorNeverReturnsProviderDetail(t *testing.T) {
+	for code, want := range map[string]string{
+		"CONTENT_POLICY_REJECTED": "图片可能触发安全策略，请调整描述",
+		"PROVIDER_HTTP_400":       "当前参数无法生成，请调整后重试",
+		"SUBMISSION_INTERRUPTED":  "任务提交结果不确定，请等待核查或移除记录",
+		"UNKNOWN_PROVIDER_ERROR":  "生成失败，请稍后重试",
+	} {
+		got := publicJobError(&code)
+		if got == nil || *got != want {
+			t.Errorf("publicJobError(%q) = %v, want %q", code, got, want)
+		}
+	}
+}
+
+func TestDismissibleJobStatus(t *testing.T) {
+	for _, status := range []string{"failed", "submission_uncertain", "cancelled"} {
+		if !dismissibleJobStatus(status) {
+			t.Errorf("%s should be dismissible", status)
+		}
+	}
+	for _, status := range []string{"queued", "submitting", "ingesting", "succeeded"} {
+		if dismissibleJobStatus(status) {
+			t.Errorf("%s should not be dismissible", status)
+		}
+	}
+}
+
 func TestDuplicateReferenceImagesAreRejected(t *testing.T) {
 	first := uuid.MustParse("ac2be23a-6f82-4c32-8165-9559cecf74fc")
 	second := uuid.MustParse("8dd52d1b-20b7-47e0-8406-430f604772cd")

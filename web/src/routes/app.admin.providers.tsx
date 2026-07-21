@@ -18,6 +18,9 @@ type Provider = {
   last_probe_at?: string
   last_error_code?: string
   active_jobs: number
+  terminal_successes_1h: number
+  availability_failures_1h: number
+  success_rate_1h?: number
 }
 
 function ProvidersPage() {
@@ -92,6 +95,22 @@ function ProvidersPage() {
                 <div>
                   <dt>LAST ERROR</dt>
                   <dd>{provider.last_error_code ?? 'NONE'}</dd>
+                </div>
+                <div>
+                  <dt>1H TERMINAL SUCCESS</dt>
+                  <dd>{provider.terminal_successes_1h}</dd>
+                </div>
+                <div>
+                  <dt>1H AVAILABILITY FAILURES</dt>
+                  <dd>{provider.availability_failures_1h}</dd>
+                </div>
+                <div>
+                  <dt>1H SUCCESS RATE</dt>
+                  <dd>
+                    {provider.success_rate_1h == null
+                      ? '—'
+                      : `${Math.round(provider.success_rate_1h * 100)}%`}
+                  </dd>
                 </div>
               </dl>
               {provider.state === 'paused' && provider.enabled && (

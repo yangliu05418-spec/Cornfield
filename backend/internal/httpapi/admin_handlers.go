@@ -268,8 +268,21 @@ func (s *Server) providers(w http.ResponseWriter, r *http.Request) {
 		 JOIN generation_batches b ON b.id=j.batch_id
 		 JOIN model_capability_versions v ON v.model_id=b.model_id AND v.revision=b.capability_revision
 		 WHERE v.config->>'provider'=p.id
-		   AND (j.status IN ('dispatched','submitting','provider_pending','ingesting','cancelling') OR j.upstream_active_until>now())) active_jobs
-		FROM providers p ORDER BY p.id`)
+			   AND (j.status IN ('dispatched','submitting','provider_pending','ingesting','cancelling') OR j.upstream_active_until>now())) active_jobs,
+		COALESCE(stats.terminal_successes,0),COALESCE(stats.availability_failures,0)
+		FROM providers p
+		LEFT JOIN LATERAL (
+			SELECT
+				count(*) FILTER (WHERE j.status='succeeded') terminal_successes,
+				count(*) FILTER (WHERE j.status='failed' AND (
+					j.error_code='PROVIDER_HTTP_429' OR j.error_code='LEGNEXT_TASK_FAILED' OR j.error_code ~ '^PROVIDER_HTTP_5[0-9][0-9]$'
+				)) availability_failures
+			FROM generation_jobs j
+			JOIN generation_batches b ON b.id=j.batch_id
+			JOIN model_capability_versions v ON v.model_id=b.model_id AND v.revision=b.capability_revision
+			WHERE v.config->>'provider'=p.id AND j.updated_at>=now()-interval '1 hour'
+		) stats ON true
+		ORDER BY p.id`)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "DATABASE_ERROR", "读取上游状态失败", true, r)
 		return
@@ -281,12 +294,18 @@ func (s *Server) providers(w http.ResponseWriter, r *http.Request) {
 		var enabled bool
 		var breaker, probe, lastErrorAt *time.Time
 		var errorCode *string
-		var active int
-		if err := rows.Scan(&id, &name, &enabled, &state, &breaker, &probe, &errorCode, &lastErrorAt, &active); err != nil {
+		var active, successes, availabilityFailures int
+		if err := rows.Scan(&id, &name, &enabled, &state, &breaker, &probe, &errorCode, &lastErrorAt, &active, &successes, &availabilityFailures); err != nil {
 			writeError(w, http.StatusInternalServerError, "DATABASE_ERROR", "读取上游状态失败", true, r)
 			return
 		}
-		items = append(items, map[string]any{"id": id, "display_name": name, "enabled": enabled, "state": state, "breaker_open_until": breaker, "last_probe_at": probe, "last_error_code": errorCode, "last_error_at": lastErrorAt, "active_jobs": active})
+		total := successes + availabilityFailures
+		var successRate *float64
+		if total > 0 {
+			value := float64(successes) / float64(total)
+			successRate = &value
+		}
+		items = append(items, map[string]any{"id": id, "display_name": name, "enabled": enabled, "state": state, "breaker_open_until": breaker, "last_probe_at": probe, "last_error_code": errorCode, "last_error_at": lastErrorAt, "active_jobs": active, "terminal_successes_1h": successes, "availability_failures_1h": availabilityFailures, "success_rate_1h": successRate})
 	}
 	if err := rows.Err(); err != nil {
 		writeError(w, http.StatusInternalServerError, "DATABASE_ERROR", "读取上游状态失败", true, r)

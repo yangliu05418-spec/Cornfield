@@ -30,6 +30,7 @@ export type WallItem = {
   asset?: Asset
   jobID?: string
   batchID?: string
+  modelID?: string
   status?: string
   prompt?: string
   errorMessage?: string
@@ -149,6 +150,7 @@ export function buildWallItems(
           height: ratioHeight || 1,
           jobID: job.id,
           batchID: batch.id,
+          modelID: batch.model_id,
           status: job.status,
           prompt: batch.prompt,
           errorMessage: job.error_message,
@@ -440,12 +442,12 @@ function WallCard({
       <article
         className={`wall-card placeholder${terminal ? ' terminal' : ''}`}
         style={style}
-        aria-label={`${statusLabel(item.status)}：${item.prompt ?? ''}`}
+        aria-label={`${statusLabel(item.status, item.modelID)}：${item.prompt ?? ''}`}
       >
         {!terminal && <div className="placeholder-shimmer" />}
         <div className="job-state">
           <span className="state-dot" />
-          {statusLabel(item.status)}
+          {statusLabel(item.status, item.modelID)}
         </div>
         {item.cancellable && item.jobID && item.batchID && (
           <button
@@ -712,7 +714,7 @@ async function copyAsset(asset: Asset): Promise<boolean> {
   }
 }
 
-function statusLabel(status?: string) {
+function statusLabel(status?: string, modelID?: string) {
   const labels: Record<string, string> = {
     creating: '正在创建',
     queued: '排队中',
@@ -724,6 +726,10 @@ function statusLabel(status?: string) {
     cancelled: '已取消',
     failed: '生成失败',
     submission_uncertain: '需要核查',
+  }
+  if (modelID === 'legnext-midjourney') {
+    if (status === 'provider_pending') return 'Midjourney 生成中'
+    if (status === 'ingesting') return '正在准备 4 张图片'
   }
   return labels[status ?? ''] ?? '生成中'
 }

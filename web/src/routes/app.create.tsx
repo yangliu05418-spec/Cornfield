@@ -11,6 +11,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { CSSProperties, FormEvent } from 'react'
 
 import { AppShell } from '#/components/app-shell'
+import { ConfirmDialog } from '#/components/confirm-dialog'
 import { GeneratorSelect } from '#/components/generator-select'
 import { buildWallItems, JustifiedWall } from '#/components/justified-wall'
 import { MidjourneyOptionsControl } from '#/components/midjourney-options'
@@ -190,6 +191,11 @@ function isNetworkFailure(reason: unknown): boolean {
   return reason instanceof TypeError
 }
 
+export function failedJobAction(job: GenerationJob): 'retry' | 'edit' | 'none' {
+  if (job.status !== 'failed') return 'none'
+  return job.retryable ? 'retry' : 'edit'
+}
+
 function referenceLimitLabel(bytes: number): string {
   const mebibytes = bytes / (1024 * 1024)
   return `${Number.isInteger(mebibytes) ? mebibytes : mebibytes.toFixed(1)} MiB`
@@ -213,6 +219,7 @@ function waitFor(ms: number, signal: AbortSignal): Promise<void> {
 function CreatePage() {
   const queryClient = useQueryClient()
   const wallRef = useRef<JustifiedWallHandle>(null)
+  const promptRef = useRef<HTMLTextAreaElement>(null)
   const uploadControllers = useRef(new Set<AbortController>())
   const assetRefreshInFlight = useRef<Promise<void> | null>(null)
   const assetRefreshVersion = useRef(0)
@@ -265,6 +272,14 @@ function CreatePage() {
     [],
   )
   const [notice, setNotice] = useState('')
+  const [confirm, setConfirm] = useState<{
+    title: string
+    description: string
+    label: string
+    dangerous?: boolean
+    action: () => Promise<void>
+  } | null>(null)
+  const [confirmBusy, setConfirmBusy] = useState(false)
   const activeModel =
     models.data?.models.find((model) => model.id === modelID) ??
     models.data?.models[0]
@@ -613,8 +628,16 @@ function CreatePage() {
       },
     })
   }
-  async function deleteAsset(asset: Asset) {
-    if (!window.confirm('永久删除这张图片？此操作无法撤销。')) return
+  function deleteAsset(asset: Asset) {
+    setConfirm({
+      title: '永久删除图片',
+      description: '图片及其缩略图将被永久删除，此操作无法撤销。',
+      label: '确认删除',
+      dangerous: true,
+      action: () => performDeleteAsset(asset),
+    })
+  }
+  async function performDeleteAsset(asset: Asset) {
     try {
       await api(`/api/v1/assets/${asset.id}`, { method: 'DELETE' })
       setReferences((current) => current.filter((item) => item.id !== asset.id))
@@ -627,8 +650,16 @@ function CreatePage() {
       setNotice(reason instanceof Error ? reason.message : '删除失败')
     }
   }
-  async function dismissJob(batchID: string, jobID: string) {
-    if (!window.confirm('移除这次失败记录？任务审计仍会保留。')) return
+  function dismissJob(batchID: string, jobID: string) {
+    setConfirm({
+      title: '移除失败记录',
+      description: '失败占位会从灵感墙移除，任务和上游审计仍会保留。',
+      label: '确认移除',
+      dangerous: true,
+      action: () => performDismissJob(batchID, jobID),
+    })
+  }
+  async function performDismissJob(batchID: string, jobID: string) {
     const previous = queryClient.getQueryData<GenerationPages>(['generations'])
     queryClient.setQueryData<GenerationPages>(['generations'], (current) => {
       if (!current) return current
@@ -659,6 +690,58 @@ function CreatePage() {
     } catch (reason) {
       queryClient.setQueryData(['generations'], previous)
       setNotice(reason instanceof Error ? reason.message : '移除失败')
+    }
+  }
+  async function restoreFailedBatch(batchID: string) {
+    const batch = await api<GenerationBatch>(`/api/v1/generations/${batchID}`)
+    setModelID(batch.model_id)
+    setPrompt(batch.prompt)
+    setRatio(batch.aspect_ratio)
+    setResolution(batch.resolution)
+    if (batch.options?.midjourney) setMidjourney(batch.options.midjourney)
+    if (batch.options?.image?.quality) setQuality(batch.options.image.quality)
+    const restored = await Promise.all(
+      (batch.input_asset_ids ?? []).map((id) =>
+        api<Asset>(`/api/v1/assets/${id}`).catch(() => null),
+      ),
+    )
+    setReferences(restored.filter((asset): asset is Asset => asset !== null))
+    window.requestAnimationFrame(() => promptRef.current?.focus())
+    setNotice('原参数已恢复，请调整描述或参数后重新生成')
+  }
+  function retryJob(batchID: string, jobID: string) {
+    const batch = generationItems.find((item) => item.id === batchID)
+    const job = batch?.jobs.find((item) => item.id === jobID)
+    if (!batch || !job) return
+    const action = failedJobAction(job)
+    if (action === 'none') return
+    if (action === 'edit') {
+      void restoreFailedBatch(batchID).catch((error: Error) =>
+        setNotice(error.message),
+      )
+      return
+    }
+    setConfirm({
+      title: '重新提交生成',
+      description: '这会创建一个新的上游任务，并可能产生新的费用。',
+      label: '确认重试',
+      action: async () => {
+        await api(`/api/v1/generations/${batchID}/retry`, { method: 'POST' })
+        await queryClient.invalidateQueries({ queryKey: ['generations'] })
+        setNotice('已创建新的生成任务')
+      },
+    })
+  }
+  async function runConfirmedAction() {
+    if (!confirm || confirmBusy) return
+    setConfirmBusy(true)
+    try {
+      await confirm.action()
+      setConfirm(null)
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : '操作失败')
+    } finally {
+      setConfirmBusy(false)
     }
   }
   async function cancel(batchID: string, jobID: string) {
@@ -811,6 +894,7 @@ function CreatePage() {
           onCancel={cancel}
           onDelete={(asset) => void deleteAsset(asset)}
           onDismiss={(batchID, jobID) => void dismissJob(batchID, jobID)}
+          onRetry={retryJob}
           onNotice={setNotice}
           hasMore={assets.hasNextPage}
           isLoadingMore={assets.isFetchingNextPage}
@@ -870,6 +954,7 @@ function CreatePage() {
                 </div>
               )}
               <textarea
+                ref={promptRef}
                 aria-label="生成提示词"
                 value={prompt}
                 onChange={(event) => setPrompt(event.target.value)}
@@ -969,6 +1054,16 @@ function CreatePage() {
             {create.isPending ? '提交中…' : '生成'}
           </button>
         </form>
+        <ConfirmDialog
+          open={confirm !== null}
+          title={confirm?.title ?? ''}
+          description={confirm?.description ?? ''}
+          confirmLabel={confirm?.label}
+          dangerous={confirm?.dangerous}
+          busy={confirmBusy}
+          onCancel={() => !confirmBusy && setConfirm(null)}
+          onConfirm={() => void runConfirmedAction()}
+        />
       </main>
     </AppShell>
   )

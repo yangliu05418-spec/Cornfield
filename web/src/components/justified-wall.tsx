@@ -1,5 +1,13 @@
 import { useVirtualizer } from '@tanstack/react-virtual'
-import { Copy, Download, ImagePlus, Maximize2, Trash2, X } from 'lucide-react'
+import {
+  Copy,
+  Download,
+  ImagePlus,
+  Maximize2,
+  RotateCcw,
+  Trash2,
+  X,
+} from 'lucide-react'
 import {
   forwardRef,
   useCallback,
@@ -57,6 +65,7 @@ type JustifiedWallProps = {
   onCancel: (batchID: string, jobID: string) => void
   onDelete: (asset: Asset) => void
   onDismiss: (batchID: string, jobID: string) => void
+  onRetry: (batchID: string, jobID: string) => void
   onNotice?: (message: string) => void
   onLoadMore?: () => void
   hasMore?: boolean
@@ -184,6 +193,7 @@ export const JustifiedWall = forwardRef<
     onCancel,
     onDelete,
     onDismiss,
+    onRetry,
     onNotice,
     onLoadMore,
     hasMore = false,
@@ -380,6 +390,7 @@ export const JustifiedWall = forwardRef<
                     onCancel={onCancel}
                     onDelete={onDelete}
                     onDismiss={onDismiss}
+                    onRetry={onRetry}
                     onPreview={setPreview}
                     onNotice={onNotice}
                   />
@@ -418,6 +429,7 @@ function WallCard({
   onCancel,
   onDelete,
   onDismiss,
+  onRetry,
   onPreview,
   onNotice,
 }: {
@@ -427,6 +439,7 @@ function WallCard({
   onCancel: (batchID: string, jobID: string) => void
   onDelete: (asset: Asset) => void
   onDismiss: (batchID: string, jobID: string) => void
+  onRetry: (batchID: string, jobID: string) => void
   onPreview: (asset: Asset) => void
   onNotice?: (message: string) => void
 }) {
@@ -461,6 +474,15 @@ function WallCard({
         )}
         {terminal && item.jobID && item.batchID && (
           <div className="failed-card-overlay">
+            {item.status === 'failed' && (
+              <button
+                type="button"
+                aria-label="重试或编辑参数"
+                onClick={() => onRetry(item.batchID!, item.jobID!)}
+              >
+                <RotateCcw size={14} />
+              </button>
+            )}
             <button
               type="button"
               aria-label="移除这次失败记录"

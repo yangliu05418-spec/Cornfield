@@ -66,6 +66,7 @@ export type GenerationJob = {
   expected_outputs: number
   error_code?: string
   error_message?: string
+  retryable?: boolean
   outputs?: GenerationOutput[]
   deleted_outputs?: number[]
   dismissed_at?: string
@@ -115,6 +116,7 @@ export type GenerationBatch = {
   created_at: string
   jobs: GenerationJob[]
   options?: GenerationOptions
+  input_asset_ids?: string[]
 }
 
 export class APIError extends Error {

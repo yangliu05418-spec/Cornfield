@@ -1,7 +1,7 @@
 import { QueryClient } from '@tanstack/react-query'
 import { describe, expect, it } from 'vitest'
 
-import { applyGenerationEvent } from './app.create'
+import { applyGenerationEvent, failedJobAction } from './app.create'
 import type { Asset, GenerationBatch } from '#/lib/api'
 
 describe('generation SSE cache', () => {
@@ -46,5 +46,27 @@ describe('generation SSE cache', () => {
     const assets = client.getQueryData<any>(['assets', 'wall'])
     expect(generations.pages[0].items[0].jobs[0].status).toBe('succeeded')
     expect(assets.pages[0].items).toEqual([asset])
+  })
+})
+
+describe('failed job actions', () => {
+  it('separates safe manual retries from edit and uncertain flows', () => {
+    expect(
+      failedJobAction({
+        status: 'failed',
+        retryable: true,
+      } as GenerationBatch['jobs'][number]),
+    ).toBe('retry')
+    expect(
+      failedJobAction({
+        status: 'failed',
+        retryable: false,
+      } as GenerationBatch['jobs'][number]),
+    ).toBe('edit')
+    expect(
+      failedJobAction({
+        status: 'submission_uncertain',
+      } as GenerationBatch['jobs'][number]),
+    ).toBe('none')
   })
 })

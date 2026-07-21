@@ -1599,6 +1599,39 @@ select {
   grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
   gap: 22px 7px;
 }
+.asset-bulk-toolbar {
+  position: sticky;
+  z-index: 12;
+  top: 10px;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin-bottom: 12px;
+  padding: 8px 10px;
+  border: 1px solid #3a3d3f;
+  border-radius: 12px;
+  background: rgba(24, 26, 28, 0.94);
+  backdrop-filter: blur(12px);
+}
+.asset-bulk-toolbar strong {
+  margin-right: auto;
+  color: var(--lime);
+  font-size: 11px;
+}
+.asset-bulk-toolbar button,
+.asset-bulk-toolbar select {
+  min-height: 30px;
+  padding: 0 9px;
+  border: 1px solid #383b3d;
+  border-radius: 8px;
+  background: #202326;
+  color: var(--text);
+  font-size: 10px;
+}
+.asset-bulk-toolbar .bulk-danger {
+  border-color: #673737;
+  color: #ffcaca;
+}
 .asset-grid article {
   min-width: 0;
   transition:
@@ -1619,6 +1652,33 @@ select {
   overflow: hidden;
   border-radius: 10px;
   background: var(--surface);
+}
+.asset-select {
+  position: absolute;
+  z-index: 3;
+  top: 7px;
+  left: 7px;
+  width: 28px;
+  height: 28px;
+  display: grid;
+  place-items: center;
+  border-radius: 7px;
+  background: rgba(10, 11, 12, 0.72);
+  opacity: 0;
+  transition: opacity 160ms ease;
+}
+.asset-select input {
+  position: absolute;
+  opacity: 0;
+}
+.asset-select:has(input:checked),
+.asset-image:hover .asset-select,
+.asset-image:focus-within .asset-select {
+  opacity: 1;
+}
+.asset-select:has(input:checked) {
+  background: var(--lime);
+  color: #0c0d0e;
 }
 .asset-image img {
   width: 100%;
@@ -1915,6 +1975,62 @@ select {
   margin: 5px 0 0;
   font-size: 12px;
 }
+.uncertain-jobs {
+  margin-top: 28px;
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: #17191b;
+}
+.uncertain-heading,
+.uncertain-jobs article {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.uncertain-heading {
+  justify-content: space-between;
+  margin-bottom: 10px;
+}
+.uncertain-heading h2 {
+  margin: 3px 0 0;
+  font-size: 20px;
+}
+.uncertain-jobs article {
+  flex-wrap: wrap;
+  min-height: 58px;
+  padding: 10px 0;
+  border-top: 1px solid var(--line);
+}
+.uncertain-jobs article > div:first-child {
+  min-width: 220px;
+  margin-right: auto;
+}
+.uncertain-jobs small {
+  display: block;
+  margin-top: 4px;
+  color: var(--muted);
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 9px;
+}
+.uncertain-attach,
+.uncertain-actions {
+  display: flex;
+  gap: 6px;
+}
+.uncertain-attach input,
+.uncertain-jobs button {
+  min-height: 31px;
+  padding: 0 9px;
+  border: 1px solid #383b3d;
+  border-radius: 8px;
+  background: #202326;
+  color: var(--text);
+  font-size: 10px;
+}
+.uncertain-attach input {
+  width: 160px;
+}
 .provider-action {
   display: flex;
   align-items: center;
@@ -2112,6 +2228,44 @@ select {
 }
 .modal-close svg {
   width: 16px;
+}
+.confirm-dialog {
+  width: min(420px, calc(100vw - 30px));
+  padding: 28px;
+  border: 1px solid #36383b;
+  border-radius: 14px;
+  background: #191b1d;
+  color: var(--text);
+  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.5);
+}
+.confirm-dialog::backdrop {
+  background: rgba(5, 6, 7, 0.8);
+  backdrop-filter: blur(14px);
+}
+.confirm-dialog h2 {
+  margin: 8px 0 10px;
+  font-size: 23px;
+  letter-spacing: -0.04em;
+}
+.confirm-dialog > p:not(.eyebrow) {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.65;
+}
+.confirm-dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 24px;
+}
+.danger-button {
+  padding: 9px 13px;
+  border: 1px solid #673737;
+  border-radius: 8px;
+  background: #3a2020;
+  color: #ffd4d4;
+  font-size: 10px;
 }
 .temporary-password {
   display: block;

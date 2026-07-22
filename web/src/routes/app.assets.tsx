@@ -293,7 +293,7 @@ function AssetsPage() {
             <input
               value={search}
               onChange={(event) => setSearch(event.target.value)}
-              placeholder="搜索文件名"
+              placeholder="搜索文件名或描述"
             />
           </label>
         </header>

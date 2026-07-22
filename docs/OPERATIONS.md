@@ -75,9 +75,9 @@ go run ./cmd/modelctl verify-remote
 - 对每次任务记录本地 batch/job ID、Provider request/job ID、开始/结束时间和实际用量；确认刷新与 SSE 重连可恢复、最终资产已复制到本地、下载可用、上游临时 URL 失效后历史资产仍可读。
 - 观察 callback 命中和主动 poll 对账；不要把 key、签名 URL、prompt-bearing callback body 或 base64 输出复制进工单/日志。
 
-已验证基线（2026-07-17）：Legnext 使用 GitHub 托管的 Go logo 公共参考图、image prompt、`--iw 2` 与 Midjourney V7 draft 模式完成一次真实图生图 canary，约 35 秒返回 4 张图片；视觉结果明确保留 Go 标识，确认参考图提交、异步轮询与多输出下载链路可用。该次输出的 CDN host 为 `img.playjoy3d.com`，已作为精确 hostname 加入 `config/models.yaml` 的 `allowed_output_hosts`；下载仍由 safe HTTP client 拒绝私网地址和重定向，不能因 canary 成功绕过这些检查。
+已验证基线（2026-07-21）：生产域名上的 `launch` profile 连续两轮各完成 24/24 个真实用例，包括 Midjourney V8.1 的 20 个受控 draw，以及 Nano Banana 2 和 FLUX.2 Max 各一次文生图、一次图生图。Midjourney 每个 draw 均返回 4 张图片；覆盖 SD/HD、全部已声明比例、中英文描述、Raw、Tile 和参考图。所有成功事件到达时 320/640 WebP 与 blur 占位均已就绪，首次 640 请求未回退原图，确认公开短签参考图、异步轮询、并行多输出入库、SSE 与受保护资产下载链路可用。
 
-同日 OpenRouter Dedicated Image API 使用 `openai/gpt-image-1`、1 张参考图和 `input_references` 完成一次真实图生图 canary，返回 HTTP `200`，base64 解码后得到一张 1,142,980 字节的有效图片。该结果确认当前请求与响应协议，但这两项 Provider 直连基线都没有经过生产域名上的 Cornfield 短签资产入口；只有部署后从 UI 上传参考图并完成生成、SSE、入库和下载，才算端到端 canary。
+GPT Image 当前基线为 OpenRouter Dedicated Image API 的 `openai/gpt-image-2`：原生传递 `quality=auto/low/medium/high` 与 `input_references`，比例仅作为 prompt 软约束，不向上游发送未声明的 `aspect_ratio`、`size` 或 `resolution`。发布前最小 canary 仍须各执行一次文生图和图生图，并以当前模型配置与远端 capability 验证结果作为合约依据。
 
 Provider CDN 域名漂移必须 fail closed。出现 `OUTPUT_HOST_REJECTED` 时，不得自动学习新域名、添加通配符、跟随重定向或临时关闭 SSRF 防护；只记录脱敏后的 hostname 与本地 job ID，不记录完整签名 URL。运维人员需核对 Provider 通知/文档、DNS/TLS 与域名归属，在低额度专用用户上重跑最小真实 canary；确认通过后，以精确 hostname 修改静态模型配置，经代码评审、`modelctl validate`、`modelctl apply` 和正常发布生效，再复跑 canary。旧 host 只有在确认 Provider 不再使用且队列中没有依赖旧 capability revision 的任务后才能移除。
 

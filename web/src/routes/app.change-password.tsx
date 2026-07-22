@@ -51,11 +51,11 @@ function ChangePassword() {
   }
   return (
     <main className="login-page">
-      <Link to="/app/create" className="back-link">
-        <ArrowLeft size={14} />
-        返回工作区
-      </Link>
       <section className="login-panel compact">
+        <Link to="/app/create" className="change-password-back">
+          <ArrowLeft size={14} />
+          返回工作区
+        </Link>
         <div className="login-mark">
           <KeyRound size={18} />
         </div>

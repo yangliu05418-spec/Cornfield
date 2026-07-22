@@ -133,7 +133,10 @@ test('account menu exposes password change', async ({ page }) => {
   await expect(page).toHaveURL(/\/app\/change-password$/)
   await expect(page.getByRole('heading', { name: '修改密码' })).toBeVisible()
   await expect(page.getByRole('button', { name: '退出登录' })).toBeVisible()
-  await page.getByRole('link', { name: '返回工作区' }).click()
+  const panel = page.locator('.login-panel')
+  const backLink = panel.getByRole('link', { name: '返回工作区' })
+  await expect(backLink).toBeVisible()
+  await backLink.click()
   await expect(page).toHaveURL(/\/app\/create$/)
 })
 
@@ -382,6 +385,7 @@ test('asset workspace creates folders, moves assets, and archives without deleti
   await page.goto('/app/assets')
 
   await expect(page.getByRole('heading', { name: '资产工作台' })).toBeVisible()
+  await expect(page.getByPlaceholder('搜索文件名或描述')).toBeVisible()
   await page.getByRole('button', { name: '永久删除' }).first().click()
   const confirm = page.getByRole('dialog', { name: '永久删除资产' })
   await expect(confirm).toBeVisible()
@@ -395,6 +399,14 @@ test('asset workspace creates folders, moves assets, and archives without deleti
   expect(
     Math.abs(dialogBox!.y + dialogBox!.height / 2 - viewport!.height / 2),
   ).toBeLessThan(2)
+  const cancelBox = await confirm
+    .getByRole('button', { name: '取消' })
+    .boundingBox()
+  const deleteBox = await confirm
+    .getByRole('button', { name: '确认删除' })
+    .boundingBox()
+  expect(cancelBox?.height).toBe(deleteBox?.height)
+  expect(cancelBox?.width).toBeGreaterThan(50)
   await page.keyboard.press('Escape')
   await page.getByRole('button', { name: '新建文件夹' }).click()
   await page.getByLabel('名称').fill('Campaign A')

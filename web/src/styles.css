@@ -1210,7 +1210,18 @@ a {
   backdrop-filter: blur(22px);
 }
 .login-panel.compact {
+  position: relative;
   width: min(440px, calc(100vw - 32px));
+}
+.change-password-back {
+  position: absolute;
+  top: 22px;
+  right: 24px;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--muted);
+  font-size: 11px;
 }
 .login-mark {
   width: 40px;
@@ -2878,6 +2889,14 @@ select {
   justify-content: flex-end;
   gap: 8px;
   margin-top: 24px;
+}
+.confirm-dialog-actions button {
+  height: 42px;
+  justify-content: center;
+  white-space: nowrap;
+}
+.confirm-dialog-actions .secondary-button {
+  min-width: 76px;
 }
 .change-password-actions {
   display: grid;

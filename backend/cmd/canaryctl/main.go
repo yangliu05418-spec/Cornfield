@@ -287,7 +287,7 @@ func buildLaunchMidjourneyCases(model modelconfig.Model, revision string, seed i
 		return canaryCase{
 			Key: key, Model: model, Revision: revision, Mode: map[bool]string{true: "image", false: "text"}[reference != nil],
 			AspectRatio: ratio, Resolution: resolution, ReferenceID: reference, Prompt: prompt, PromptSHA256: hashText(prompt),
-			Midjourney: &provider.MidjourneyOptions{Version: "8.1", Resolution: strings.ToLower(resolution), Speed: "fast", Stylize: 100, Raw: raw, Tile: tile},
+			Midjourney: &provider.MidjourneyOptions{Version: "8.2", Resolution: strings.ToLower(resolution), Speed: "fast", Stylize: 100, Raw: raw, Tile: tile},
 		}
 	}
 	cases := make([]canaryCase, 0, 20)
@@ -680,7 +680,7 @@ func (c *apiClient) runCase(ctx context.Context, folderID uuid.UUID, archiveOutp
 	if len(item.Model.Capabilities.MidjourneyVersions) > 0 {
 		options.Midjourney = item.Midjourney
 		if options.Midjourney == nil {
-			options.Midjourney = &provider.MidjourneyOptions{Version: "8.1", Resolution: strings.ToLower(item.Resolution), Speed: "fast", Stylize: 100}
+			options.Midjourney = &provider.MidjourneyOptions{Version: "8.2", Resolution: strings.ToLower(item.Resolution), Speed: "fast", Stylize: 100}
 		}
 	}
 	if item.Quality != "" {

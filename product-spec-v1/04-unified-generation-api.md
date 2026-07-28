@@ -314,7 +314,7 @@ type Result struct {
   "prompt": "A glass perfume bottle",
   "references": ["https://signed-media.internal/ref.png"],
   "aspect_ratio": "16:9",
-  "model_version": "8.1"
+  "model_version": "8.2"
 }
 ```
 
@@ -327,7 +327,7 @@ x-api-key: ${LEGNEXT_API_KEY}
 
 ```json
 {
-  "text": "https://signed-media.internal/ref.png A glass perfume bottle --ar 16:9 --v 8.1",
+  "text": "https://signed-media.internal/ref.png A glass perfume bottle --ar 16:9 --v 8.2",
   "callback": "https://studio.internal.example/api/v1/provider-callbacks/legnext/{generation_job_id}/{hmac_signature}"
 }
 ```

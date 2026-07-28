@@ -96,6 +96,7 @@ func TestLegnextSubmitPinsEverySupportedMidjourneyVersion(t *testing.T) {
 		options MidjourneyOptions
 		want    string
 	}{
+		{name: "v8.2", options: MidjourneyOptions{Version: "8.2", Resolution: "hd", Speed: "fast", Stylize: 100}, want: "prompt --ar 1:1 --stylize 100 --chaos 0 --weird 0 --fast --v 8.2 --hd"},
 		{name: "v8.1", options: MidjourneyOptions{Version: "8.1", Resolution: "hd", Speed: "fast", Stylize: 100}, want: "prompt --ar 1:1 --stylize 100 --chaos 0 --weird 0 --fast --v 8.1 --hd"},
 		{name: "v8", options: MidjourneyOptions{Version: "8", Resolution: "hd", Speed: "fast", Quality: float64Pointer(4), Stylize: 100}, want: "prompt --ar 1:1 --q 4 --stylize 100 --chaos 0 --weird 0 --fast --v 8 --hd"},
 		{name: "v7", options: MidjourneyOptions{Version: "7", Speed: "fast", Draft: true, Stylize: 100}, want: "prompt --ar 1:1 --stylize 100 --chaos 0 --weird 0 --fast --v 7 --draft"},

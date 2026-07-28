@@ -438,7 +438,7 @@ func validateCapabilities(m Model) error {
 		if len(capabilities.MidjourneyVersions) > 0 && duplicateOrBlank(capabilities.MidjourneyVersions) {
 			return fmt.Errorf("model %s has blank or duplicate Midjourney versions", m.ID)
 		}
-		supportedVersions := map[string]bool{"6": true, "6.1": true, "7": true, "8": true, "8.1": true, "niji 6": true}
+		supportedVersions := map[string]bool{"6": true, "6.1": true, "7": true, "8": true, "8.1": true, "8.2": true, "niji 6": true}
 		for _, version := range capabilities.MidjourneyVersions {
 			if !supportedVersions[version] {
 				return fmt.Errorf("model %s has unsupported Midjourney version %q", m.ID, version)

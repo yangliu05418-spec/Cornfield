@@ -16,7 +16,8 @@ export function MidjourneyOptionsControl({
 }) {
   const update = (patch: Partial<MidjourneyOptions>) =>
     onChange({ ...value, ...patch })
-  const supportsResolution = value.version === '8' || value.version === '8.1'
+  const supportsResolution =
+    value.version === '8.2' || value.version === '8.1' || value.version === '8'
   const supportsDraft = value.version === '7'
   const supportsTurbo = !supportsResolution
   const qualityOptions = qualitiesFor(value.version)
@@ -165,7 +166,7 @@ export function MidjourneyOptionsControl({
 
 function optionsForVersion(version: string): Partial<MidjourneyOptions> {
   const typedVersion = version as MidjourneyOptions['version']
-  if (version === '8.1')
+  if (version === '8.2' || version === '8.1')
     return {
       version: typedVersion,
       resolution: 'sd',
@@ -191,7 +192,7 @@ function optionsForVersion(version: string): Partial<MidjourneyOptions> {
 }
 
 function qualitiesFor(version: MidjourneyOptions['version']) {
-  if (version === '8.1') return []
+  if (version === '8.2' || version === '8.1') return []
   if (version === '8') return [1, 4] as const
   if (version === '7') return [1, 2, 4] as const
   return [0.5, 1, 2] as const

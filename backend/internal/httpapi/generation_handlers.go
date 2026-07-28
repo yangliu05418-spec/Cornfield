@@ -76,7 +76,7 @@ func normalizeGenerationOptions(modelID, providerID string, versions, qualities 
 		return slices.Contains(values, *options.Quality)
 	}
 	switch options.Version {
-	case "8.1":
+	case "8.2", "8.1":
 		if options.Resolution == "" {
 			options.Resolution = "sd"
 		}
@@ -84,7 +84,7 @@ func normalizeGenerationOptions(modelID, providerID string, versions, qualities 
 			options.Speed = "fast"
 		}
 		if (options.Resolution != "sd" && options.Resolution != "hd") || options.Speed != "fast" || options.Quality != nil || options.Draft {
-			return errors.New("midjourney V8.1 option combination is unsupported")
+			return errors.New("midjourney V8.1/V8.2 option combination is unsupported")
 		}
 		input.Resolution = strings.ToUpper(options.Resolution)
 	case "8":
@@ -272,7 +272,7 @@ func refillGenerationTokens(tokens float64, updatedAt, now time.Time) float64 {
 
 func containsControlledLegnextInput(prompt string) bool {
 	// Midjourney arrangement syntax is owned by the service as well. Legnext
-	// documents braces as unsupported for V8.1; reject them before a paid draw.
+	// documents braces as unsupported for V8.1/V8.2; reject them before a paid draw.
 	if strings.ContainsAny(prompt, "{}") {
 		return true
 	}

@@ -113,9 +113,9 @@ func TestControlledLegnextFlags(t *testing.T) {
 
 func TestNormalizeMidjourneyOptions(t *testing.T) {
 	input := generationRequest{DrawCount: 1, Options: provider.GenerationOptions{Midjourney: &provider.MidjourneyOptions{
-		Version: "8.1", Resolution: "hd", Speed: "fast", Stylize: 100,
+		Version: "8.2", Resolution: "hd", Speed: "fast", Stylize: 100,
 	}}}
-	if err := normalizeGenerationOptions("legnext-midjourney", "legnext", []string{"8.1", "7"}, nil, 0, &input); err != nil {
+	if err := normalizeGenerationOptions("legnext-midjourney", "legnext", []string{"8.2", "8.1", "7"}, nil, 0, &input); err != nil {
 		t.Fatal(err)
 	}
 	if input.Resolution != "HD" {
@@ -126,27 +126,28 @@ func TestNormalizeMidjourneyOptions(t *testing.T) {
 	input = generationRequest{DrawCount: 1, Options: provider.GenerationOptions{Midjourney: &provider.MidjourneyOptions{
 		Version: "7", Speed: "turbo", Quality: &quality, Draft: true,
 	}}}
-	if err := normalizeGenerationOptions("legnext-midjourney", "legnext", []string{"8.1", "7"}, nil, 0, &input); err != nil {
+	if err := normalizeGenerationOptions("legnext-midjourney", "legnext", []string{"8.2", "8.1", "7"}, nil, 0, &input); err != nil {
 		t.Fatal(err)
 	}
 	if input.Options.Midjourney.Quality != nil || input.Resolution != "auto" {
 		t.Fatalf("V7 draft was not normalized: %+v", input)
 	}
 
-	input = generationRequest{DrawCount: 4, Options: provider.GenerationOptions{Midjourney: &provider.MidjourneyOptions{Version: "8.1", Speed: "fast"}}}
-	if err := normalizeGenerationOptions("legnext-midjourney", "legnext", []string{"8.1", "7"}, nil, 0, &input); err == nil {
+	input = generationRequest{DrawCount: 4, Options: provider.GenerationOptions{Midjourney: &provider.MidjourneyOptions{Version: "8.2", Speed: "fast"}}}
+	if err := normalizeGenerationOptions("legnext-midjourney", "legnext", []string{"8.2", "8.1", "7"}, nil, 0, &input); err == nil {
 		t.Fatal("four Midjourney draws were accepted")
 	}
 }
 
 func TestNormalizeEverySupportedMidjourneyVersion(t *testing.T) {
-	versions := []string{"8.1", "8", "7", "6.1", "6", "niji 6"}
+	versions := []string{"8.2", "8.1", "8", "7", "6.1", "6", "niji 6"}
 	tests := []struct {
 		version    string
 		resolution string
 		quality    *float64
 		wantRes    string
 	}{
+		{version: "8.2", resolution: "hd", wantRes: "HD"},
 		{version: "8.1", resolution: "sd", wantRes: "SD"},
 		{version: "8", resolution: "hd", quality: float64Pointer(4), wantRes: "HD"},
 		{version: "7", quality: float64Pointer(2), wantRes: "auto"},
@@ -169,6 +170,7 @@ func TestNormalizeEverySupportedMidjourneyVersion(t *testing.T) {
 	}
 
 	invalid := []provider.MidjourneyOptions{
+		{Version: "8.2", Speed: "fast", Quality: float64Pointer(1)},
 		{Version: "8.1", Speed: "fast", Quality: float64Pointer(1)},
 		{Version: "8", Speed: "turbo", Quality: float64Pointer(1)},
 		{Version: "7", Speed: "fast", Quality: float64Pointer(0.5)},

@@ -4,7 +4,7 @@
 
 | Cornfield 模型 | 参考图上限 | Cornfield 单图上限 | 边界说明 |
 |---|---:|---:|---|
-| Midjourney V8.1 / V7（Legnext） | 4 | 10 MiB | Cornfield 的保守产品上限。Legnext 与 Midjourney 文档允许多个 image prompt，但未公布可验证的数字硬上限；扩大前必须做付费 canary。 |
+| Midjourney V8.2 / V8.1 / V7（Legnext） | 4 | 10 MiB | Cornfield 的保守产品上限。Legnext 与 Midjourney 文档允许多个 image prompt，但未公布可验证的数字硬上限；扩大前必须做付费 canary。 |
 | Nano Banana 2 Lite | 14 | 25 MiB | OpenRouter 的 Google AI Studio 与 Vertex endpoints 均声明 `input_references.max=14`。 |
 | Nano Banana 2 | 14 | 25 MiB | OpenRouter 两个 Google endpoints 均为 14；Google 还区分人物/物体的高保真保持能力，因此 14 不等于 14 个独立身份都能等质量复现。 |
 | Nano Banana Pro | 14 | 25 MiB | OpenRouter 两个 Google endpoints 均为 14；Cornfield 的分辨率仍取多 endpoint 的安全交集。 |

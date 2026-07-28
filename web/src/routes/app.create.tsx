@@ -256,7 +256,7 @@ function CreatePage() {
   const [quality, setQuality] = useState('auto')
   const [draws, setDraws] = useState(1)
   const [midjourney, setMidjourney] = useState<MidjourneyOptions>({
-    version: '8.1',
+    version: '8.2',
     resolution: 'sd',
     speed: 'fast',
     draft: false,
@@ -587,7 +587,9 @@ function CreatePage() {
     const createdAt = new Date().toISOString()
     const expectedOutputs = draws * activeModel.outputs_per_draw
     const submittedResolution = isMidjourney
-      ? midjourney.version === '8.1' || midjourney.version === '8'
+      ? midjourney.version === '8.2' ||
+        midjourney.version === '8.1' ||
+        midjourney.version === '8'
         ? (midjourney.resolution ?? 'sd').toUpperCase()
         : 'auto'
       : resolution

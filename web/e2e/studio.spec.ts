@@ -311,7 +311,7 @@ test('Midjourney stays one draw with four outputs and versioned parameters', asy
           image_to_image: true,
           aspect_ratios: ['1:1', '16:9'],
           resolutions: ['SD', 'HD'],
-          midjourney_versions: ['8.1', '8', '7', '6.1', '6', 'niji 6'],
+          midjourney_versions: ['8.2', '8.1', '8', '7', '6.1', '6', 'niji 6'],
           max_reference_images: 4,
           max_reference_bytes: 10_485_760,
           draw_count: { min: 1, max: 1, default: 1 },
@@ -338,7 +338,7 @@ test('Midjourney stays one draw with four outputs and versioned parameters', asy
 
   await expect(page.getByText('4 张/次')).toBeVisible()
   await expect(page.getByRole('button', { name: '增加抽卡' })).toHaveCount(0)
-  await page.getByRole('button', { name: 'V8.1 · SD' }).click()
+  await page.getByRole('button', { name: 'V8.2 · SD' }).click()
   await expect(page.getByText('Midjourney 参数')).toBeVisible()
   await expect(
     page.getByRole('button', { name: 'V8', exact: true }),
@@ -364,7 +364,7 @@ test('Midjourney stays one draw with four outputs and versioned parameters', asy
   }
   expect(body.draw_count).toBe(1)
   expect(body.options.midjourney).toMatchObject({
-    version: '8.1',
+    version: '8.2',
     resolution: 'sd',
   })
 

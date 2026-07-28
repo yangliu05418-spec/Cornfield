@@ -109,7 +109,7 @@ interface ModelCapabilityV1 {
 interface LegnextMapping {
   adapter: "legnext.diffusion/v1";
   endpoint: "/api/v1/diffusion";
-  version_prompt_suffix: string;        // 例：--v 8.1
+  version_prompt_suffix: string;        // 例：--v 8.2
   ratio_template: "--ar {{aspect_ratio}}";
   resolution_strategy: "model_version" | "prompt_suffix";
   reference_strategy: "prepend_urls_to_prompt";
@@ -147,8 +147,8 @@ interface OpenRouterMapping {
     "source_updated_at": "2026-07-17T00:00:00Z"
   },
   "display": {
-    "name": "Midjourney 8.1",
-    "short_name": "MJ 8.1",
+    "name": "Midjourney 8.2",
+    "short_name": "MJ 8.2",
     "description": "审美稳定、适合概念与商业视觉",
     "tags": ["文生图", "图生图", "4张/次"],
     "sort_order": 10
@@ -196,7 +196,7 @@ interface OpenRouterMapping {
   "mapping": {
     "adapter": "legnext.diffusion/v1",
     "endpoint": "/api/v1/diffusion",
-    "version_prompt_suffix": "--v 8.1",
+    "version_prompt_suffix": "--v 8.2",
     "ratio_template": "--ar {{aspect_ratio}}",
     "resolution_strategy": "model_version",
     "reference_strategy": "prepend_urls_to_prompt"

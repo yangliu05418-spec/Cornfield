@@ -73,7 +73,7 @@ export type GenerationJob = {
 }
 
 export type MidjourneyOptions = {
-  version: '8.1' | '8' | '7' | '6.1' | '6' | 'niji 6'
+  version: '8.2' | '8.1' | '8' | '7' | '6.1' | '6' | 'niji 6'
   resolution?: 'sd' | 'hd'
   speed: 'fast' | 'turbo'
   quality?: 0.5 | 1 | 2 | 4

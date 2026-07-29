@@ -1074,9 +1074,19 @@ function CreatePage() {
                 disabled={!prompt.trim() || refinerBusy || !activeModel}
                 onClick={() => void refinePrompt()}
               >
-                <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-                  <path d="M12 3.5c.45 3.25 2.25 5.05 5.5 5.5-3.25.45-5.05 2.25-5.5 5.5-.45-3.25-2.25-5.05-5.5-5.5 3.25-.45 5.05-2.25 5.5-5.5Z" />
-                  <path d="M4 16.5h4.5M15.5 18.5H20" />
+                <svg
+                  viewBox="0 0 20 20"
+                  aria-hidden="true"
+                  focusable="false"
+                  style={{
+                    width: 22,
+                    height: 22,
+                    fill: 'currentColor',
+                    stroke: 'none',
+                  }}
+                >
+                  <path d="M10 .75c.3 5.85 3.4 8.95 9.25 9.25-5.85.3-8.95 3.4-9.25 9.25C9.7 13.4 6.6 10.3.75 10 6.6 9.7 9.7 6.6 10 .75Z" />
+                  <path d="M17.1.2c.09 1.73.97 2.61 2.7 2.7-1.73.09-2.61.97-2.7 2.7-.09-1.73-.97-2.61-2.7-2.7 1.73-.09 2.61-.97 2.7-2.7Z" />
                 </svg>
               </button>
             </div>

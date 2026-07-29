@@ -1701,7 +1701,8 @@ select {
   align-items: center;
   gap: 10px;
 }
-.prompt-reference-button {
+.prompt-reference-button,
+.prompt-refiner-button {
   position: relative;
   flex: 0 0 34px;
   width: 34px;
@@ -1721,14 +1722,29 @@ select {
     color 0.16s ease,
     background 0.16s ease;
 }
-.prompt-reference-button:hover {
+.prompt-reference-button:hover,
+.prompt-refiner-button:hover,
+.prompt-refiner-button:focus-visible {
   border-color: rgba(209, 254, 23, 0.42);
   background: #1d211a;
   color: var(--lime);
 }
-.prompt-reference-button[aria-disabled='true'] {
+.prompt-reference-button[aria-disabled='true'],
+.prompt-refiner-button:disabled {
   opacity: 0.35;
   cursor: not-allowed;
+}
+.prompt-refiner-button {
+  border: 1px solid #34372f;
+}
+.prompt-refiner-button svg {
+  width: 18px;
+  height: 18px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.45;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
 .prompt-reference-button input {
   position: absolute;
@@ -2898,6 +2914,200 @@ select {
 .confirm-dialog-actions .secondary-button {
   min-width: 76px;
 }
+.prompt-refiner-dialog {
+  position: fixed;
+  inset: 0;
+  width: min(720px, calc(100vw - 30px));
+  max-height: min(760px, calc(100dvh - 30px));
+  margin: auto;
+  padding: 0;
+  overflow: hidden;
+  border: 1px solid #363a36;
+  border-radius: 18px;
+  background: #17191a;
+  color: var(--text);
+  box-shadow: 0 30px 100px rgba(0, 0, 0, 0.62);
+}
+.prompt-refiner-dialog::backdrop {
+  background: rgba(5, 6, 7, 0.82);
+  backdrop-filter: blur(14px);
+}
+.prompt-refiner-dialog > header,
+.prompt-refiner-dialog > footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  padding: 22px 24px;
+  background: #1a1c1d;
+}
+.prompt-refiner-dialog > header {
+  border-bottom: 1px solid #2b2e2c;
+}
+.prompt-refiner-dialog > header h2 {
+  margin: 5px 0 0;
+  font-size: 22px;
+  letter-spacing: -0.04em;
+}
+.prompt-refiner-context {
+  margin: 0;
+  color: #8d928d;
+  font-size: 11px;
+  white-space: nowrap;
+}
+.prompt-refiner-content {
+  display: grid;
+  gap: 16px;
+  max-height: min(570px, calc(100dvh - 210px));
+  padding: 20px 24px;
+  overflow-y: auto;
+}
+.prompt-refiner-original {
+  padding: 16px;
+  border: 1px solid #303330;
+  border-radius: 12px;
+  background: #121415;
+  color: #c9ccc8;
+  font-size: 13px;
+  line-height: 1.75;
+  overflow-wrap: anywhere;
+}
+.prompt-refiner-original mark {
+  padding: 1px 3px;
+  border-radius: 4px;
+  background: rgba(209, 254, 23, 0.18);
+  color: #eaff92;
+}
+.prompt-refiner-diagnostics {
+  display: grid;
+  gap: 8px;
+}
+.prompt-refiner-diagnostics > div {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: baseline;
+  gap: 10px;
+  padding: 11px 13px;
+  border: 1px solid #4d4429;
+  border-radius: 10px;
+  background: #211f17;
+}
+.prompt-refiner-diagnostics span,
+.prompt-refiner-finding-title small {
+  color: var(--lime);
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 9px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.prompt-refiner-diagnostics p,
+.prompt-refiner-diagnostics small {
+  margin: 0;
+  color: #c8c7ba;
+  font-size: 11px;
+}
+.prompt-refiner-findings {
+  display: grid;
+  gap: 10px;
+}
+.prompt-refiner-findings article {
+  padding: 14px;
+  border: 1px solid #303330;
+  border-radius: 12px;
+  background: #1b1d1e;
+}
+.prompt-refiner-finding-title {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  cursor: pointer;
+}
+.prompt-refiner-finding-title input {
+  margin-top: 3px;
+  accent-color: var(--lime);
+}
+.prompt-refiner-finding-title > span {
+  display: flex;
+  align-items: baseline;
+  gap: 9px;
+}
+.prompt-refiner-finding-title strong {
+  color: #f1f3ef;
+  font-size: 14px;
+  font-weight: 550;
+}
+.prompt-refiner-findings article > p {
+  margin: 7px 0 0 24px;
+  color: #929692;
+  font-size: 11px;
+  line-height: 1.55;
+}
+.prompt-refiner-choices {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+  margin: 11px 0 0 24px;
+}
+.prompt-refiner-choices label {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 32px;
+  padding: 6px 10px;
+  border: 1px solid #373a36;
+  border-radius: 9px;
+  color: #bec2bc;
+  font-size: 11px;
+  cursor: pointer;
+}
+.prompt-refiner-choices label:has(input:checked) {
+  border-color: rgba(209, 254, 23, 0.5);
+  background: rgba(209, 254, 23, 0.07);
+  color: #e8f6ad;
+}
+.prompt-refiner-choices input {
+  accent-color: var(--lime);
+}
+.prompt-refiner-manual {
+  color: #d6ba88 !important;
+}
+.prompt-refiner-clean {
+  margin: 8px 0 12px;
+  color: #b9bdb7;
+  text-align: center;
+  font-size: 12px;
+}
+.prompt-refiner-dialog > footer {
+  justify-content: flex-end;
+  border-top: 1px solid #2b2e2c;
+}
+.prompt-refiner-dialog > footer button {
+  min-width: 120px;
+  min-height: 42px;
+  justify-content: center;
+}
+.prompt-refiner-undo {
+  position: fixed;
+  right: 24px;
+  bottom: 126px;
+  z-index: 21;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 11px 9px 13px;
+  border: 1px solid #383c36;
+  border-radius: 10px;
+  background: rgba(24, 27, 25, 0.96);
+  color: #c9ccc8;
+  font-size: 11px;
+  box-shadow: 0 14px 42px rgba(0, 0, 0, 0.4);
+}
+.prompt-refiner-undo button {
+  border: 0;
+  background: transparent;
+  color: var(--lime);
+  font-size: 11px;
+}
 .change-password-actions {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -2931,6 +3141,32 @@ select {
 }
 
 @media (max-width: 760px) {
+  .prompt-refiner-dialog > header {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 8px;
+    padding: 18px;
+  }
+  .prompt-refiner-content {
+    padding: 16px 18px;
+  }
+  .prompt-refiner-dialog > footer {
+    padding: 16px 18px;
+  }
+  .prompt-refiner-dialog > footer button {
+    flex: 1;
+    min-width: 0;
+  }
+  .prompt-refiner-diagnostics > div {
+    grid-template-columns: auto 1fr;
+  }
+  .prompt-refiner-diagnostics small {
+    grid-column: 2;
+  }
+  .prompt-refiner-undo {
+    right: 15px;
+    bottom: 150px;
+  }
   .landing-nav nav {
     display: none;
   }

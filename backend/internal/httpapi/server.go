@@ -23,12 +23,14 @@ import (
 	"internal-image-studio/internal/cache"
 	"internal-image-studio/internal/config"
 	"internal-image-studio/internal/modelconfig"
+	"internal-image-studio/internal/promptrefiner"
 )
 
 type Server struct {
 	cfg               config.Config
 	db                *pgxpool.Pool
 	catalog           *modelconfig.Catalog
+	promptRefiner     *promptrefiner.Engine
 	blobs             *blob.Local
 	log               *slog.Logger
 	sessions          *cache.TTL[string, session]
@@ -58,12 +60,13 @@ type contextKey string
 
 const sessionKey contextKey = "session"
 
-func New(ctx context.Context, cfg config.Config, db *pgxpool.Pool, catalog *modelconfig.Catalog, blobs *blob.Local, logger *slog.Logger) *Server {
+func New(ctx context.Context, cfg config.Config, db *pgxpool.Pool, catalog *modelconfig.Catalog, refiner *promptrefiner.Engine, blobs *blob.Local, logger *slog.Logger) *Server {
 	dummyPasswordHash, _ := auth.HashPassword(uuid.NewString())
 	server := &Server{
 		cfg:               cfg,
 		db:                db,
 		catalog:           catalog,
+		promptRefiner:     refiner,
 		blobs:             blobs,
 		log:               logger,
 		sessions:          cache.NewTTL[string, session](10_000),
@@ -86,6 +89,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /api/v1/auth/logout", s.requireAuth(s.requireCSRF(http.HandlerFunc(s.logout))))
 	mux.Handle("POST /api/v1/auth/change-password", s.requireAuth(s.requireCSRF(http.HandlerFunc(s.changePassword))))
 	mux.Handle("GET /api/v1/models", s.requireAuth(http.HandlerFunc(s.models)))
+	mux.Handle("POST /api/v1/prompts/refine", s.requireAuth(s.requireCSRF(http.HandlerFunc(s.refinePrompt))))
 	mux.Handle("GET /api/v1/generations", s.requireAuth(http.HandlerFunc(s.listGenerations)))
 	mux.Handle("POST /api/v1/generations", s.requireAuth(s.requireCSRF(http.HandlerFunc(s.createGeneration))))
 	mux.Handle("GET /api/v1/generations/{id}", s.requireAuth(http.HandlerFunc(s.getGeneration)))

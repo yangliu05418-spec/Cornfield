@@ -23,6 +23,49 @@ func NewLegnext(apiKey string) *Legnext {
 	return &Legnext{APIKey: apiKey, BaseURL: "https://api.legnext.ai", Client: newHTTPClient(45*time.Second, 30*time.Second)}
 }
 
+func BuildLegnextPrompt(input CanonicalRequest) (string, error) {
+	parts := make([]string, 0, len(input.ReferenceURLs)+16)
+	for _, referenceURL := range input.ReferenceURLs {
+		parsed, err := url.Parse(referenceURL)
+		if err != nil || parsed.Scheme != "https" || parsed.Hostname() == "" || parsed.User != nil || parsed.Fragment != "" {
+			return "", &Error{Code: "REFERENCE_URL_INVALID", Message: "Legnext reference images require absolute HTTPS URLs"}
+		}
+		parts = append(parts, referenceURL)
+	}
+	parts = append(parts, strings.TrimSpace(input.Prompt))
+	if input.AspectRatio != "" {
+		parts = append(parts, "--ar", input.AspectRatio)
+	}
+	if options := input.Options.Midjourney; options != nil {
+		if options.Quality != nil {
+			parts = append(parts, "--q", strconv.FormatFloat(*options.Quality, 'f', -1, 64))
+		}
+		parts = append(parts, "--stylize", strconv.Itoa(options.Stylize), "--chaos", strconv.Itoa(options.Chaos), "--weird", strconv.Itoa(options.Weird))
+		if options.ImageWeight != nil {
+			parts = append(parts, "--iw", strconv.FormatFloat(*options.ImageWeight, 'f', -1, 64))
+		}
+		parts = append(parts, "--"+options.Speed)
+		if options.Version == "niji 6" {
+			parts = append(parts, "--niji", "6")
+		} else {
+			parts = append(parts, "--v", options.Version)
+		}
+		if options.Resolution == "hd" {
+			parts = append(parts, "--hd")
+		}
+		if options.Raw {
+			parts = append(parts, "--raw")
+		}
+		if options.Tile {
+			parts = append(parts, "--tile")
+		}
+		if options.Draft {
+			parts = append(parts, "--draft")
+		}
+	}
+	return strings.Join(parts, " "), nil
+}
+
 type legnextTask struct {
 	JobID  string `json:"job_id"`
 	TaskID string `json:"task_id"`
@@ -65,46 +108,10 @@ func (task legnextTask) providerJobID() string {
 }
 
 func (l *Legnext) Submit(ctx context.Context, input CanonicalRequest) (Submission, error) {
-	parts := make([]string, 0, len(input.ReferenceURLs)+16)
-	for _, referenceURL := range input.ReferenceURLs {
-		parsed, err := url.Parse(referenceURL)
-		if err != nil || parsed.Scheme != "https" || parsed.Hostname() == "" || parsed.User != nil || parsed.Fragment != "" {
-			return Submission{}, &Error{Code: "REFERENCE_URL_INVALID", Message: "Legnext reference images require absolute HTTPS URLs"}
-		}
-		parts = append(parts, referenceURL)
+	providerPrompt, err := BuildLegnextPrompt(input)
+	if err != nil {
+		return Submission{}, err
 	}
-	parts = append(parts, strings.TrimSpace(input.Prompt))
-	if input.AspectRatio != "" {
-		parts = append(parts, "--ar", input.AspectRatio)
-	}
-	if options := input.Options.Midjourney; options != nil {
-		if options.Quality != nil {
-			parts = append(parts, "--q", strconv.FormatFloat(*options.Quality, 'f', -1, 64))
-		}
-		parts = append(parts, "--stylize", strconv.Itoa(options.Stylize), "--chaos", strconv.Itoa(options.Chaos), "--weird", strconv.Itoa(options.Weird))
-		if options.ImageWeight != nil {
-			parts = append(parts, "--iw", strconv.FormatFloat(*options.ImageWeight, 'f', -1, 64))
-		}
-		parts = append(parts, "--"+options.Speed)
-		if options.Version == "niji 6" {
-			parts = append(parts, "--niji", "6")
-		} else {
-			parts = append(parts, "--v", options.Version)
-		}
-		if options.Resolution == "hd" {
-			parts = append(parts, "--hd")
-		}
-		if options.Raw {
-			parts = append(parts, "--raw")
-		}
-		if options.Tile {
-			parts = append(parts, "--tile")
-		}
-		if options.Draft {
-			parts = append(parts, "--draft")
-		}
-	}
-	providerPrompt := strings.Join(parts, " ")
 	if utf8.RuneCountInString(providerPrompt) > 8192 {
 		return Submission{}, &Error{Code: "PROMPT_TOO_LONG", Message: "final Legnext prompt exceeds 8192 characters"}
 	}

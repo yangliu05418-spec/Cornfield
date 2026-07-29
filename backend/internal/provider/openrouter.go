@@ -38,6 +38,14 @@ func NewOpenRouterWithSubmitTimeout(apiKey, publicURL string, submitTimeout time
 	}
 }
 
+func BuildOpenRouterPrompt(input CanonicalRequest) string {
+	prompt := strings.TrimSpace(input.Prompt)
+	if input.PromptAspectRatio && input.AspectRatio != "" && input.AspectRatio != "auto" {
+		prompt += "\n\nMandatory composition requirement: frame the final image in a " + input.AspectRatio + " aspect ratio. Compose every subject and background for that exact canvas orientation; do not add borders, letterboxing, or a collage."
+	}
+	return prompt
+}
+
 func (o *OpenRouter) Submit(ctx context.Context, input CanonicalRequest) (Submission, error) {
 	parameters := make(map[string]struct{}, len(input.RequestParameters))
 	for _, parameter := range input.RequestParameters {
@@ -62,10 +70,7 @@ func (o *OpenRouter) Submit(ctx context.Context, input CanonicalRequest) (Submis
 	for _, referenceURL := range input.ReferenceURLs {
 		references = append(references, map[string]any{"type": "image_url", "image_url": map[string]string{"url": referenceURL}})
 	}
-	prompt := strings.TrimSpace(input.Prompt)
-	if input.PromptAspectRatio && input.AspectRatio != "" && input.AspectRatio != "auto" {
-		prompt += "\n\nMandatory composition requirement: frame the final image in a " + input.AspectRatio + " aspect ratio. Compose every subject and background for that exact canvas orientation; do not add borders, letterboxing, or a collage."
-	}
+	prompt := BuildOpenRouterPrompt(input)
 	if utf8.RuneCountInString(prompt) > 8192 {
 		return Submission{}, &Error{Code: "PROMPT_TOO_LONG", Message: "final OpenRouter prompt exceeds 8192 characters"}
 	}

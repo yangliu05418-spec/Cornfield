@@ -1212,7 +1212,6 @@ function CreatePage() {
               controlSignature: refinerControlSignature,
               count,
             })
-            setNotice(`已应用 ${count} 项修改`)
             requestAnimationFrame(() => {
               promptRef.current?.focus()
               promptRef.current?.setSelectionRange(

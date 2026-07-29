@@ -1,0 +1,240 @@
+version: "2026-07-29.1"
+rules:
+  - id: gore.blood.en
+    locale: en
+    source: { type: workspace, reference: "规则.md#gore" }
+    category: gore
+    mode: mapped
+    terms: [blood, bloody, bloodbath, bleeding, bleed, bloodshot]
+    exceptions: [blood orange]
+    reason: "可能触发血腥内容审核"
+    replacements: [crimson liquid, red fluid, scarlet stains, dramatic red accents, dark red marks]
+  - id: gore.blood.zh
+    locale: zh
+    translation_of: gore.blood.en
+    source: { type: translation, reference: "规则.md#gore" }
+    category: gore
+    mode: mapped
+    terms: [血, 血液, 鲜血, 流血, 血迹, 血泊, 血淋淋]
+    exceptions: [血橙, 血红蛋白]
+    reason: "可能触发血腥内容审核"
+    replacements: [深红色液体, 戏剧性的红色点缀, 暗红色痕迹]
+  - id: gore.body.en
+    locale: en
+    source: { type: workspace, reference: "规则.md#gore" }
+    category: gore
+    mode: mapped
+    terms: [corpse, dead body, decapitate, decapitated, severed limbs, mutilated, wound, wounds, bruise, bruises, guts, visceral, gory, gruesome, cut, cutting, cronenberg, khorne, disturbing]
+    reason: "可能触发伤害或血腥内容审核"
+    replacements: [fallen figure, still form, lifeless pose, marble-like statue, pale figure, abstract fragmented form, broken silhouette, marks, weathered surface, organic textures, abstract biomorphic forms]
+  - id: gore.body.zh
+    locale: zh
+    translation_of: gore.body.en
+    source: { type: translation, reference: "规则.md#gore" }
+    category: gore
+    mode: mapped
+    terms: [尸体, 死尸, 断头, 斩首, 断肢, 肢解, 伤口, 伤痕, 瘀伤, 内脏, 血腥, 残肢]
+    reason: "可能触发伤害或血腥内容审核"
+    replacements: [倒下的人物, 抽象的破碎形态, 风化的表面]
+  - id: gore.violence.en
+    locale: en
+    source: { type: workspace, reference: "规则.md#gore" }
+    category: violence
+    mode: mapped
+    terms: [slaughter, killing, kill, massacre, cannibal, cannibalism, torture, suicide, crucified, crucifixion, car crash]
+    exceptions: [Kill Bill, Kill la Kill]
+    reason: "可能触发暴力或伤害内容审核"
+    replacements: [intense conflict scene, dramatic battle aftermath without gore, chaotic confrontation, dark psychological atmosphere, dramatic accident scene without injury]
+  - id: gore.violence.zh
+    locale: zh
+    translation_of: gore.violence.en
+    source: { type: translation, reference: "规则.md#gore" }
+    category: violence
+    mode: mapped
+    terms: [屠杀, 杀戮, 杀死, 食人, 酷刑, 自杀, 钉十字架, 车祸]
+    reason: "可能触发暴力或伤害内容审核"
+    replacements: [激烈的冲突场景, 黑暗的心理氛围, 没有人员受伤的事故现场]
+  - id: gore.medical.en
+    locale: en
+    source: { type: workspace, reference: "规则.md#gore" }
+    category: medical
+    mode: contextual
+    terms: [surgery, vivisection, flesh, hemoglobin, infected, infested, teratoma, tryphophobia, pestilence]
+    reason: "该词在医学或艺术语境中仍可能被误判"
+    replacements: [medical illustration, anatomical study, classical dissection drawing, abstract organic texture]
+  - id: gore.medical.zh
+    locale: zh
+    translation_of: gore.medical.en
+    source: { type: translation, reference: "规则.md#gore" }
+    category: medical
+    mode: contextual
+    terms: [手术, 活体解剖, 血红蛋白, 感染, 寄生, 畸胎瘤, 密集恐惧, 瘟疫]
+    reason: "该词在医学或艺术语境中仍可能被误判"
+    replacements: [医学插画, 解剖学研究, 抽象的有机纹理]
+  - id: adult.nudity.en
+    locale: en
+    source: { type: workspace, reference: "规则.md#adult" }
+    category: adult
+    mode: mapped
+    terms: [nude, naked, no clothes, without clothes, unclothed, zero clothes, au naturel, full frontal, invisible clothes, wearing nothing]
+    reason: "可能触发裸露或成人内容审核"
+    replacements: [artistic figure study, classical sculpture pose, draped fabric, elegant silhouette, form study]
+  - id: adult.nudity.zh
+    locale: zh
+    translation_of: adult.nudity.en
+    source: { type: translation, reference: "规则.md#adult" }
+    category: adult
+    mode: mapped
+    terms: [裸体, 裸露, 赤裸, 没穿衣服, 全裸, 一丝不挂]
+    reason: "可能触发裸露或成人内容审核"
+    replacements: [古典雕塑姿态, 垂坠织物, 优雅的剪影]
+  - id: adult.clothing.en
+    locale: en
+    source: { type: workspace, reference: "规则.md#adult" }
+    category: adult
+    mode: contextual
+    terms: [bare, lingerie, bra, negligee, cleavage, scantily clad, risque, stripped, see-through, see through, transparent]
+    reason: "衣着描述可能触发成人内容误判"
+    replacements: [elegant evening wear, form-fitting attire, soft fabric details, delicate translucent material, light filtering through cloth]
+  - id: adult.clothing.zh
+    locale: zh
+    translation_of: adult.clothing.en
+    source: { type: translation, reference: "规则.md#adult" }
+    category: adult
+    mode: contextual
+    terms: [内衣, 胸罩, 低胸, 衣着暴露, 透视装, 透明衣物]
+    reason: "衣着描述可能触发成人内容误判"
+    replacements: [优雅的晚装, 柔和的织物细节, 轻盈的半透明材质]
+  - id: adult.suggestive.en
+    locale: en
+    source: { type: workspace, reference: "规则.md#adult" }
+    category: adult
+    mode: mapped
+    terms: [sexy, sensual, seductive, seducing, erotic, provocative, sultry, voluptuous, intimate, naughty, twerk, making love, pleasure, pleasures]
+    reason: "可能触发性暗示内容审核"
+    replacements: [alluring, graceful, elegant, refined beauty, captivating presence, soft curves]
+  - id: adult.suggestive.zh
+    locale: zh
+    translation_of: adult.suggestive.en
+    source: { type: translation, reference: "规则.md#adult" }
+    category: adult
+    mode: mapped
+    terms: [性感, 色诱, 挑逗, 情色, 妩媚, 情欲, 撩人, 火辣]
+    reason: "可能触发性暗示内容审核"
+    replacements: [优雅, 精致的美感, 引人注目的气质]
+  - id: adult.explicit.en
+    locale: en
+    source: { type: workspace, reference: "规则.md#adult" }
+    category: adult
+    mode: mapped
+    terms: [hardcore, horny, orgy, bondage, bdsm, shibari, kinbaku, ballgag, dominatrix, slavegirl, ahegao, hentai, rule34, playboy, pinup, bimbo, brothel, smut, jav, succubus, thot, legs spread, erected, porn, xxx, fetish, sexual, sexualiz, explicit]
+    reason: "可能触发明确成人内容审核"
+    replacements: [figurative art, renaissance style, academic drawing, stylized emotion, anime style emotion, abstract decorative pattern]
+  - id: adult.explicit.zh
+    locale: zh
+    translation_of: adult.explicit.en
+    source: { type: translation, reference: "规则.md#adult" }
+    category: adult
+    mode: mapped
+    terms: [色情, 情色片, 成人片, 性行为, 性癖, 调教, 捆绑, 情色动漫]
+    reason: "可能触发明确成人内容审核"
+    replacements: [人物艺术, 风格化情绪, 抽象装饰纹样]
+  - id: adult.anatomy.en
+    locale: en
+    source: { type: workspace, reference: "规则.md#adult" }
+    category: adult
+    mode: manual_only
+    terms: [breasts, bosom, busty, large bust, nipple, oppai, booba, mammaries, ass, arse, booty, big ass, crotch, penis, phallus, dick, vagina, labia, minge, clunge, pussy, ovaries, organs, thick, girth, veiny, honkers, hooters, mommy milker, bodily fluids, sperm]
+    reason: "身体部位或体液描述可能触发成人内容审核，请手动调整"
+  - id: adult.anatomy.zh
+    locale: zh
+    translation_of: adult.anatomy.en
+    source: { type: translation, reference: "规则.md#adult" }
+    category: adult
+    mode: manual_only
+    terms: [乳房, 乳头, 胸部, 胯部, 生殖器, 阴茎, 阴道, 阴唇, 卵巢, 体液, 精液]
+    reason: "身体部位或体液描述可能触发成人内容审核，请手动调整"
+  - id: hate.harassment.en
+    locale: en
+    source: { type: workspace, reference: "规则.md#hate" }
+    category: hate
+    mode: manual_only
+    terms: [nazi, fascist, hitler, prophet mohammed, slave, coon, honkey, deepfake, xi jinping, president xi, lolita]
+    reason: "可能触发仇恨、骚扰或真实人物伤害审核，请手动调整"
+  - id: hate.harassment.zh
+    locale: zh
+    translation_of: hate.harassment.en
+    source: { type: translation, reference: "规则.md#hate" }
+    category: hate
+    mode: manual_only
+    terms: [纳粹, 法西斯, 希特勒, 种族歧视, 深度伪造]
+    reason: "可能触发仇恨、骚扰或真实人物伤害审核，请手动调整"
+  - id: drugs.en
+    locale: en
+    source: { type: workspace, reference: "规则.md#drugs" }
+    category: drugs
+    mode: mapped
+    terms: [cocaine, heroin, meth, crack]
+    reason: "可能触发毒品内容审核"
+    replacements: [powder residue, chemical haze]
+  - id: drugs.zh
+    locale: zh
+    translation_of: drugs.en
+    source: { type: translation, reference: "规则.md#drugs" }
+    category: drugs
+    mode: mapped
+    terms: [可卡因, 海洛因, 冰毒, 甲基苯丙胺, 快克毒品]
+    reason: "可能触发毒品内容审核"
+    replacements: [粉末残留, 化学雾霭]
+  - id: vulgar.en
+    locale: en
+    source: { type: workspace, reference: "规则.md#vulgar" }
+    category: vulgar
+    mode: manual_only
+    terms: [fart, farts, poop, shit, vomit, warts, pus]
+    reason: "可能触发低俗或令人不适的内容审核，请手动调整"
+  - id: contextual.ambiguous.en
+    locale: en
+    source: { type: workspace, reference: "规则.md#false-positive" }
+    category: contextual
+    mode: contextual
+    terms: [tied up, rear end, rear, hot]
+    reason: "该表达依赖语境，可能被误判；请确认它描述的是发型、视角、色调或强度"
+    replacements: [half-tied hair, back view, warm tones, vibrant atmosphere]
+  - id: contextual.ambiguous.zh
+    locale: zh
+    translation_of: contextual.ambiguous.en
+    source: { type: translation, reference: "规则.md#false-positive" }
+    category: contextual
+    mode: contextual
+    terms: [绑起来, 后部, 后端, 火热]
+    reason: "该表达依赖语境，可能被误判；请确认它描述的是发型、视角、色调或强度"
+    replacements: [半扎发, 背影视角, 暖色调, 强烈氛围]
+  - id: vulgar.zh
+    locale: zh
+    translation_of: vulgar.en
+    source: { type: translation, reference: "规则.md#vulgar" }
+    category: vulgar
+    mode: manual_only
+    terms: [放屁, 屎, 呕吐物, 疣, 脓液]
+    reason: "可能触发低俗或令人不适的内容审核，请手动调整"
+  - id: community.explicit.en
+    locale: en
+    source:
+      type: community
+      reference: "LDNOOBW/en@5faf2ba42d7b1c0977169ec3611df25a3c08eb13"
+      license: CC-BY-4.0
+    category: adult
+    mode: manual_only
+    terms: [adultwork, cybersex, phone sex, stripclub]
+    reason: "公开社区词表将该表达标记为成人内容，请手动调整"
+  - id: community.explicit.zh
+    locale: zh
+    source:
+      type: community
+      reference: "konsheng/Sensitive-lexicon@5a8da94c61c160e203a6b2fcfafbea642404d50c"
+      license: MIT
+    category: adult
+    mode: manual_only
+    terms: [成人视频, 成人直播, 色情直播, 裸聊]
+    reason: "公开社区词表将该表达标记为成人内容，请手动调整"

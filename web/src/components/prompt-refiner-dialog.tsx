@@ -10,12 +10,13 @@ export function applyPromptRefinements(
   choices: Readonly<Record<string, string>>,
   selection: Selection,
 ): { prompt: string; selection: Selection } {
+  const segments = result.segments ?? []
   const replacementFor = (findingID: string | undefined, text: string) =>
     findingID && selected.has(findingID) ? (choices[findingID] ?? text) : text
   const mapPosition = (position: number) => {
     let sourceOffset = 0
     let targetOffset = 0
-    for (const segment of result.segments) {
+    for (const segment of segments) {
       const text = replacementFor(segment.finding_id, segment.text)
       const sourceEnd = sourceOffset + segment.text.length
       if (position <= sourceEnd) {
@@ -29,7 +30,7 @@ export function applyPromptRefinements(
     return targetOffset
   }
 
-  const prompt = result.segments
+  const prompt = segments
     .map((segment) => replacementFor(segment.finding_id, segment.text))
     .join('')
   const nextStart = mapPosition(selection.start)
@@ -75,7 +76,7 @@ export function PromptRefinerDialog({
     setSelected(new Set())
     setChoices(
       Object.fromEntries(
-        result.findings
+        (result.findings ?? [])
           .filter((item) => item.replacements?.length)
           .map((item) => [item.id, item.replacements![0]]),
       ),
@@ -83,7 +84,7 @@ export function PromptRefinerDialog({
   }, [open, result])
 
   const locales = useMemo(() => {
-    const values = new Set(result?.findings.map((item) => item.locale) ?? [])
+    const values = new Set((result?.findings ?? []).map((item) => item.locale))
     if (values.size === 0) return '未识别到风险语言'
     if (values.size > 1) return '中英混合'
     return values.has('zh') ? '中文' : '英文'
@@ -124,7 +125,7 @@ export function PromptRefinerDialog({
             className="prompt-refiner-original"
             aria-label="提示词检查结果"
           >
-            {result.segments.map((segment, index) =>
+            {(result.segments ?? []).map((segment, index) =>
               segment.finding_id ? (
                 <mark key={`${segment.finding_id}-${index}`}>
                   {segment.text}
@@ -135,9 +136,9 @@ export function PromptRefinerDialog({
             )}
           </section>
 
-          {result.diagnostics.length > 0 && (
+          {(result.diagnostics ?? []).length > 0 && (
             <section className="prompt-refiner-diagnostics">
-              {result.diagnostics.map((item) => (
+              {(result.diagnostics ?? []).map((item) => (
                 <div key={item.code}>
                   <span>诊断</span>
                   <p>{item.message}</p>
@@ -151,9 +152,9 @@ export function PromptRefinerDialog({
             </section>
           )}
 
-          {result.findings.length > 0 ? (
+          {(result.findings ?? []).length > 0 ? (
             <section className="prompt-refiner-findings">
-              {result.findings.map((finding) => {
+              {(result.findings ?? []).map((finding) => {
                 const canApply = Boolean(finding.replacements?.length)
                 return (
                   <article key={finding.id}>
@@ -207,7 +208,7 @@ export function PromptRefinerDialog({
               })}
             </section>
           ) : (
-            result.diagnostics.length === 0 && (
+            (result.diagnostics ?? []).length === 0 && (
               <p className="prompt-refiner-clean">
                 未发现需要处理的内容，可以保持原文继续创作。
               </p>

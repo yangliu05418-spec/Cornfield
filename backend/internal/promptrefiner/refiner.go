@@ -296,7 +296,12 @@ func (e *Engine) Refine(prompt string) Result {
 		selected = append(selected, item)
 		lastEnd = item.endByte
 	}
-	result := Result{PolicyVersion: e.version, Status: "clean"}
+	result := Result{
+		PolicyVersion: e.version,
+		Status:        "clean",
+		Segments:      make([]Segment, 0),
+		Findings:      make([]Finding, 0),
+	}
 	cursor := 0
 	for _, item := range selected {
 		rule := e.rules[item.ruleIndex]

@@ -126,7 +126,13 @@ test('prompt refiner is manual, selective, and undoable', async ({ page }) => {
   await expect(page.getByText('已应用 1 项修改')).toBeVisible()
   await page.getByRole('button', { name: '撤销' }).click()
   await expect(prompt).toHaveValue('blood over a quiet cornfield')
-  expect(studio.refineAttempts()).toBe(1)
+  await prompt.fill('clean-check')
+  await page.getByRole('button', { name: '检查并优化提示词' }).click()
+  await expect(
+    page.getByText('未发现需要处理的内容，可以保持原文继续创作。'),
+  ).toBeVisible()
+  await page.getByRole('button', { name: '保持原文' }).click()
+  expect(studio.refineAttempts()).toBe(2)
 })
 
 test('a restored temporary-password session cannot enter the studio', async ({
@@ -586,6 +592,16 @@ async function installStudioMocks(
     }
     if (pathname === '/api/v1/prompts/refine' && request.method() === 'POST') {
       refineAttempts++
+      const input = request.postDataJSON() as { prompt: string }
+      if (input.prompt === 'clean-check') {
+        return json(route, {
+          policy_version: '2026-07-29.1',
+          status: 'clean',
+          segments: [{ text: input.prompt }],
+          findings: [],
+          diagnostics: [],
+        })
+      }
       return json(route, {
         policy_version: '2026-07-29.1',
         status: 'findings',

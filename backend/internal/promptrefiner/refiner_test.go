@@ -75,7 +75,7 @@ func TestCleanPrompt(t *testing.T) {
 		t.Fatal(err)
 	}
 	result := engine.Refine("一片安静的玉米田，远处有柔和的黄昏")
-	if result.Status != "clean" || len(result.Findings) != 0 || len(result.Segments) != 1 {
+	if result.Status != "clean" || result.Findings == nil || result.Segments == nil || len(result.Findings) != 0 || len(result.Segments) != 1 {
 		t.Fatalf("unexpected clean result: %#v", result)
 	}
 }

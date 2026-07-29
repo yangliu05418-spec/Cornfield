@@ -117,9 +117,9 @@ export type PromptDiagnostic = {
 export type PromptRefineResponse = {
   policy_version: string
   status: 'clean' | 'findings'
-  segments: PromptRefineSegment[]
-  findings: PromptRefineFinding[]
-  diagnostics: PromptDiagnostic[]
+  segments: PromptRefineSegment[] | null
+  findings: PromptRefineFinding[] | null
+  diagnostics: PromptDiagnostic[] | null
 }
 
 export type GenerationOutput = {

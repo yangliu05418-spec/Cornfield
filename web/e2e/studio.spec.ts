@@ -106,6 +106,29 @@ test('desktop studio supports density, preview, and optimistic generation', asyn
   expect(errors).toEqual([])
 })
 
+test('prompt refiner is manual, selective, and undoable', async ({ page }) => {
+  const studio = await installStudioMocks(page)
+  await page.goto('/app/create')
+  const prompt = page.getByRole('textbox', { name: '生成提示词' })
+  await prompt.fill('blood over a quiet cornfield')
+  expect(studio.refineAttempts()).toBe(0)
+
+  await page.getByRole('button', { name: '检查并优化提示词' }).click()
+  const dialog = page.getByRole('dialog', { name: '检查并优化提示词' })
+  await expect(dialog).toBeVisible()
+  await expect(dialog.locator('mark')).toHaveText('blood')
+  const finding = dialog.getByRole('checkbox')
+  await expect(finding).not.toBeChecked()
+  await finding.check()
+  await dialog.getByRole('button', { name: '应用所选修改' }).click()
+
+  await expect(prompt).toHaveValue('crimson liquid over a quiet cornfield')
+  await expect(page.getByText('已应用 1 项修改')).toBeVisible()
+  await page.getByRole('button', { name: '撤销' }).click()
+  await expect(prompt).toHaveValue('blood over a quiet cornfield')
+  expect(studio.refineAttempts()).toBe(1)
+})
+
 test('a restored temporary-password session cannot enter the studio', async ({
   page,
 }) => {
@@ -504,6 +527,7 @@ async function installStudioMocks(
   }[] = []
   let revoked = false
   let postAttempts = 0
+  let refineAttempts = 0
   const postKeys: string[] = []
 
   await page.route('**/mock-image.svg*', (route) =>
@@ -558,6 +582,29 @@ async function installStudioMocks(
             },
           },
         ],
+      })
+    }
+    if (pathname === '/api/v1/prompts/refine' && request.method() === 'POST') {
+      refineAttempts++
+      return json(route, {
+        policy_version: '2026-07-29.1',
+        status: 'findings',
+        segments: [
+          { text: 'blood', finding_id: 'gore.blood.en:0' },
+          { text: ' over a quiet cornfield' },
+        ],
+        findings: [
+          {
+            id: 'gore.blood.en:0',
+            locale: 'en',
+            category: 'gore',
+            mode: 'mapped',
+            original: 'blood',
+            reason: '可能触发血腥内容审核',
+            replacements: ['crimson liquid', 'dramatic red accents'],
+          },
+        ],
+        diagnostics: [],
       })
     }
     if (pathname === '/api/v1/assets') {
@@ -704,6 +751,7 @@ async function installStudioMocks(
     },
     postAttempts: () => postAttempts,
     postKeys: () => [...postKeys],
+    refineAttempts: () => refineAttempts,
   }
 }
 

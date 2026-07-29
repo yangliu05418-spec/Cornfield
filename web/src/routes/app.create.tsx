@@ -15,6 +15,7 @@ import { ConfirmDialog } from '#/components/confirm-dialog'
 import { GeneratorSelect } from '#/components/generator-select'
 import { buildWallItems, JustifiedWall } from '#/components/justified-wall'
 import { MidjourneyOptionsControl } from '#/components/midjourney-options'
+import { PromptRefinerDialog } from '#/components/prompt-refiner-dialog'
 import type { JustifiedWallHandle } from '#/components/justified-wall'
 import { api, getMe } from '#/lib/api'
 import type {
@@ -25,6 +26,7 @@ import type {
   GenerationOptions,
   MidjourneyOptions,
   Model,
+  PromptRefineResponse,
 } from '#/lib/api'
 
 export const Route = createFileRoute('/app/create')({ component: CreatePage })
@@ -61,6 +63,8 @@ type PendingSubmission = {
     options: GenerationOptions
   }
 }
+
+type GenerationRequest = PendingSubmission['request']
 
 type JobEventEnvelope = {
   id: number
@@ -272,6 +276,22 @@ function CreatePage() {
     [],
   )
   const [notice, setNotice] = useState('')
+  const [refinerBusy, setRefinerBusy] = useState(false)
+  const [refinerOpen, setRefinerOpen] = useState(false)
+  const [refinerResult, setRefinerResult] =
+    useState<PromptRefineResponse | null>(null)
+  const [refinerSnapshot, setRefinerSnapshot] = useState('')
+  const [refinerSelection, setRefinerSelection] = useState({
+    start: 0,
+    end: 0,
+  })
+  const [refinerUndo, setRefinerUndo] = useState<{
+    before: string
+    after: string
+    selection: { start: number; end: number }
+    controlSignature: string
+    count: number
+  } | null>(null)
   const [confirm, setConfirm] = useState<{
     title: string
     description: string
@@ -289,6 +309,53 @@ function CreatePage() {
     activeModel?.capabilities.aspect_ratios_by_resolution?.[resolution] ??
     activeModel?.capabilities.aspect_ratios ??
     []
+  const refinerControlSignature = useMemo(
+    () =>
+      JSON.stringify({
+        modelID: activeModel?.id,
+        revision: models.data?.revision,
+        ratio,
+        resolution,
+        quality,
+        draws,
+        midjourney,
+        references: references.map((asset) => asset.id),
+      }),
+    [
+      activeModel?.id,
+      models.data?.revision,
+      ratio,
+      resolution,
+      quality,
+      draws,
+      midjourney,
+      references,
+    ],
+  )
+  const refinerRequestSignature = `${refinerControlSignature}\n${prompt}`
+  const refinerRequestSignatureRef = useRef(refinerRequestSignature)
+  refinerRequestSignatureRef.current = refinerRequestSignature
+
+  useEffect(() => {
+    if (refinerResult && refinerSnapshot !== refinerRequestSignature) {
+      setRefinerResult(null)
+      setRefinerOpen(false)
+    }
+    if (
+      refinerUndo &&
+      (refinerUndo.after !== prompt ||
+        refinerUndo.controlSignature !== refinerControlSignature)
+    ) {
+      setRefinerUndo(null)
+    }
+  }, [
+    prompt,
+    refinerControlSignature,
+    refinerRequestSignature,
+    refinerResult,
+    refinerSnapshot,
+    refinerUndo,
+  ])
   const refreshAssetHead = useCallback(() => {
     assetRefreshVersion.current++
     if (assetRefreshInFlight.current) return assetRefreshInFlight.current
@@ -579,13 +646,8 @@ function CreatePage() {
       ]),
     [assets.data, generationItems, optimisticBatches],
   )
-  function submit(event: FormEvent) {
-    event.preventDefault()
-    if (!prompt.trim() || !activeModel || !models.data) return
-    const idempotencyKey = crypto.randomUUID()
-    const optimisticID = `optimistic:${idempotencyKey}`
-    const createdAt = new Date().toISOString()
-    const expectedOutputs = draws * activeModel.outputs_per_draw
+  function currentGenerationRequest(): GenerationRequest | null {
+    if (!prompt.trim() || !activeModel || !models.data) return null
     const submittedResolution = isMidjourney
       ? midjourney.version === '8.2' ||
         midjourney.version === '8.1' ||
@@ -596,12 +658,32 @@ function CreatePage() {
     const imageOptions = activeModel.capabilities.qualities?.length
       ? { image: { quality: quality as 'auto' | 'low' | 'medium' | 'high' } }
       : {}
+    return {
+      model_id: activeModel.id,
+      capability_revision: models.data.revision,
+      prompt: prompt.trim(),
+      aspect_ratio: ratio,
+      resolution: submittedResolution,
+      draw_count: draws,
+      input_asset_ids: references.map((asset) => asset.id),
+      options: isMidjourney ? { midjourney } : imageOptions,
+    }
+  }
+
+  function submit(event: FormEvent) {
+    event.preventDefault()
+    const request = currentGenerationRequest()
+    if (!request || !activeModel) return
+    const idempotencyKey = crypto.randomUUID()
+    const optimisticID = `optimistic:${idempotencyKey}`
+    const createdAt = new Date().toISOString()
+    const expectedOutputs = draws * activeModel.outputs_per_draw
     const batch: GenerationBatch = {
       id: optimisticID,
       model_id: activeModel.id,
       prompt: prompt.trim(),
       aspect_ratio: ratio,
-      resolution: submittedResolution,
+      resolution: request.resolution,
       draw_count: draws,
       expected_outputs: expectedOutputs,
       completed_outputs: 0,
@@ -613,22 +695,43 @@ function CreatePage() {
         status: 'creating',
         expected_outputs: activeModel.outputs_per_draw,
       })),
-      options: isMidjourney ? { midjourney } : imageOptions,
+      options: request.options,
     }
     create.mutate({
       idempotencyKey,
       batch,
-      request: {
-        model_id: activeModel.id,
-        capability_revision: models.data.revision,
-        prompt: prompt.trim(),
-        aspect_ratio: ratio,
-        resolution: submittedResolution,
-        draw_count: draws,
-        input_asset_ids: references.map((asset) => asset.id),
-        options: isMidjourney ? { midjourney } : imageOptions,
-      },
+      request,
     })
+  }
+
+  async function refinePrompt() {
+    const request = currentGenerationRequest()
+    if (!request || refinerBusy) return
+    request.prompt = prompt
+    const signature = refinerRequestSignature
+    const selection = {
+      start: promptRef.current?.selectionStart ?? prompt.length,
+      end: promptRef.current?.selectionEnd ?? prompt.length,
+    }
+    setRefinerBusy(true)
+    try {
+      const result = await api<PromptRefineResponse>('/api/v1/prompts/refine', {
+        method: 'POST',
+        body: JSON.stringify(request),
+      })
+      if (refinerRequestSignatureRef.current !== signature) {
+        setNotice('提示词或生成参数已变化，请重新检查')
+        return
+      }
+      setRefinerSelection(selection)
+      setRefinerSnapshot(signature)
+      setRefinerResult(result)
+      setRefinerOpen(true)
+    } catch (reason) {
+      setNotice(reason instanceof Error ? reason.message : '提示词检查失败')
+    } finally {
+      setRefinerBusy(false)
+    }
   }
   function deleteAsset(asset: Asset) {
     setConfirm({
@@ -963,6 +1066,19 @@ function CreatePage() {
                 placeholder="描述你想象中的画面"
                 rows={1}
               />
+              <button
+                type="button"
+                className="prompt-refiner-button"
+                aria-label="检查并优化提示词"
+                title="检查并优化提示词"
+                disabled={!prompt.trim() || refinerBusy || !activeModel}
+                onClick={() => void refinePrompt()}
+              >
+                <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                  <path d="M12 3.5c.45 3.25 2.25 5.05 5.5 5.5-3.25.45-5.05 2.25-5.5 5.5-.45-3.25-2.25-5.05-5.5-5.5 3.25-.45 5.05-2.25 5.5-5.5Z" />
+                  <path d="M4 16.5h4.5M15.5 18.5H20" />
+                </svg>
+              </button>
             </div>
             <div className="generator-controls">
               <GeneratorSelect
@@ -1056,6 +1172,55 @@ function CreatePage() {
             {create.isPending ? '提交中…' : '生成'}
           </button>
         </form>
+        {refinerUndo && (
+          <div className="prompt-refiner-undo" role="status">
+            <span>已应用 {refinerUndo.count} 项修改</span>
+            <button
+              type="button"
+              onClick={() => {
+                const undo = refinerUndo
+                setPrompt(undo.before)
+                setRefinerUndo(null)
+                requestAnimationFrame(() => {
+                  promptRef.current?.focus()
+                  promptRef.current?.setSelectionRange(
+                    undo.selection.start,
+                    undo.selection.end,
+                  )
+                })
+              }}
+            >
+              撤销
+            </button>
+          </div>
+        )}
+        <PromptRefinerDialog
+          open={refinerOpen}
+          modelName={activeModel?.display_name ?? ''}
+          result={refinerResult}
+          selection={refinerSelection}
+          onClose={() => setRefinerOpen(false)}
+          onApply={(nextPrompt, nextSelection, count) => {
+            const before = prompt
+            setPrompt(nextPrompt)
+            setRefinerOpen(false)
+            setRefinerResult(null)
+            setRefinerUndo({
+              before,
+              after: nextPrompt,
+              selection: refinerSelection,
+              controlSignature: refinerControlSignature,
+              count,
+            })
+            requestAnimationFrame(() => {
+              promptRef.current?.focus()
+              promptRef.current?.setSelectionRange(
+                nextSelection.start,
+                nextSelection.end,
+              )
+            })
+          }}
+        />
         <ConfirmDialog
           open={confirm !== null}
           title={confirm?.title ?? ''}

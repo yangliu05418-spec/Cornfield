@@ -91,6 +91,37 @@ export type GenerationOptions = {
   image?: { quality: 'auto' | 'low' | 'medium' | 'high' }
 }
 
+export type PromptRefineFinding = {
+  id: string
+  locale: 'en' | 'zh'
+  category: string
+  mode: 'mapped' | 'contextual' | 'manual_only'
+  original: string
+  reason: string
+  replacements?: string[]
+}
+
+export type PromptRefineSegment = {
+  text: string
+  finding_id?: string
+}
+
+export type PromptDiagnostic = {
+  code: string
+  severity: 'warning' | 'info'
+  message: string
+  used?: number
+  limit?: number
+}
+
+export type PromptRefineResponse = {
+  policy_version: string
+  status: 'clean' | 'findings'
+  segments: PromptRefineSegment[]
+  findings: PromptRefineFinding[]
+  diagnostics: PromptDiagnostic[]
+}
+
 export type GenerationOutput = {
   asset_id: string
   output_index: number

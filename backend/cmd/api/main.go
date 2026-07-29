@@ -15,6 +15,7 @@ import (
 	"internal-image-studio/internal/config"
 	"internal-image-studio/internal/httpapi"
 	"internal-image-studio/internal/modelconfig"
+	"internal-image-studio/internal/promptrefiner"
 )
 
 func main() {
@@ -39,6 +40,11 @@ func main() {
 		logger.Error("model config invalid", "error", err)
 		os.Exit(1)
 	}
+	refiner, err := promptrefiner.New()
+	if err != nil {
+		logger.Error("prompt rules invalid", "error", err)
+		os.Exit(1)
+	}
 	store, err := blob.NewLocal(cfg.AssetRoot)
 	if err != nil {
 		logger.Error("storage unavailable", "error", err)
@@ -61,7 +67,7 @@ func main() {
 	// The request body timeout must cover a 25 MiB streamed upload on an
 	// ordinary remote connection. Header parsing remains tightly bounded and
 	// Nginx separately caps upload connections and body idle time.
-	server := &http.Server{Addr: ":8081", Handler: httpapi.New(ctx, cfg, db, catalog, store, logger).Handler(), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 5 * time.Minute, WriteTimeout: 0, IdleTimeout: 2 * time.Minute, MaxHeaderBytes: 32 << 10}
+	server := &http.Server{Addr: ":8081", Handler: httpapi.New(ctx, cfg, db, catalog, refiner, store, logger).Handler(), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 5 * time.Minute, WriteTimeout: 0, IdleTimeout: 2 * time.Minute, MaxHeaderBytes: 32 << 10}
 	go func() {
 		logger.Info("api started", "address", server.Addr, "model_revision", catalog.Hash)
 		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {

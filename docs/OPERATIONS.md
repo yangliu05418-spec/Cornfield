@@ -143,6 +143,8 @@ curl -fsS http://127.0.0.1:9090/api/v1/alertmanagers
 
 ## 备份
 
+`BACKUP_ENABLED` 默认为 `true`。仅在明确接受关闭持续备份与恢复演练的风险时设置为 `false`；preflight 此时只跳过 Restic、备份目录、恢复盘、node-exporter 备份指标和维护 systemd unit 检查，密钥、资产目录、镜像 digest、Nginx、TLS、CSP 与容器隔离检查仍然执行。关闭持续备份不等于无需上线或迁移快照，任何主机迁移仍须制作并逐跳校验一次冷快照。
+
 安装 Restic 后设置 root-only 环境文件 `/etc/internal-image-studio/backup.env`：
 
 ```text
@@ -239,7 +241,7 @@ curl -fsS http://127.0.0.1:9090/api/v1/query?query=image_studio_restore_check_la
 
 ### 发布
 
-1. 在已通过主分支 CI 的 commit 上创建 `v*` Git tag。tag 与手工触发都不能绕过发布门：`release-images` 会先证明目标 SHA 可从 `origin/main` 到达，并通过 GitHub Actions API 确认同一 SHA 已有 `push/main` 的成功 `ci.yml` run；任一条件不满足即停止。随后 workflow 分别构建 API、Worker、Tools、Web 四个 `linux/amd64` OCI image，在没有 registry 写权限的 job 中验证 SBOM/provenance 并用 Trivy 阻断可修复的 HIGH/CRITICAL 漏洞，之后才把同一 OCI graph 发布到 `ghcr.io/<owner>/cornfield-{api,worker,tools,web}:<commit>`。
+1. 在已通过主分支 CI 的 commit 上创建 `v*` Git tag。tag 与手工触发都不能绕过发布门：`release-images` 会先证明目标 SHA 可从 `origin/main` 到达，并通过 GitHub Actions API 确认同一 SHA 已有 `push/main` 的成功 `ci.yml` run；任一条件不满足即停止。随后 workflow 分别构建 API、Worker、Tools、Web 四个 `linux/arm64` OCI image，在没有 registry 写权限的 job 中验证 SBOM/provenance 并用 Trivy 阻断可修复的 HIGH/CRITICAL 漏洞，之后才把同一 OCI graph 发布到 `ghcr.io/<owner>/cornfield-{api,worker,tools,web}:<commit>`。
 2. 下载该 workflow 的 `cornfield-image-digests-<commit>` artifact，在受控发布机验证：
 
    ```bash

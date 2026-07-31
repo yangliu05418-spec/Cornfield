@@ -348,11 +348,16 @@ case "${nginx_worker_groups}" in
   *) fail "${nginx_worker_user} is not a member of runtime GID ${runtime_gid}" ;;
 esac
 command -v runuser >/dev/null 2>&1 || fail "runuser is required to verify Nginx asset permissions"
-runuser -u "${nginx_worker_user}" -- /usr/bin/test -r "${data_root}/assets" || fail "Nginx worker cannot list the asset directory"
-runuser -u "${nginx_worker_user}" -- /usr/bin/test -x "${data_root}/assets" || fail "Nginx worker cannot traverse the asset directory"
+# Use the POSIX shell builtin. Ubuntu 26's uutils /usr/bin/test does not
+# currently honor supplementary groups for these permission predicates.
+# shellcheck disable=SC2016 # $1 is expanded by the child shell.
+runuser -u "${nginx_worker_user}" -- /bin/sh -c 'test -r "$1"' sh "${data_root}/assets" || fail "Nginx worker cannot list the asset directory"
+# shellcheck disable=SC2016 # $1 is expanded by the child shell.
+runuser -u "${nginx_worker_user}" -- /bin/sh -c 'test -x "$1"' sh "${data_root}/assets" || fail "Nginx worker cannot traverse the asset directory"
 asset_sample="$(find "${data_root}/assets" -xdev -type f -print -quit)"
 if test -n "${asset_sample}"; then
-  runuser -u "${nginx_worker_user}" -- /usr/bin/test -r "${asset_sample}" || fail "Nginx worker cannot read asset sample ${asset_sample}"
+  # shellcheck disable=SC2016 # $1 is expanded by the child shell.
+  runuser -u "${nginx_worker_user}" -- /bin/sh -c 'test -r "$1"' sh "${asset_sample}" || fail "Nginx worker cannot read asset sample ${asset_sample}"
 fi
 
 command -v pgrep >/dev/null 2>&1 || fail "pgrep is required to verify active Nginx workers"

@@ -13,7 +13,7 @@ CREATE INDEX director_projects_owner_updated_idx
     ON director_projects(owner_user_id, updated_at DESC, id DESC);
 
 GRANT SELECT, INSERT, UPDATE, DELETE ON director_projects TO studio_api;
-GRANT DELETE ON director_projects TO studio_worker;
+GRANT SELECT, DELETE ON director_projects TO studio_worker;
 
 -- +goose Down
 REVOKE ALL ON director_projects FROM studio_worker, studio_api;

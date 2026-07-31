@@ -179,6 +179,17 @@ if test -z "${compose_profiles}"; then
 fi
 compose_profiles="$(printf '%s' "${compose_profiles}" | tr -d '[:space:]')"
 
+backup_enabled="$(printenv BACKUP_ENABLED 2>/dev/null || true)"
+if test -z "${backup_enabled}"; then
+  backup_enabled="$(sed -n 's/^BACKUP_ENABLED=//p' .env | tail -n 1)"
+fi
+backup_enabled="${backup_enabled:-true}"
+case "${backup_enabled}" in
+  true|false) ;;
+  *) fail "BACKUP_ENABLED must be true or false" ;;
+esac
+
+if test "${backup_enabled}" = "true"; then
 node_exporter_textfile_dir="$(printenv NODE_EXPORTER_TEXTFILE_DIR 2>/dev/null || true)"
 if test -z "${node_exporter_textfile_dir}"; then
   node_exporter_textfile_dir="$(sed -n 's#^NODE_EXPORTER_TEXTFILE_DIR=##p' .env | tail -n 1)"
@@ -268,6 +279,7 @@ systemd-analyze verify \
 systemctl is-enabled --quiet internal-image-studio-backup.timer || fail "backup timer must be enabled"
 systemctl is-enabled --quiet internal-image-studio-restore-check.timer || fail "restore-check timer must be enabled"
 systemctl is-enabled --quiet internal-image-studio-maintenance-recovery.service || fail "boot maintenance recovery service must be enabled"
+fi
 
 case ",${compose_profiles}," in
   *,observability,*)

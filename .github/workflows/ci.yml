@@ -74,9 +74,28 @@ jobs:
       - run: test -f dist/client/index.html && test -f dist/client/_shell.html
       - run: '! rg "createServerFn" src'
 
+  director:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: 3d-director-desk-main
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "24.15"
+          cache: npm
+          cache-dependency-path: 3d-director-desk-main/package-lock.json
+      - run: npm ci
+      - run: npm test
+      - run: npm run build:embedded
+      - run: test -f dist/index.html && test ! -e dist/examples/experiments/gaussian-splat-experiment.html
+
   images:
     runs-on: ubuntu-latest
-    needs: [backend, web]
+    needs: [backend, web, director]
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:

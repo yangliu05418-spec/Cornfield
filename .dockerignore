@@ -5,6 +5,19 @@
 !backend/**
 !web/
 !web/**
+!3d-director-desk-main/
+!3d-director-desk-main/index.html
+!3d-director-desk-main/package.json
+!3d-director-desk-main/package-lock.json
+!3d-director-desk-main/tsconfig.json
+!3d-director-desk-main/tsconfig.node.json
+!3d-director-desk-main/vite.config.ts
+!3d-director-desk-main/src/
+!3d-director-desk-main/src/**
+!3d-director-desk-main/examples/
+!3d-director-desk-main/examples/**
+!3d-director-desk-main/public/
+!3d-director-desk-main/public/**
 !ops/
 !ops/db-bootstrap.sh
 
@@ -14,6 +27,9 @@ web/dist/
 web/output/
 web/.playwright-cli/
 web/.vscode/
+3d-director-desk-main/node_modules/
+3d-director-desk-main/dist/
+3d-director-desk-main/.playwright-cli/
 backend/coverage/
 backend/*.exe
 

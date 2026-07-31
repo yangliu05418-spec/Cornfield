@@ -8,6 +8,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query'
 import * as Popover from '@radix-ui/react-popover'
 import {
   ChevronDown,
+  Clapperboard,
   FolderOpen,
   KeyRound,
   LogOut,
@@ -78,6 +79,10 @@ export function AppShell({ children }: { children: ReactNode }) {
           <Link to="/app/assets" activeProps={{ className: 'active' }}>
             <FolderOpen size={14} />
             资产
+          </Link>
+          <Link to="/app/director" activeProps={{ className: 'active' }}>
+            <Clapperboard size={14} />
+            导演台
           </Link>
           {user.role === 'admin' && (
             <Link

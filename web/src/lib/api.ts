@@ -59,6 +59,18 @@ export type AssetPage = {
   next_cursor: string
 }
 
+export type DirectorProjectSummary = {
+  id: string
+  name: string
+  revision: number
+  created_at: string
+  updated_at: string
+}
+
+export type DirectorProject = DirectorProjectSummary & {
+  document?: unknown
+}
+
 export type GenerationJob = {
   id: string
   draw_index: number

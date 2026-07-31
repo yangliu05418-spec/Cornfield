@@ -3344,3 +3344,413 @@ select {
     transition-duration: 0.01ms !important;
   }
 }
+
+/* Director desk */
+.director-projects-page,
+.director-help-page {
+  min-height: calc(100vh - 64px);
+  padding: clamp(28px, 5vw, 72px);
+  color: #f7f7f8;
+  background: #0f1113;
+}
+
+.director-projects-header {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 32px;
+  max-width: 1280px;
+  margin: 0 auto 40px;
+}
+
+.director-projects-header h1,
+.director-help-page h1 {
+  margin: 7px 0 10px;
+  font-size: clamp(40px, 6vw, 78px);
+  font-weight: 500;
+  letter-spacing: -0.055em;
+  line-height: 0.94;
+}
+
+.director-projects-header > div > p:last-child,
+.director-help-page > header > p:last-child {
+  max-width: 620px;
+  margin: 0;
+  color: #898a8b;
+  font-size: 15px;
+  line-height: 1.65;
+}
+
+.director-projects-actions,
+.director-project-card-actions,
+.director-help-back {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+}
+
+.director-projects-actions .primary-button,
+.director-projects-actions .secondary-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 42px;
+  padding-inline: 17px;
+  text-decoration: none;
+  border-radius: 12px;
+}
+
+.director-project-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  max-width: 1280px;
+  margin: 0 auto;
+}
+
+.director-project-card {
+  position: relative;
+  overflow: hidden;
+  border: 1px solid #2e3031;
+  border-radius: 14px;
+  background: #1c1e20;
+  transition:
+    transform 170ms ease,
+    border-color 170ms ease,
+    background 170ms ease;
+}
+
+.director-project-card:hover,
+.director-project-card:focus-within {
+  transform: translateY(-2px);
+  border-color: #555851;
+  background: #202326;
+}
+
+.director-project-open {
+  display: grid;
+  grid-template-columns: 48px minmax(0, 1fr) auto 20px;
+  align-items: center;
+  gap: 14px;
+  width: 100%;
+  min-height: 126px;
+  padding: 24px 112px 24px 24px;
+  color: inherit;
+  text-align: left;
+  background: transparent;
+  border: 0;
+}
+
+.director-project-icon {
+  display: grid;
+  place-items: center;
+  width: 48px;
+  height: 48px;
+  color: #d1fe17;
+  border: 1px solid #3d4232;
+  border-radius: 12px;
+  background: #171a18;
+}
+
+.director-project-copy {
+  display: grid;
+  gap: 7px;
+}
+.director-project-copy strong {
+  font-size: 17px;
+  font-weight: 500;
+}
+.director-project-copy small,
+.director-project-index {
+  color: #898a8b;
+  font: 11px/1.2 var(--font-mono, monospace);
+}
+.director-project-index {
+  align-self: start;
+}
+
+.director-project-card-actions {
+  position: absolute;
+  top: 50%;
+  right: 48px;
+  opacity: 0;
+  transform: translateY(-40%);
+  transition:
+    opacity 160ms ease,
+    transform 160ms ease;
+}
+
+.director-project-card:hover .director-project-card-actions,
+.director-project-card:focus-within .director-project-card-actions {
+  opacity: 1;
+  transform: translateY(-50%);
+}
+
+.director-project-card-actions button {
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  color: #b6b7b8;
+  border: 1px solid #363839;
+  border-radius: 9px;
+  background: #17191b;
+}
+
+.director-project-card-actions button:hover {
+  color: #d1fe17;
+  border-color: #66752c;
+}
+
+.director-projects-empty {
+  display: grid;
+  place-items: center;
+  gap: 9px;
+  max-width: 1280px;
+  min-height: 320px;
+  margin: 0 auto;
+  color: #898a8b;
+  border: 1px dashed #2e3031;
+  border-radius: 14px;
+}
+
+.director-projects-empty h2 {
+  margin: 6px 0 0;
+  color: #f7f7f8;
+  font-size: 20px;
+  font-weight: 500;
+}
+.director-projects-empty p {
+  margin: 0;
+}
+.director-notice {
+  max-width: 1280px;
+  margin: -22px auto 22px;
+  color: #d1fe17;
+}
+
+.director-name-dialog {
+  position: fixed;
+  inset: 0;
+  width: min(440px, calc(100vw - 32px));
+  margin: auto;
+  padding: 0;
+  color: #f7f7f8;
+  border: 1px solid #3b3d3e;
+  border-radius: 14px;
+  background: #1c1e20;
+  box-shadow: 0 24px 80px rgb(0 0 0 / 0.48);
+}
+
+.director-name-dialog::backdrop {
+  background: rgb(4 6 8 / 0.76);
+  backdrop-filter: blur(12px);
+}
+.director-name-dialog form {
+  display: grid;
+  gap: 18px;
+  padding: 28px;
+}
+.director-name-dialog h2 {
+  margin: -8px 0 0;
+  font-size: 24px;
+  font-weight: 500;
+}
+.director-name-dialog input {
+  height: 44px;
+  padding: 0 13px;
+  color: #f7f7f8;
+  border: 1px solid #3c3e3f;
+  border-radius: 10px;
+  background: #111315;
+  outline: 0;
+}
+.director-name-dialog input:focus {
+  border-color: #d1fe17;
+  box-shadow: 0 0 0 3px rgb(209 254 23 / 0.11);
+}
+
+.director-help-page {
+  max-width: none;
+}
+.director-help-page > * {
+  max-width: 1080px;
+  margin-inline: auto;
+}
+.director-help-back {
+  width: max-content;
+  margin-bottom: 60px;
+  color: #a9aaab;
+  text-decoration: none;
+}
+.director-help-back:hover {
+  color: #d1fe17;
+}
+.director-help-steps {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 10px;
+  margin-top: 46px;
+  padding: 0;
+  list-style: none;
+}
+.director-help-steps li,
+.director-help-grid article,
+.director-help-tools {
+  border: 1px solid #2e3031;
+  border-radius: 14px;
+  background: #1c1e20;
+}
+.director-help-steps li {
+  min-height: 190px;
+  padding: 22px;
+}
+.director-help-steps li > span {
+  color: #d1fe17;
+  font: 11px/1 monospace;
+}
+.director-help-steps strong {
+  display: block;
+  margin: 48px 0 8px;
+  font-size: 15px;
+}
+.director-help-steps p,
+.director-help-grid dd,
+.director-help-tools dd {
+  margin: 0;
+  color: #898a8b;
+  font-size: 13px;
+  line-height: 1.55;
+}
+.director-help-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+  margin-top: 10px;
+}
+.director-help-grid article,
+.director-help-tools {
+  padding: 26px;
+}
+.director-help-grid h2,
+.director-help-tools h2 {
+  margin: 18px 0;
+  font-size: 18px;
+  font-weight: 500;
+}
+.director-help-grid dl,
+.director-help-tools dl {
+  display: grid;
+  gap: 0;
+  margin: 0;
+}
+.director-help-grid dl div,
+.director-help-tools dl div {
+  display: grid;
+  grid-template-columns: 140px 1fr;
+  gap: 20px;
+  padding: 12px 0;
+  border-top: 1px solid #2e3031;
+}
+.director-help-grid dt,
+.director-help-tools dt {
+  font-size: 12px;
+  color: #f7f7f8;
+}
+.director-help-tools {
+  margin-top: 10px;
+}
+
+.director-editor-page {
+  position: relative;
+  height: calc(100vh - 64px);
+  min-height: 620px;
+  overflow: hidden;
+  background: #0f1113;
+}
+.director-editor-page iframe {
+  display: block;
+  width: 100%;
+  height: 100%;
+  border: 0;
+  background: #0f1113;
+}
+.director-editor-loading {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  color: #898a8b;
+  background: #0f1113;
+}
+.director-host-save-state {
+  position: absolute;
+  right: 14px;
+  bottom: 14px;
+  z-index: 3;
+  padding: 7px 10px;
+  color: #898a8b;
+  font-size: 11px;
+  border: 1px solid #2e3031;
+  border-radius: 9px;
+  background: rgb(15 17 19 / 0.88);
+  backdrop-filter: blur(10px);
+  pointer-events: none;
+}
+.director-host-save-state.is-conflict,
+.director-host-save-state.is-error {
+  color: #ffb4ae;
+  border-color: #6e3732;
+}
+
+@media (max-width: 820px) {
+  .director-projects-header {
+    align-items: stretch;
+    flex-direction: column;
+  }
+  .director-projects-actions {
+    align-self: stretch;
+  }
+  .director-projects-actions > * {
+    flex: 1;
+  }
+  .director-project-grid,
+  .director-help-grid {
+    grid-template-columns: 1fr;
+  }
+  .director-help-steps {
+    grid-template-columns: repeat(2, 1fr);
+  }
+  .director-editor-page {
+    height: calc(100dvh - 64px);
+  }
+}
+
+@media (max-width: 560px) {
+  .director-projects-page,
+  .director-help-page {
+    padding: 24px 16px;
+  }
+  .director-help-steps {
+    grid-template-columns: 1fr;
+  }
+  .director-help-grid dl div,
+  .director-help-tools dl div {
+    grid-template-columns: 1fr;
+    gap: 5px;
+  }
+  .director-project-open {
+    padding-left: 16px;
+    padding-right: 88px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .director-project-card,
+  .director-project-card-actions {
+    transition: none;
+  }
+}

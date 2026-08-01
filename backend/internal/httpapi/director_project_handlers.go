@@ -47,14 +47,6 @@ func decodeDirectorDocument(w http.ResponseWriter, r *http.Request, target any) 
 	return true
 }
 
-func validDirectorDocument(document json.RawMessage) bool {
-	if len(document) == 0 || len(document) > maxDirectorDocumentBytes {
-		return false
-	}
-	var value map[string]any
-	return json.Unmarshal(document, &value) == nil && value != nil
-}
-
 func directorProjectTime(value time.Time) string {
 	return value.UTC().Format(time.RFC3339Nano)
 }
@@ -202,7 +194,7 @@ func (s *Server) saveDirectorProject(w http.ResponseWriter, r *http.Request) {
 	if !decodeDirectorDocument(w, r, &input) {
 		return
 	}
-	if input.ExpectedRevision < 0 || !validDirectorDocument(input.Document) {
+	if input.ExpectedRevision < 0 || validateDirectorDocument(input.Document, currentSession(r).UserID) != nil {
 		writeError(w, http.StatusUnprocessableEntity, "INVALID_DIRECTOR_DOCUMENT", "导演台工程必须是有效且不超过 4 MiB 的 JSON 对象", false, r)
 		return
 	}
@@ -224,6 +216,58 @@ func (s *Server) saveDirectorProject(w http.ResponseWriter, r *http.Request) {
 	}
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "DIRECTOR_PROJECT_SAVE_FAILED", "保存导演台工程失败", true, r)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"revision": revision})
+}
+
+func (s *Server) resetDirectorProject(w http.ResponseWriter, r *http.Request) {
+	id, ok := parseUUIDParam(w, r, "id")
+	if !ok {
+		return
+	}
+	var input struct {
+		ExpectedRevision int64 `json:"expected_revision"`
+	}
+	if !decodeJSON(w, r, &input) {
+		return
+	}
+	if input.ExpectedRevision < 0 {
+		writeError(w, http.StatusUnprocessableEntity, "INVALID_DIRECTOR_REVISION", "工程版本号无效", false, r)
+		return
+	}
+	tx, err := s.db.Begin(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "DIRECTOR_PROJECT_RESET_FAILED", "重置导演台工程失败", true, r)
+		return
+	}
+	defer tx.Rollback(r.Context())
+	var revision int64
+	err = tx.QueryRow(r.Context(), `UPDATE director_projects SET document=NULL,revision=revision+1,updated_at=now()
+		WHERE id=$1 AND owner_user_id=$2 AND revision=$3 RETURNING revision`, id, currentSession(r).UserID, input.ExpectedRevision).Scan(&revision)
+	if errors.Is(err, pgx.ErrNoRows) {
+		var exists bool
+		if checkErr := tx.QueryRow(r.Context(), `SELECT EXISTS(SELECT 1 FROM director_projects WHERE id=$1 AND owner_user_id=$2)`, id, currentSession(r).UserID).Scan(&exists); checkErr != nil {
+			writeError(w, http.StatusInternalServerError, "DIRECTOR_PROJECT_RESET_FAILED", "重置导演台工程失败", true, r)
+			return
+		}
+		if !exists {
+			writeError(w, http.StatusNotFound, "DIRECTOR_PROJECT_NOT_FOUND", "导演台项目不存在", false, r)
+			return
+		}
+		writeError(w, http.StatusConflict, "DIRECTOR_PROJECT_CONFLICT", "项目已在其他位置更新，请刷新后继续", false, r)
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "DIRECTOR_PROJECT_RESET_FAILED", "重置导演台工程失败", true, r)
+		return
+	}
+	if err = insertAudit(r.Context(), tx, currentSession(r).UserID, "director_project.reset", "director_project", id.String(), requestIDFromContext(r), map[string]any{"previous_revision": input.ExpectedRevision, "revision": revision}); err != nil {
+		writeError(w, http.StatusInternalServerError, "DIRECTOR_PROJECT_RESET_FAILED", "重置导演台工程失败", true, r)
+		return
+	}
+	if err = tx.Commit(r.Context()); err != nil {
+		writeError(w, http.StatusInternalServerError, "DIRECTOR_PROJECT_RESET_FAILED", "重置导演台工程失败", true, r)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"revision": revision})

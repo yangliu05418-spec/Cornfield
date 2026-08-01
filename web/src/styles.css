@@ -3680,6 +3680,11 @@ select {
   border: 0;
   background: #0f1113;
 }
+
+.director-editor-page.is-recovering iframe {
+  pointer-events: none;
+  filter: saturate(0.35) brightness(0.55);
+}
 .director-editor-loading {
   position: absolute;
   inset: 0;
@@ -3690,6 +3695,48 @@ select {
   gap: 10px;
   color: #898a8b;
   background: #0f1113;
+}
+
+.director-recovery-panel {
+  position: absolute;
+  z-index: 4;
+  inset: 50% auto auto 50%;
+  width: min(520px, calc(100% - 32px));
+  padding: 28px;
+  transform: translate(-50%, -50%);
+  border: 1px solid #3a3d3f;
+  border-radius: 14px;
+  background: rgba(28, 30, 32, 0.97);
+  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.42);
+}
+
+.director-recovery-panel h1 {
+  margin: 8px 0 10px;
+  color: #f7f7f8;
+  font-size: clamp(24px, 4vw, 34px);
+  line-height: 1.05;
+}
+
+.director-recovery-panel > p:not(.eyebrow) {
+  margin: 0;
+  color: #b9babb;
+  line-height: 1.6;
+}
+
+.director-recovery-panel .director-recovery-note {
+  margin-top: 14px;
+  color: #898a8b;
+}
+
+.director-recovery-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 24px;
+}
+
+.director-recovery-actions button {
+  min-height: 40px;
 }
 .director-host-save-state {
   position: absolute;

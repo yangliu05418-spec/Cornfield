@@ -1,4 +1,9 @@
 import { create } from "zustand";
+import {
+  getDirectorTenantLocalStorageKey,
+  getDirectorTenantScope,
+  isEmbeddedDirectorDeskRuntime,
+} from "../io/tenantScope";
 import { MANNEQUIN_POSE_PRESETS } from "../presets/mannequinPosePresets";
 import { GEOMETRY_PRIMITIVE_OPTIONS } from "../schema/directorProject";
 import type {
@@ -222,11 +227,15 @@ function readPersistedLocalModelAssets() {
   if (!storage) return [];
 
   try {
-    const snapshot = storage.getItem(LOCAL_MODEL_LIBRARY_STORAGE_KEY);
+    const storageKey = getDirectorTenantLocalStorageKey(LOCAL_MODEL_LIBRARY_STORAGE_KEY);
+    if (!storageKey) return [];
+    const snapshot = storage.getItem(storageKey);
     if (!snapshot) return [];
 
     const parsed = JSON.parse(snapshot);
     if (!Array.isArray(parsed)) return [];
+    const tenantScope = getDirectorTenantScope();
+    const tenantPrefix = tenantScope ? `user:${tenantScope}:` : null;
 
     return parsed.filter(
       (asset): asset is DirectorAssetRef =>
@@ -234,6 +243,8 @@ function readPersistedLocalModelAssets() {
         typeof asset.id === "string" &&
         typeof asset.fileName === "string" &&
         typeof asset.url === "string" &&
+        (!tenantPrefix ||
+          (typeof asset.storageKey === "string" && asset.storageKey.startsWith(tenantPrefix))) &&
         isLocalModelLibraryAsset(asset)
     );
   } catch {
@@ -246,7 +257,9 @@ function writePersistedLocalModelAssets(assets: DirectorAssetRef[]) {
   if (!storage) return;
 
   try {
-    storage.setItem(LOCAL_MODEL_LIBRARY_STORAGE_KEY, JSON.stringify(assets.filter(isLocalModelLibraryAsset)));
+    const storageKey = getDirectorTenantLocalStorageKey(LOCAL_MODEL_LIBRARY_STORAGE_KEY);
+    if (!storageKey) return;
+    storage.setItem(storageKey, JSON.stringify(assets.filter(isLocalModelLibraryAsset)));
   } catch {
     // Local model files can exceed browser storage limits; keep the current scene usable if persistence fails.
   }
@@ -1083,7 +1096,10 @@ function trimUndoStack(stack: DirectorState[]) {
 
 export const useDirectorStore = create<DirectorStore>((set, get) => {
   const initialRuntimeState = createRuntimeStateFromPersistedState(
-    createInitialDirectorState({ includePersistedLocalAssets: true, includePersistedScene: false })
+    createInitialDirectorState({
+      includePersistedLocalAssets: !isEmbeddedDirectorDeskRuntime(),
+      includePersistedScene: false,
+    })
   );
 
   function commitMutation(

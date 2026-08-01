@@ -95,6 +95,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /api/v1/director-projects/{id}", s.requireAuth(http.HandlerFunc(s.getDirectorProject)))
 	mux.Handle("PATCH /api/v1/director-projects/{id}", s.requireAuth(s.requireCSRF(http.HandlerFunc(s.renameDirectorProject))))
 	mux.Handle("PUT /api/v1/director-projects/{id}/document", s.requireAuth(s.requireCSRF(http.HandlerFunc(s.saveDirectorProject))))
+	mux.Handle("POST /api/v1/director-projects/{id}/reset", s.requireAuth(s.requireCSRF(http.HandlerFunc(s.resetDirectorProject))))
 	mux.Handle("DELETE /api/v1/director-projects/{id}", s.requireAuth(s.requireCSRF(http.HandlerFunc(s.deleteDirectorProject))))
 	mux.Handle("GET /api/v1/generations", s.requireAuth(http.HandlerFunc(s.listGenerations)))
 	mux.Handle("POST /api/v1/generations", s.requireAuth(s.requireCSRF(http.HandlerFunc(s.createGeneration))))

@@ -4,7 +4,8 @@ import type { InfiniteData } from '@tanstack/react-query'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 import { AppShell } from '#/components/app-shell'
-import { api, APIError } from '#/lib/api'
+import { ConfirmDialog } from '#/components/confirm-dialog'
+import { api, APIError, getMe } from '#/lib/api'
 import type { Asset, AssetPage, DirectorProject } from '#/lib/api'
 
 export const Route = createFileRoute('/app/director/$projectId')({
@@ -17,6 +18,7 @@ const uploadDeadline = 2 * 60 * 1000
 type HostMessage = { type?: unknown; payload?: unknown }
 type SaveState = 'saved' | 'saving' | 'conflict' | 'error'
 type AssetPages = InfiniteData<AssetPage, string>
+type SessionError = { code: string; message: string }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value)
@@ -96,6 +98,8 @@ function DirectorEditorPage() {
   const navigate = useNavigate()
   const queryClient = useQueryClient()
   const iframeRef = useRef<HTMLIFrameElement>(null)
+  const iframeReadyRef = useRef(false)
+  const sessionSentRef = useRef(false)
   const revisionRef = useRef(0)
   const pendingDocumentRef = useRef<unknown>(null)
   const saveTimerRef = useRef<number | null>(null)
@@ -103,6 +107,10 @@ function DirectorEditorPage() {
   const conflictRef = useRef(false)
   const [saveState, setSaveState] = useState<SaveState>('saved')
   const [saveMessage, setSaveMessage] = useState('已保存')
+  const [sessionError, setSessionError] = useState<SessionError | null>(null)
+  const [resetConfirmOpen, setResetConfirmOpen] = useState(false)
+  const [resetting, setResetting] = useState(false)
+  const me = useQuery({ queryKey: ['me'], queryFn: getMe, retry: false })
   const project = useQuery({
     queryKey: ['director-project', projectId],
     queryFn: () =>
@@ -216,16 +224,93 @@ function DirectorEditorPage() {
   )
 
   const sendSession = useCallback(() => {
-    if (!project.data) return
+    if (
+      !iframeReadyRef.current ||
+      !project.data ||
+      !me.data ||
+      sessionSentRef.current
+    )
+      return
+    sessionSentRef.current = true
     post('storyai:director-desk-session', {
       instanceId: project.data.id,
+      tenantScope: me.data.user.id,
       theme: 'dark',
       embedded: true,
       projectName: project.data.name,
       projectDocument: project.data.document ?? null,
       documentRevision: revisionRef.current,
     })
-  }, [post, project.data])
+  }, [me.data, post, project.data])
+
+  useEffect(() => {
+    iframeReadyRef.current = false
+    sessionSentRef.current = false
+    conflictRef.current = false
+    pendingDocumentRef.current = null
+    setSessionError(null)
+  }, [projectId])
+
+  useEffect(() => {
+    sendSession()
+  }, [sendSession])
+
+  const retrySession = useCallback(() => {
+    conflictRef.current = false
+    sessionSentRef.current = false
+    setSessionError(null)
+    sendSession()
+  }, [sendSession])
+
+  const downloadOriginalDocument = useCallback(() => {
+    if (!project.data) return
+    const serialized = JSON.stringify(project.data.document ?? null, null, 2)
+    const url = URL.createObjectURL(
+      new Blob([serialized], { type: 'application/json;charset=utf-8' }),
+    )
+    const link = document.createElement('a')
+    link.href = url
+    link.download = `${project.data.name.replace(/[^\p{L}\p{N}._-]+/gu, '-') || 'director-project'}.json`
+    document.body.append(link)
+    link.click()
+    link.remove()
+    window.setTimeout(() => URL.revokeObjectURL(url), 0)
+  }, [project.data])
+
+  const resetProject = useCallback(async () => {
+    if (!project.data || resetting) return
+    setResetting(true)
+    try {
+      const result = await api<{ revision: number }>(
+        `/api/v1/director-projects/${projectId}/reset`,
+        {
+          method: 'POST',
+          body: JSON.stringify({ expected_revision: revisionRef.current }),
+        },
+      )
+      revisionRef.current = result.revision
+      queryClient.setQueryData<DirectorProject>(
+        ['director-project', projectId],
+        (current) =>
+          current
+            ? { ...current, document: null, revision: result.revision }
+            : current,
+      )
+      conflictRef.current = false
+      sessionSentRef.current = false
+      setSessionError(null)
+      setResetConfirmOpen(false)
+    } catch (error) {
+      publishSaveState(
+        error instanceof APIError && error.status === 409
+          ? 'conflict'
+          : 'error',
+        error instanceof Error ? error.message : '重置工程失败',
+      )
+    } finally {
+      setResetting(false)
+    }
+  }, [project.data, projectId, publishSaveState, queryClient, resetting])
 
   const uploadCaptures = useCallback(
     async (payload: unknown) => {
@@ -285,8 +370,29 @@ function DirectorEditorPage() {
       const payload = isRecord(event.data.payload) ? event.data.payload : {}
       switch (event.data.type) {
         case 'storyai:director-desk-ready':
+          iframeReadyRef.current = true
           sendSession()
           break
+        case 'storyai:director-desk-session-error': {
+          if (saveTimerRef.current !== null) {
+            window.clearTimeout(saveTimerRef.current)
+            saveTimerRef.current = null
+          }
+          pendingDocumentRef.current = null
+          conflictRef.current = true
+          setSessionError({
+            code:
+              typeof payload.code === 'string'
+                ? payload.code
+                : 'invalid-project-document',
+            message:
+              typeof payload.message === 'string'
+                ? payload.message
+                : '工程内容无法读取',
+          })
+          publishSaveState('error', '工程已进入只读恢复模式')
+          break
+        }
         case 'storyai:director-desk-close':
           void navigate({ to: '/app/director' })
           break
@@ -357,7 +463,9 @@ function DirectorEditorPage() {
 
   return (
     <AppShell>
-      <main className="director-editor-page">
+      <main
+        className={`director-editor-page${sessionError ? ' is-recovering' : ''}`}
+      >
         {project.isLoading && (
           <div className="director-editor-loading">
             <span className="spinner" />
@@ -369,13 +477,54 @@ function DirectorEditorPage() {
         )}
         {project.data && (
           <iframe
+            key={projectId}
             ref={iframeRef}
             title={`${project.data.name} · 导演台`}
             src={source}
-            onLoad={sendSession}
+            onLoad={() => {
+              iframeReadyRef.current = true
+              sendSession()
+            }}
             allow="fullscreen"
             allowFullScreen
           />
+        )}
+        {sessionError && project.data && (
+          <section
+            className="director-recovery-panel"
+            aria-labelledby="director-recovery-title"
+          >
+            <p className="eyebrow">RECOVERY MODE</p>
+            <h1 id="director-recovery-title">工程内容无法读取</h1>
+            <p>{sessionError.message}</p>
+            <p className="director-recovery-note">
+              原始数据保持不变，自动保存已停止。你可以重试载入、下载原始
+              JSON，或明确重置为空工程。
+            </p>
+            <div className="director-recovery-actions">
+              <button
+                type="button"
+                className="secondary-button"
+                onClick={retrySession}
+              >
+                重试载入
+              </button>
+              <button
+                type="button"
+                className="secondary-button"
+                onClick={downloadOriginalDocument}
+              >
+                下载原始 JSON
+              </button>
+              <button
+                type="button"
+                className="danger-button"
+                onClick={() => setResetConfirmOpen(true)}
+              >
+                重置为空工程
+              </button>
+            </div>
+          </section>
         )}
         <span
           className={`director-host-save-state is-${saveState}`}
@@ -384,6 +533,16 @@ function DirectorEditorPage() {
           {saveMessage}
         </span>
       </main>
+      <ConfirmDialog
+        open={resetConfirmOpen}
+        title="重置导演台工程"
+        description="当前工程内容将被替换为空工程。建议先下载原始 JSON；此操作无法撤销。"
+        confirmLabel="确认重置"
+        dangerous
+        busy={resetting}
+        onCancel={() => setResetConfirmOpen(false)}
+        onConfirm={() => void resetProject()}
+      />
     </AppShell>
   )
 }

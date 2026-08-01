@@ -1,4 +1,5 @@
-import { act, render, screen } from "@testing-library/react";
+import { StrictMode } from "react";
+import { act, cleanup, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { vi } from "vitest";
 import { createInitialDirectorState, useDirectorStore } from "../editor/store/directorStore";
@@ -12,11 +13,17 @@ import App from "../App";
 
 beforeEach(() => {
   localStorage.clear();
+  delete (window as typeof window & Record<string, unknown>).__storyaiDirectorDeskReadySent;
   window.history.replaceState({}, "", "/?instanceId=desk_1");
   useDirectorStore.setState({
     ...useDirectorStore.getState(),
     ...createInitialDirectorState(),
   });
+});
+
+afterEach(() => {
+  cleanup();
+  vi.restoreAllMocks();
 });
 
 it("returns to a real home page that lists director desks 1 through 4", async () => {
@@ -112,12 +119,11 @@ it("runs the benchmark as a temporary workspace without adding it to the directo
 it("notifies the host canvas when the director desk app is ready", () => {
   const postMessage = vi.spyOn(window.parent, "postMessage").mockImplementation(() => undefined);
 
-  render(<App />);
+  render(<StrictMode><App /></StrictMode>);
 
-  expect(postMessage).toHaveBeenCalledWith(
-    { type: "storyai:director-desk-ready" },
-    window.location.origin
-  );
+  expect(
+    postMessage.mock.calls.filter(([message]) => message.type === "storyai:director-desk-ready")
+  ).toHaveLength(1);
 
   postMessage.mockRestore();
 });

@@ -25,6 +25,7 @@ import {
   postTauriDirectorHostMessage,
   type DirectorDeskTransportMessage,
 } from "./tauriHostTransport";
+import { setDirectorTenantScope } from "./tenantScope";
 
 interface HostPanoramaPayload {
   edgeId?: unknown;
@@ -40,6 +41,7 @@ interface HostSessionPayload {
   projectName?: unknown;
   projectDocument?: unknown;
   documentRevision?: unknown;
+  tenantScope?: unknown;
 }
 
 export interface HostCaptureItemPayload {
@@ -57,6 +59,7 @@ let clearTauriTransport: (() => void) | null = null;
 let clearProjectSubscription: (() => void) | null = null;
 let cloudSessionActive = false;
 let suppressProjectMessage = false;
+let activeHostSessionSignature: string | null = null;
 export const DIRECTOR_DESK_SESSION_OPENED_EVENT = "storyai:director-desk-session-opened";
 export const DIRECTOR_DESK_SAVE_STATE_EVENT = "storyai:director-desk-save-state";
 export const DIRECTOR_DESK_CAPTURE_STATUS_EVENT = "storyai:director-desk-captures-status";
@@ -149,7 +152,24 @@ function openHostSession(payload: HostSessionPayload) {
   }
   if (instanceId) {
     const embedded = payload.embedded === true;
-    cloudSessionActive = embedded;
+    const documentRevision =
+      typeof payload.documentRevision === "number" &&
+      Number.isSafeInteger(payload.documentRevision) &&
+      payload.documentRevision >= 0
+        ? payload.documentRevision
+        : 0;
+    const signature = `${instanceId}:${documentRevision}`;
+    if (signature === activeHostSessionSignature) return;
+    if (embedded && !setDirectorTenantScope(payload.tenantScope)) {
+      cloudSessionActive = false;
+      postDirectorDeskMessageToHost({
+        type: "storyai:director-desk-session-error",
+        payload: { code: "invalid-tenant-scope", message: "账户隔离信息无效，请重新进入导演台" },
+      });
+      return;
+    }
+    if (!embedded) setDirectorTenantScope(null);
+    cloudSessionActive = false;
     setDirectorScenePersistenceEnabled(!embedded);
     if (embedded) {
       suppressProjectMessage = true;
@@ -158,25 +178,31 @@ function openHostSession(payload: HostSessionPayload) {
           ? parseDirectorProjectDocument(payload.projectDocument)
           : createDefaultDirectorProject({ includePersistedLocalAssets: true });
         useDirectorStore.getState().replaceProject(project);
-      } catch {
-        useDirectorStore.getState().replaceProject(
-          createDefaultDirectorProject({ includePersistedLocalAssets: true })
-        );
+      } catch (error) {
+        postDirectorDeskMessageToHost({
+          type: "storyai:director-desk-session-error",
+          payload: {
+            code: "invalid-project-document",
+            message: error instanceof Error ? error.message : "工程内容无法读取",
+          },
+        });
+        return;
       } finally {
         suppressProjectMessage = false;
       }
     } else {
       useDirectorStore.getState().openScopedScene(instanceId);
     }
+    cloudSessionActive = embedded;
+    activeHostSessionSignature = signature;
     window.dispatchEvent(new CustomEvent(DIRECTOR_DESK_SESSION_OPENED_EVENT, {
       detail: {
         instanceId,
         embedded,
         projectName: normalizeString(payload.projectName),
-        documentRevision: typeof payload.documentRevision === "number" ? payload.documentRevision : 0,
+        documentRevision,
       },
     }));
-    postDirectorDeskMessageToHost({ type: "storyai:director-desk-ready" });
   }
 }
 
@@ -397,6 +423,8 @@ export function clearDirectorDeskHostBridge() {
   clearProjectSubscription?.();
   clearProjectSubscription = null;
   cloudSessionActive = false;
+  activeHostSessionSignature = null;
+  setDirectorTenantScope(null);
   setDirectorScenePersistenceEnabled(true);
   clearTauriTransport?.();
   clearTauriTransport = null;

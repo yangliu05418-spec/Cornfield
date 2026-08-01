@@ -1,3 +1,5 @@
+import { getDirectorTenantStoragePrefix } from "../io/tenantScope";
+
 export interface LocalAssetBinaryRecord {
   key: string;
   blob: Blob;
@@ -78,12 +80,25 @@ function getDefaultBackend() {
 }
 
 export function createLocalAssetBinaryStorage(backend: LocalAssetBinaryBackend | null) {
+  function accessibleKey(key: string) {
+    const prefix = getDirectorTenantStoragePrefix();
+    if (prefix === null) return null;
+    if (!prefix) return key.startsWith("user:") ? null : key;
+    return key.startsWith(prefix) ? key : null;
+  }
+
   return {
     isAvailable: Boolean(backend),
     async save(file: File, key: string = crypto.randomUUID()) {
       if (!backend) throw new Error("当前浏览器不支持大型本地模型存储");
+      const prefix = getDirectorTenantStoragePrefix();
+      if (prefix === null) throw new Error("导演台尚未建立安全会话");
+      if (prefix && key.startsWith("user:") && !key.startsWith(prefix)) {
+        throw new Error("本地模型不属于当前账户");
+      }
+      const scopedKey = prefix && !key.startsWith(prefix) ? `${prefix}${key}` : key;
       const record: LocalAssetBinaryRecord = {
-        key,
+        key: scopedKey,
         blob: file,
         fileName: file.name,
         mimeType: file.type || "application/octet-stream",
@@ -95,11 +110,13 @@ export function createLocalAssetBinaryStorage(backend: LocalAssetBinaryBackend |
     },
     async read(key: string) {
       if (!backend) return null;
-      return backend.get(key);
+      const scopedKey = accessibleKey(key);
+      return scopedKey ? backend.get(scopedKey) : null;
     },
     async remove(key: string) {
       if (!backend) return;
-      await backend.delete(key);
+      const scopedKey = accessibleKey(key);
+      if (scopedKey) await backend.delete(scopedKey);
     },
   };
 }

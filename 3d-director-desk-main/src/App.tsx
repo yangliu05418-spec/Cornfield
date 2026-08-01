@@ -34,6 +34,8 @@ import { PerformanceSettings } from "./editor/performance/PerformanceSettings";
 
 type AppScreen = "home" | "editor";
 
+const DIRECTOR_READY_WINDOW_KEY = "__storyaiDirectorDeskReadySent";
+
 function isEmbeddedDirectorDesk() {
   try {
     return new URLSearchParams(window.location.search).get("embedded") === "1";
@@ -258,7 +260,11 @@ export default function App() {
       });
     }
 
-    postDirectorDeskMessageToHost({ type: "storyai:director-desk-ready" });
+    const hostWindow = window as typeof window & Record<string, unknown>;
+    if (hostWindow[DIRECTOR_READY_WINDOW_KEY] !== true) {
+      hostWindow[DIRECTOR_READY_WINDOW_KEY] = true;
+      postDirectorDeskMessageToHost({ type: "storyai:director-desk-ready" });
+    }
   }, []);
 
   useEffect(() => {

@@ -11,6 +11,9 @@ import { clearReferenceVideoExportHandler, setReferenceVideoExportHandler } from
 import { clearDirectorPluginResults } from "../pluginResultRegistry";
 import { createDirectorProjectDocument, getDirectorProjectFingerprint } from "../projectDocument";
 
+const TENANT_A = "5d4427a8-57e4-4f37-bf15-caf6d2fc5e64";
+const TENANT_B = "84d9b9f4-b8c3-42e1-8875-3ad1d094bc65";
+
 function createMemoryStorage(): Storage {
   const storage = new Map<string, string>();
 
@@ -183,6 +186,7 @@ it("loads an embedded cloud document and publishes capture-free project changes"
       payload: {
         instanceId: "cloud-project-a",
         embedded: true,
+        tenantScope: TENANT_A,
         projectName: "云端项目",
         projectDocument: createDirectorProjectDocument(project),
       },
@@ -202,6 +206,99 @@ it("loads an embedded cloud document and publishes capture-free project changes"
     },
   });
   expect(localStorage.length).toBe(0);
+});
+
+it("reports a damaged embedded document without replacing or publishing it", () => {
+  const postMessage = vi.spyOn(window.parent, "postMessage").mockImplementation(() => undefined);
+  const before = useDirectorStore.getState().project;
+  initDirectorDeskHostBridge();
+
+  window.dispatchEvent(new MessageEvent("message", {
+    data: {
+      type: "storyai:director-desk-session",
+      payload: {
+        instanceId: "cloud-project-broken",
+        embedded: true,
+        tenantScope: TENANT_A,
+        documentRevision: 3,
+        projectDocument: { format: "3d-director-desk-project", schemaVersion: 1, project: {} },
+      },
+    },
+    origin: window.location.origin,
+  }));
+
+  expect(useDirectorStore.getState().project).toEqual(before);
+  expect(postMessage).toHaveBeenCalledWith(
+    expect.objectContaining({ type: "storyai:director-desk-session-error" }),
+    window.location.origin,
+  );
+  useDirectorStore.getState().updateScene({ backgroundColor: "#101214" });
+  expect(postMessage.mock.calls.some(([message]) => message.type === "storyai:director-desk-project-changed")).toBe(false);
+});
+
+it("ignores a repeated embedded session with the same instance and revision", () => {
+  const postMessage = vi.spyOn(window.parent, "postMessage").mockImplementation(() => undefined);
+  const project = createDefaultDirectorProject();
+  initDirectorDeskHostBridge();
+  const session = {
+    type: "storyai:director-desk-session",
+    payload: {
+      instanceId: "cloud-project-stable",
+      embedded: true,
+      tenantScope: TENANT_A,
+      documentRevision: 4,
+      projectDocument: createDirectorProjectDocument(project),
+    },
+  };
+  window.dispatchEvent(new MessageEvent("message", { data: session, origin: window.location.origin }));
+  useDirectorStore.getState().updateScene({ backgroundColor: "#101214" });
+  window.dispatchEvent(new MessageEvent("message", { data: session, origin: window.location.origin }));
+
+  expect(useDirectorStore.getState().project.scene.backgroundColor).toBe("#101214");
+  expect(postMessage.mock.calls.filter(([message]) => message.type === "storyai:director-desk-project-changed")).toHaveLength(1);
+});
+
+it("loads persisted local model metadata only from the active tenant", () => {
+  const asset = (id: string) => ({
+    id,
+    kind: "character",
+    sourceType: "model",
+    fileName: `${id}.glb`,
+    url: `director-asset://local/user%3A${TENANT_A}%3A${id}`,
+    storageKey: `user:${TENANT_A}:${id}`,
+    assetSource: "local",
+  });
+  localStorage.setItem(
+    `storyai-3d-director-local-model-library:user:${TENANT_A}`,
+    JSON.stringify([asset("tenant-a-model")]),
+  );
+  localStorage.setItem(
+    `storyai-3d-director-local-model-library:user:${TENANT_B}`,
+    JSON.stringify([{
+      ...asset("tenant-b-model"),
+      storageKey: `user:${TENANT_B}:tenant-b-model`,
+      url: `director-asset://local/user%3A${TENANT_B}%3Atenant-b-model`,
+    }]),
+  );
+  initDirectorDeskHostBridge();
+
+  window.dispatchEvent(new MessageEvent("message", {
+    data: {
+      type: "storyai:director-desk-session",
+      payload: { instanceId: "tenant-a-project", embedded: true, tenantScope: TENANT_A, documentRevision: 1 },
+    },
+    origin: window.location.origin,
+  }));
+  expect(useDirectorStore.getState().project.assets.map((item) => item.id)).toEqual(["tenant-a-model"]);
+
+  window.dispatchEvent(new MessageEvent("message", {
+    data: {
+      type: "storyai:director-desk-session",
+      payload: { instanceId: "tenant-b-project", embedded: true, tenantScope: TENANT_B, documentRevision: 1 },
+    },
+    origin: window.location.origin,
+  }));
+  expect(useDirectorStore.getState().project.assets.map((item) => item.id)).toEqual(["tenant-b-model"]);
 });
 
 it("applies the light theme sent by the host session to the director desk document", () => {

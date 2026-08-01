@@ -1,4 +1,10 @@
-import { createFileRoute, Link, useNavigate } from '@tanstack/react-router'
+import {
+  createFileRoute,
+  Link,
+  Outlet,
+  useLocation,
+  useNavigate,
+} from '@tanstack/react-router'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   ArrowRight,
@@ -16,8 +22,17 @@ import { api } from '#/lib/api'
 import type { DirectorProjectSummary } from '#/lib/api'
 
 export const Route = createFileRoute('/app/director')({
-  component: DirectorProjectsPage,
+  component: DirectorRoute,
 })
+
+function DirectorRoute() {
+  const location = useLocation()
+  return location.pathname.replace(/\/+$/, '') === '/app/director' ? (
+    <DirectorProjectsPage />
+  ) : (
+    <Outlet />
+  )
+}
 
 function DirectorProjectsPage() {
   const navigate = useNavigate()

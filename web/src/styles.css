@@ -1788,6 +1788,11 @@ select {
 .generator-controls::-webkit-scrollbar {
   display: none;
 }
+.generator-unavailable {
+  color: #c8a7a4;
+  font-size: 11px;
+  line-height: 1.4;
+}
 .select-control,
 .draw-control {
   flex: 0 0 auto;

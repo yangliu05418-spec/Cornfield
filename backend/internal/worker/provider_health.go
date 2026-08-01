@@ -50,6 +50,10 @@ func (p *ProviderProber) probeAll(ctx context.Context) {
 			err := p.persistProbe(ctx, providerID, health)
 			if err != nil {
 				p.Log.Warn("provider probe state update failed", "provider", providerID, "error", err)
+				return
+			}
+			if err = failUnavailableProviderJobs(ctx, p.DB, providerID); err != nil {
+				p.Log.Warn("unavailable provider queue cleanup failed", "provider", providerID, "error", err)
 			}
 		}()
 	}
@@ -91,14 +95,15 @@ func (p *ProviderProber) persistProbe(ctx context.Context, providerID string, he
 		return err
 	}
 	transition := nextProviderProbeTransition(currentState, currentErrorCode, enabled, breakerOpen, health)
+	probeState, probeCode := providerHealthState(health)
 	if transition.PreserveError {
-		_, err = tx.Exec(ctx, `UPDATE providers SET last_probe_at=now(),updated_at=now() WHERE id=$1`, providerID)
+		_, err = tx.Exec(ctx, `UPDATE providers SET last_probe_state=$2,last_probe_error_code=NULLIF($3,''),
+			last_probe_at=now(),updated_at=now() WHERE id=$1`, providerID, probeState, probeCode)
 	} else {
-		probeState, _ := providerHealthState(health)
-		_, err = tx.Exec(ctx, `UPDATE providers SET state=$2,last_probe_at=now(),
-			last_error_code=NULLIF($3,''),last_error_at=CASE WHEN $3='' THEN last_error_at ELSE now() END,
-			breaker_open_until=CASE WHEN $4='healthy' AND breaker_open_until<=now() THEN NULL ELSE breaker_open_until END,
-			updated_at=now() WHERE id=$1`, providerID, transition.State, transition.ErrorCode, probeState)
+		_, err = tx.Exec(ctx, `UPDATE providers SET state=$2,last_probe_state=$3,last_probe_error_code=NULLIF($4,''),last_probe_at=now(),
+			last_error_code=NULLIF($4,''),last_error_at=CASE WHEN $4='' THEN last_error_at ELSE now() END,
+			breaker_open_until=CASE WHEN $3='healthy' AND breaker_open_until<=now() THEN NULL ELSE breaker_open_until END,
+			updated_at=now() WHERE id=$1`, providerID, transition.State, probeState, transition.ErrorCode)
 	}
 	if err != nil {
 		return err

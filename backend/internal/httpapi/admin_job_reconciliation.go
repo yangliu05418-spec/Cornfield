@@ -222,6 +222,29 @@ func (s *Server) reconcileSubmission(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer tx.Rollback(r.Context())
+	var providerID string
+	if input.Action == "confirm_absent" {
+		if err = tx.QueryRow(r.Context(), `SELECT v.config->>'provider'
+			FROM generation_jobs j
+			JOIN generation_batches b ON b.id=j.batch_id
+			JOIN model_capability_versions v ON v.model_id=b.model_id AND v.revision=b.capability_revision
+			WHERE j.id=$1`, jobID).Scan(&providerID); err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				writeError(w, http.StatusNotFound, "JOB_NOT_FOUND", "Generation job not found", false, r)
+			} else {
+				writeError(w, http.StatusInternalServerError, "DATABASE_ERROR", "Unable to read generation job", true, r)
+			}
+			return
+		}
+		if err = requireProviderAvailable(r.Context(), tx, providerID); err != nil {
+			if errors.Is(err, errProviderUnavailable) {
+				writeError(w, http.StatusServiceUnavailable, "PROVIDER_UNAVAILABLE", "生成服务暂不可用，请稍后重试", true, r)
+			} else {
+				writeError(w, http.StatusServiceUnavailable, "PROVIDER_STATE_UNAVAILABLE", "模型可用状态暂时无法确认", true, r)
+			}
+			return
+		}
+	}
 
 	// Lock the batch before the job, matching the rest of the generation state
 	// machine and avoiding an inverted lock order with cancel/retry operations.
@@ -242,7 +265,6 @@ func (s *Server) reconcileSubmission(w http.ResponseWriter, r *http.Request) {
 	var currentStatus string
 	var previousProviderJobID *string
 	var generationTimeoutSeconds int
-	var providerID string
 	if err = tx.QueryRow(r.Context(), `SELECT j.status,j.provider_job_id,
 		v.config->>'provider',
 		COALESCE(NULLIF(v.config #>> '{policy,generation_timeout_seconds}','')::int,

@@ -1035,14 +1035,28 @@ func (w *GenerateWorker) handleProviderError(ctx context.Context, item generatio
 }
 
 func (w *GenerateWorker) pauseProvider(ctx context.Context, item generationRecord, model modelconfig.Model, providerErr *provider.Error) error {
-	if w.Breaker != nil {
-		w.Breaker.ForceOpen(item.ProviderID+":"+item.ModelID, time.Duration(model.Policy.BreakerCooldownSeconds)*time.Second)
+	tx, err := w.DB.Begin(ctx)
+	if err != nil {
+		return err
 	}
-	if _, err := w.DB.Exec(ctx, `UPDATE providers SET state='paused',last_error_code=$2,last_error_at=now(),updated_at=now() WHERE id=$1`, item.ProviderID, providerErr.Code); err != nil {
+	defer tx.Rollback(ctx)
+	if _, err = tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1,0))`, "provider-slot:"+item.ProviderID); err == nil {
+		_, err = tx.Exec(ctx, `UPDATE providers SET state='paused',last_error_code=$2,last_error_at=now(),updated_at=now() WHERE id=$1`, item.ProviderID, providerErr.Code)
+	}
+	if err == nil {
+		err = failUnavailableProviderJobsInTx(ctx, tx, item.ProviderID)
+	}
+	if err == nil {
+		err = tx.Commit(ctx)
+	}
+	if err != nil {
 		if w.Log != nil {
 			w.Log.Error("provider pause could not be persisted", "provider", item.ProviderID, "error", err)
 		}
 		return fmt.Errorf("persist provider pause: %w", err)
+	}
+	if w.Breaker != nil {
+		w.Breaker.ForceOpen(item.ProviderID+":"+item.ModelID, time.Duration(model.Policy.BreakerCooldownSeconds)*time.Second)
 	}
 	return nil
 }
@@ -1230,6 +1244,8 @@ func userFacingGenerationError(code string) string {
 		return "生成结果无法处理，请调整参数后重试"
 	case "PROVIDER_HTTP_429", "LEGNEXT_TASK_FAILED", "SUBMIT_RETRIES_EXHAUSTED":
 		return "生成服务繁忙，请稍后重试"
+	case "PROVIDER_UNAVAILABLE":
+		return "生成服务暂不可用，请稍后手动重试"
 	case "REFERENCE_READ_FAILED":
 		return "参考图无法读取，请重新添加后重试"
 	default:

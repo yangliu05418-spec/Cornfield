@@ -39,6 +39,7 @@ func TestPublicJobErrorNeverReturnsProviderDetail(t *testing.T) {
 	for code, want := range map[string]string{
 		"CONTENT_POLICY_REJECTED": "图片可能触发安全策略，请调整描述",
 		"PROVIDER_HTTP_400":       "当前参数无法生成，请调整后重试",
+		"PROVIDER_UNAVAILABLE":    "生成服务暂不可用，请稍后手动重试",
 		"SUBMISSION_INTERRUPTED":  "任务提交结果不确定，请等待核查或移除记录",
 		"UNKNOWN_PROVIDER_ERROR":  "生成失败，请稍后重试",
 	} {

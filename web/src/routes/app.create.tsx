@@ -17,7 +17,7 @@ import { buildWallItems, JustifiedWall } from '#/components/justified-wall'
 import { MidjourneyOptionsControl } from '#/components/midjourney-options'
 import { PromptRefinerDialog } from '#/components/prompt-refiner-dialog'
 import type { JustifiedWallHandle } from '#/components/justified-wall'
-import { api, getMe } from '#/lib/api'
+import { api, APIError, getMe } from '#/lib/api'
 import type {
   Asset,
   AssetPage,
@@ -232,6 +232,9 @@ function CreatePage() {
   const models = useQuery({
     queryKey: ['models'],
     queryFn: () => api<{ revision: string; models: Model[] }>('/api/v1/models'),
+    refetchInterval: 30_000,
+    refetchIntervalInBackground: true,
+    refetchOnWindowFocus: true,
   })
   const assets = useInfiniteQuery({
     queryKey: wallAssetsQueryKey,
@@ -581,6 +584,12 @@ function CreatePage() {
       setNotice(`${batch.expected_outputs} 个生成位置已加入画布`)
     },
     onError: (reason, variables) => {
+      if (
+        reason instanceof APIError &&
+        reason.code === 'PROVIDER_UNAVAILABLE'
+      ) {
+        void queryClient.invalidateQueries({ queryKey: ['models'] })
+      }
       if (isNetworkFailure(reason)) {
         setOptimisticBatches((current) =>
           current.map((item) =>
@@ -1096,7 +1105,10 @@ function CreatePage() {
                 value={activeModel?.id ?? ''}
                 items={(models.data?.models ?? []).map((model) => ({
                   value: model.id,
-                  label: model.display_name,
+                  label: model.availability.can_submit
+                    ? model.display_name
+                    : `${model.display_name}（暂不可用）`,
+                  disabled: !model.availability.can_submit,
                 }))}
                 icon={<Sparkles size={14} />}
                 onChange={setModelID}
@@ -1174,10 +1186,19 @@ function CreatePage() {
                 )}
               </div>
             </div>
+            {activeModel && !activeModel.availability.can_submit && (
+              <span className="generator-unavailable" role="status">
+                {activeModel.availability.message ?? '生成服务暂不可用'}
+              </span>
+            )}
           </div>
           <button
             className="generate-button"
-            disabled={!prompt.trim() || create.isPending}
+            disabled={
+              !prompt.trim() ||
+              create.isPending ||
+              !activeModel?.availability.can_submit
+            }
           >
             {create.isPending ? '提交中…' : '生成'}
           </button>

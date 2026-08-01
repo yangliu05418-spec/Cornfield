@@ -264,10 +264,10 @@ func (s *Server) sessionStillValid(ctx context.Context, sess session) (bool, err
 	var valid bool
 	err := s.db.QueryRow(ctx, `SELECT EXISTS(
 		SELECT 1 FROM user_sessions current_session
-		JOIN users session_user ON session_user.id=current_session.user_id
+		JOIN users account_record ON account_record.id=current_session.user_id
 		WHERE current_session.id=$1 AND current_session.user_id=$2
-		  AND current_session.revoked_at IS NULL AND session_user.status='active'
-		  AND current_session.session_version=$3 AND session_user.session_version=$3
+		  AND current_session.revoked_at IS NULL AND account_record.status='active'
+		  AND current_session.session_version=$3 AND account_record.session_version=$3
 		  AND current_session.expires_at>now() AND current_session.idle_expires_at>now()
 	)`, sess.ID, sess.UserID, sess.SessionVersion).Scan(&valid)
 	return valid, err

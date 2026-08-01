@@ -237,8 +237,10 @@ other_director_project_id="$(docker compose exec -T postgres psql -U studio_boot
   "WITH owner AS (
      INSERT INTO users(username,display_name,password_hash,role,status,must_change_password)
      VALUES('ci-director-other','Other Director','unused','member','active',false) RETURNING id
-   ) INSERT INTO director_projects(owner_user_id,name)
-     SELECT id,'Private Director Project' FROM owner RETURNING id")"
+   ), project AS (
+     INSERT INTO director_projects(owner_user_id,name)
+     SELECT id,'Private Director Project' FROM owner RETURNING id
+   ) SELECT id FROM project")"
 other_director_get_status="$(curl --silent --show-error --output "${tmp_dir}/director-other-get.json" \
   --write-out '%{http_code}' --cookie "${cookie_jar}" \
   "http://127.0.0.1:8081/api/v1/director-projects/${other_director_project_id}")"

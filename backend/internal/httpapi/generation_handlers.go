@@ -428,15 +428,26 @@ func setGenerationOutputURLs(output *generationOutputResponse) {
 
 var errInvalidGenerationCursor = errors.New("invalid generation cursor")
 
-func (s *Server) models(w http.ResponseWriter, _ *http.Request) {
+func (s *Server) models(w http.ResponseWriter, r *http.Request) {
 	items := make([]any, 0, len(s.catalog.Models))
+	availabilityByProvider := make(map[string]providerAvailability)
 	for _, model := range s.catalog.Models {
 		if !model.Enabled {
 			continue
 		}
+		availability, ok := availabilityByProvider[model.Provider]
+		if !ok {
+			var err error
+			availability, err = loadProviderAvailability(r.Context(), s.db, model.Provider, false)
+			if err != nil {
+				writeError(w, http.StatusServiceUnavailable, "PROVIDER_STATE_UNAVAILABLE", "模型可用状态暂时无法确认", true, r)
+				return
+			}
+			availabilityByProvider[model.Provider] = availability
+		}
 		items = append(items, map[string]any{
 			"id": model.ID, "display_name": model.DisplayName, "provider": model.Provider,
-			"outputs_per_draw": model.OutputsPerDraw, "capabilities": model.Capabilities,
+			"outputs_per_draw": model.OutputsPerDraw, "capabilities": model.Capabilities, "availability": availability,
 		})
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"revision": s.catalog.Hash, "models": items})
@@ -533,6 +544,14 @@ func (s *Server) createGeneration(w http.ResponseWriter, r *http.Request) {
 	}
 	if !isNotFound(err) {
 		writeError(w, http.StatusInternalServerError, "DATABASE_ERROR", "创建任务失败", true, r)
+		return
+	}
+	if err = requireProviderAvailable(r.Context(), tx, model.Provider); err != nil {
+		if errors.Is(err, errProviderUnavailable) {
+			writeError(w, http.StatusServiceUnavailable, "PROVIDER_UNAVAILABLE", "生成服务暂不可用，请稍后重试", true, r)
+		} else {
+			writeError(w, http.StatusServiceUnavailable, "PROVIDER_STATE_UNAVAILABLE", "模型可用状态暂时无法确认", true, r)
+		}
 		return
 	}
 
@@ -824,6 +843,8 @@ func publicJobError(code *string) *string {
 		message = "生成结果无法处理，请调整参数后重试"
 	case "PROVIDER_HTTP_429", "SUBMIT_RETRIES_EXHAUSTED":
 		message = "生成服务繁忙，请稍后重试"
+	case "PROVIDER_UNAVAILABLE":
+		message = "生成服务暂不可用，请稍后手动重试"
 	case "REFERENCE_READ_FAILED":
 		message = "参考图无法读取，请重新添加后重试"
 	case "SUBMISSION_UNCERTAIN", "SUBMISSION_INTERRUPTED", "RESULT_STAGING_FAILED":
@@ -1063,6 +1084,26 @@ func (s *Server) retryBatch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer tx.Rollback(r.Context())
+	var providerID string
+	if err = tx.QueryRow(r.Context(), `SELECT v.config->>'provider'
+		FROM generation_batches b
+		JOIN model_capability_versions v ON v.model_id=b.model_id AND v.revision=b.capability_revision
+		WHERE b.id=$1 AND b.owner_user_id=$2`, id, sess.UserID).Scan(&providerID); err != nil {
+		if isNotFound(err) {
+			writeError(w, http.StatusNotFound, "GENERATION_NOT_FOUND", "任务不存在", false, r)
+		} else {
+			writeError(w, http.StatusInternalServerError, "DATABASE_ERROR", "重试任务失败", true, r)
+		}
+		return
+	}
+	if err = requireProviderAvailable(r.Context(), tx, providerID); err != nil {
+		if errors.Is(err, errProviderUnavailable) {
+			writeError(w, http.StatusServiceUnavailable, "PROVIDER_UNAVAILABLE", "生成服务暂不可用，请稍后重试", true, r)
+		} else {
+			writeError(w, http.StatusServiceUnavailable, "PROVIDER_STATE_UNAVAILABLE", "模型可用状态暂时无法确认", true, r)
+		}
+		return
+	}
 	ownerID, _, err := lockOwnedBatch(r.Context(), tx, id, sess)
 	if isNotFound(err) {
 		writeError(w, http.StatusNotFound, "GENERATION_NOT_FOUND", "任务不存在", false, r)

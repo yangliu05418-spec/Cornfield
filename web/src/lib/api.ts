@@ -23,6 +23,11 @@ export type Model = {
     max_reference_bytes: number
     draw_count: { min: number; max: number; default: number }
   }
+  availability: {
+    state: 'healthy' | 'degraded' | 'unknown' | 'paused' | 'disabled'
+    can_submit: boolean
+    message?: string
+  }
 }
 
 export type Asset = {

@@ -105,7 +105,7 @@ ownership_hardening="$(docker compose exec -T postgres psql -U studio_bootstrap 
   "SELECT (SELECT pg_get_userbyid(datdba) FROM pg_database WHERE datname='studio')='studio_owner' AND NOT EXISTS(SELECT 1 FROM pg_roles WHERE rolname='studio')")"
 test "${ownership_hardening}" = "t"
 runtime_privileges="$(docker compose exec -T postgres psql -U studio_bootstrap -d studio -Atc \
-  "SELECT has_schema_privilege('studio_api','public','USAGE') AND NOT has_schema_privilege('studio_api','public','CREATE') AND NOT has_table_privilege('studio_api','river_job','SELECT') AND NOT has_table_privilege('studio_api','assets','UPDATE') AND has_column_privilege('studio_api','assets','lock_guard','UPDATE') AND has_column_privilege('studio_api','assets','purge_pending','UPDATE') AND has_column_privilege('studio_api','providers','state','UPDATE') AND NOT has_column_privilege('studio_api','providers','enabled','UPDATE') AND has_column_privilege('studio_worker','user_sessions','expires_at','SELECT') AND NOT has_column_privilege('studio_worker','user_sessions','token_hash','SELECT') AND has_column_privilege('studio_worker','users','id','SELECT') AND has_column_privilege('studio_worker','users','status','SELECT') AND NOT has_column_privilege('studio_worker','users','username','SELECT') AND has_table_privilege('studio_worker','river_job','SELECT') AND has_table_privilege('studio_worker','river_job','INSERT') AND has_table_privilege('studio_worker','river_job','UPDATE') AND has_table_privilege('studio_worker','river_job','DELETE')")"
+  "SELECT has_schema_privilege('studio_api','public','USAGE') AND NOT has_schema_privilege('studio_api','public','CREATE') AND NOT has_table_privilege('studio_api','river_job','SELECT') AND NOT has_table_privilege('studio_api','assets','UPDATE') AND has_column_privilege('studio_api','assets','lock_guard','UPDATE') AND has_column_privilege('studio_api','assets','purge_pending','UPDATE') AND has_column_privilege('studio_api','providers','state','UPDATE') AND NOT has_column_privilege('studio_api','providers','enabled','UPDATE') AND has_column_privilege('studio_worker','providers','last_probe_state','UPDATE') AND has_column_privilege('studio_worker','providers','last_probe_error_code','UPDATE') AND has_column_privilege('studio_worker','user_sessions','expires_at','SELECT') AND NOT has_column_privilege('studio_worker','user_sessions','token_hash','SELECT') AND has_column_privilege('studio_worker','users','id','SELECT') AND has_column_privilege('studio_worker','users','status','SELECT') AND NOT has_column_privilege('studio_worker','users','username','SELECT') AND has_table_privilege('studio_worker','river_job','SELECT') AND has_table_privilege('studio_worker','river_job','INSERT') AND has_table_privilege('studio_worker','river_job','UPDATE') AND has_table_privilege('studio_worker','river_job','DELETE')")"
 test "${runtime_privileges}" = "t"
 deletion_privileges="$(docker compose exec -T postgres psql -U studio_bootstrap -d studio -Atc \
   "SELECT has_table_privilege('studio_worker','deletion_requests','DELETE') AND has_table_privilege('studio_worker','provider_attempts','UPDATE') AND has_column_privilege('studio_worker','asset_folders','owner_user_id','SELECT') AND NOT has_column_privilege('studio_worker','asset_folders','name','SELECT') AND has_column_privilege('studio_worker','generation_rate_limits','owner_user_id','SELECT') AND has_column_privilege('studio_worker','user_sessions','user_id','SELECT') AND has_column_privilege('studio_worker','audit_logs','target_type','SELECT') AND has_column_privilege('studio_worker','audit_logs','target_id','SELECT') AND NOT has_column_privilege('studio_worker','audit_logs','metadata','SELECT')")"
@@ -187,11 +187,11 @@ csrf_token="$(jq -er '.csrf_token' "${login_json}")"
 # A fail-closed provider pause must survive healthy balance/key probes and may
 # only be cleared by the authenticated, CSRF-protected, audited admin action.
 docker compose exec -T postgres psql -U studio_bootstrap -d studio -v ON_ERROR_STOP=1 -c \
-  "UPDATE providers SET state='paused',last_error_code='CI_PERMISSION_DENIED',last_error_at=now() WHERE id='legnext'" >/dev/null
+  "UPDATE providers SET state='paused',last_probe_state='healthy',last_probe_error_code=NULL,last_probe_at=now(),last_error_code='CI_PERMISSION_DENIED',last_error_at=now() WHERE id='legnext'" >/dev/null
 providers_json="${tmp_dir}/providers.json"
 curl --fail-with-body --silent --show-error --cookie "${cookie_jar}" \
   http://127.0.0.1:8081/api/v1/admin/providers > "${providers_json}"
-jq -e '.items[] | select(.id == "legnext") | .state == "paused" and .last_error_code == "CI_PERMISSION_DENIED"' "${providers_json}" >/dev/null
+jq -e '.items[] | select(.id == "legnext") | .state == "paused" and .last_error_code == "CI_PERMISSION_DENIED" and .last_probe_state == "healthy"' "${providers_json}" >/dev/null
 resume_json="${tmp_dir}/provider-resume.json"
 curl --fail-with-body --silent --show-error --cookie "${cookie_jar}" \
   --header "X-CSRF-Token: ${csrf_token}" --request POST \
@@ -206,6 +206,67 @@ curl --fail-with-body --silent --show-error --cookie "${cookie_jar}" \
   http://127.0.0.1:8081/api/v1/models > "${models_json}"
 revision="$(jq -er '.revision' "${models_json}")"
 jq -e '.models | length >= 2' "${models_json}" >/dev/null
+
+# A paused provider is visible but cannot consume rate-limit state or create a
+# batch. Resume is only possible after a fresh, healthy probe.
+docker compose stop worker >/dev/null
+docker compose exec -T postgres psql -U studio_bootstrap -d studio -v ON_ERROR_STOP=1 -c \
+  "UPDATE providers SET state='paused',last_probe_state='unknown',last_probe_error_code='CI_PROBE_STALE',last_probe_at=now()-interval '10 minutes',last_error_code='CI_PAUSED',last_error_at=now() WHERE id='openrouter'" >/dev/null
+curl --fail-with-body --silent --show-error --cookie "${cookie_jar}" \
+  http://127.0.0.1:8081/api/v1/models > "${models_json}"
+jq -e '.models[] | select(.provider == "openrouter") | .availability.state == "paused" and (.availability.can_submit | not)' "${models_json}" >/dev/null
+paused_batch_count="$(docker compose exec -T postgres psql -U studio_bootstrap -d studio -Atc \
+  "SELECT count(*) FROM generation_batches")"
+paused_rate_count="$(docker compose exec -T postgres psql -U studio_bootstrap -d studio -Atc \
+  "SELECT count(*) FROM generation_rate_limits WHERE owner_user_id=(SELECT id FROM users WHERE username='ci-admin')")"
+paused_request_json="$(jq -nc --arg revision "${revision}" \
+  '{model_id:"openrouter-gemini-3-1-flash-lite-image",capability_revision:$revision,prompt:"Provider availability smoke",aspect_ratio:"1:1",resolution:"1K",draw_count:1,input_asset_ids:[]}')"
+paused_response="${tmp_dir}/paused-generation.json"
+paused_status="$(curl --silent --show-error --output "${paused_response}" --write-out '%{http_code}' --cookie "${cookie_jar}" \
+  --header "X-CSRF-Token: ${csrf_token}" --header 'Content-Type: application/json' \
+  --header 'Idempotency-Key: ci-smoke-provider-paused-v1' --data "${paused_request_json}" \
+  http://127.0.0.1:8081/api/v1/generations)"
+test "${paused_status}" = "503"
+jq -e '.error.code == "PROVIDER_UNAVAILABLE"' "${paused_response}" >/dev/null
+test "$(docker compose exec -T postgres psql -U studio_bootstrap -d studio -Atc "SELECT count(*) FROM generation_batches")" = "${paused_batch_count}"
+test "$(docker compose exec -T postgres psql -U studio_bootstrap -d studio -Atc "SELECT count(*) FROM generation_rate_limits WHERE owner_user_id=(SELECT id FROM users WHERE username='ci-admin')")" = "${paused_rate_count}"
+
+stale_resume_status="$(curl --silent --show-error --output "${tmp_dir}/stale-resume.json" --write-out '%{http_code}' --cookie "${cookie_jar}" \
+  --header "X-CSRF-Token: ${csrf_token}" --request POST \
+  http://127.0.0.1:8081/api/v1/admin/providers/openrouter/resume)"
+test "${stale_resume_status}" = "409"
+jq -e '.error.code == "PROVIDER_PROBE_STALE"' "${tmp_dir}/stale-resume.json" >/dev/null
+docker compose exec -T postgres psql -U studio_bootstrap -d studio -v ON_ERROR_STOP=1 -c \
+  "UPDATE providers SET last_probe_state='healthy',last_probe_error_code=NULL,last_probe_at=now() WHERE id='openrouter'" >/dev/null
+curl --fail-with-body --silent --show-error --cookie "${cookie_jar}" \
+  --header "X-CSRF-Token: ${csrf_token}" --request POST \
+  http://127.0.0.1:8081/api/v1/admin/providers/openrouter/resume > "${tmp_dir}/openrouter-resume.json"
+jq -e '.id == "openrouter" and .state == "degraded" and .resumed == true' "${tmp_dir}/openrouter-resume.json" >/dev/null
+
+# A job accepted before a provider pause remains unsubmitted while the worker
+# is stopped. The worker startup probe must fail it without creating a remote
+# provider job, so users can choose when to retry after recovery.
+queued_response="${tmp_dir}/queued-before-pause.json"
+curl --fail-with-body --silent --show-error --cookie "${cookie_jar}" \
+  --header "X-CSRF-Token: ${csrf_token}" --header 'Content-Type: application/json' \
+  --header 'Idempotency-Key: ci-smoke-queued-before-pause-v1' --data "${paused_request_json}" \
+  http://127.0.0.1:8081/api/v1/generations > "${queued_response}"
+queued_batch_id="$(jq -er '.id' "${queued_response}")"
+docker compose exec -T postgres psql -U studio_bootstrap -d studio -v ON_ERROR_STOP=1 -c \
+  "UPDATE providers SET state='paused',last_error_code='CI_RUNTIME_PAUSE',last_error_at=now() WHERE id='openrouter'" >/dev/null
+docker compose start worker >/dev/null
+for _ in $(seq 1 20); do
+  queued_state="$(docker compose exec -T postgres psql -U studio_bootstrap -d studio -At -F ' ' -c \
+    "SELECT status,COALESCE(error_code,'-'),retryable,provider_job_id IS NULL FROM generation_jobs WHERE batch_id='${queued_batch_id}'::uuid")"
+  [[ "${queued_state}" == "failed PROVIDER_UNAVAILABLE t t" ]] && break
+  sleep 1
+done
+test "${queued_state}" = "failed PROVIDER_UNAVAILABLE t t"
+docker compose exec -T postgres psql -U studio_bootstrap -d studio -v ON_ERROR_STOP=1 -c \
+  "UPDATE providers SET last_probe_state='healthy',last_probe_error_code=NULL,last_probe_at=now() WHERE id='openrouter'" >/dev/null
+curl --fail-with-body --silent --show-error --cookie "${cookie_jar}" \
+  --header "X-CSRF-Token: ${csrf_token}" --request POST \
+  http://127.0.0.1:8081/api/v1/admin/providers/openrouter/resume > "${tmp_dir}/openrouter-runtime-resume.json"
 
 # Exercise the complete text-to-image path independently of reference uploads.
 text_generation_json="${tmp_dir}/text-generation.json"
@@ -298,9 +359,17 @@ curl --fail-with-body --silent --show-error --cookie "${cookie_jar}" \
   "http://127.0.0.1:8081/api/v1/assets/${output_asset_id}/content?variant=640"
 grep -Eiq '^X-Accel-Redirect: /_protected_assets/' "${asset_headers}"
 
-curl --silent --show-error --max-time 3 --no-buffer --cookie "${cookie_jar}" \
-  http://127.0.0.1:8081/api/v1/events > "${tmp_dir}/events" || test "$?" = 28
+sse_started_at="$(date +%s)"
+set +e
+curl --silent --show-error --max-time 70 --no-buffer --cookie "${cookie_jar}" \
+  http://127.0.0.1:8081/api/v1/events > "${tmp_dir}/events"
+sse_status="$?"
+set -e
+sse_elapsed="$(( $(date +%s) - sse_started_at ))"
+test "${sse_status}" = "28"
+test "${sse_elapsed}" -ge 68
 grep -Eq '^id: [0-9]+' "${tmp_dir}/events"
+grep -Eq '^: heartbeat' "${tmp_dir}/events"
 
 docker compose ps --status running --services | grep -qx api
 docker compose ps --status running --services | grep -qx worker

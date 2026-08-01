@@ -11,7 +11,7 @@ export function GeneratorSelect({
 }: {
   label: string
   value: string
-  items: { value: string; label: string }[]
+  items: { value: string; label: string; disabled?: boolean }[]
   icon: ReactNode
   onChange: (value: string) => void
 }) {
@@ -38,6 +38,7 @@ export function GeneratorSelect({
                 className="generator-select-item"
                 key={item.value}
                 value={item.value}
+                disabled={item.disabled}
               >
                 <Select.ItemText>{item.label}</Select.ItemText>
                 <Select.ItemIndicator>

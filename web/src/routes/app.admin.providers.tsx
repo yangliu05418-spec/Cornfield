@@ -18,6 +18,8 @@ type Provider = {
   state: string
   breaker_open_until?: string
   last_probe_at?: string
+  last_probe_state: string
+  last_probe_error_code?: string
   last_error_code?: string
   active_jobs: number
   terminal_successes_1h: number
@@ -133,9 +135,10 @@ function ProvidersPage() {
                 <div>
                   <dt>LAST PROBE</dt>
                   <dd>
+                    {provider.last_probe_state.toUpperCase()}
                     {provider.last_probe_at
-                      ? new Date(provider.last_probe_at).toLocaleTimeString()
-                      : '—'}
+                      ? ` · ${new Date(provider.last_probe_at).toLocaleTimeString()}`
+                      : ''}
                   </dd>
                 </div>
                 <div>
@@ -165,11 +168,21 @@ function ProvidersPage() {
               </dl>
               {provider.state === 'paused' && provider.enabled && (
                 <div className="provider-action">
-                  <p>暂停状态不会被健康探针自动解除。</p>
+                  <p>
+                    {provider.last_probe_state === 'healthy'
+                      ? '最新健康检查已通过，可以人工恢复。'
+                      : `健康检查尚未恢复${provider.last_probe_error_code ? ` · ${provider.last_probe_error_code}` : ''}`}
+                  </p>
                   <button
                     type="button"
                     className="provider-resume-button"
-                    disabled={resume.isPending}
+                    disabled={
+                      resume.isPending ||
+                      provider.last_probe_state !== 'healthy' ||
+                      !provider.last_probe_at ||
+                      Date.now() - new Date(provider.last_probe_at).getTime() >
+                        90_000
+                    }
                     onClick={() => confirmResume(provider)}
                   >
                     <RotateCcw size={13} />

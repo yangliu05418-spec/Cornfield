@@ -335,6 +335,7 @@ test('Midjourney stays one draw with four outputs and versioned parameters', asy
         display_name: 'Midjourney',
         provider: 'legnext',
         outputs_per_draw: 4,
+        availability: { state: 'healthy', can_submit: true },
         capabilities: {
           text_to_image: true,
           image_to_image: true,
@@ -351,6 +352,7 @@ test('Midjourney stays one draw with four outputs and versioned parameters', asy
         display_name: 'GPT Image 2',
         provider: 'openrouter',
         outputs_per_draw: 1,
+        availability: { state: 'healthy', can_submit: true },
         capabilities: {
           text_to_image: true,
           image_to_image: true,
@@ -404,6 +406,44 @@ test('Midjourney stays one draw with four outputs and versioned parameters', asy
   ).toHaveCount(0)
   await expect(page.getByRole('combobox', { name: '选择分辨率' })).toHaveCount(
     0,
+  )
+})
+
+test('paused provider keeps parameters visible but disables generation', async ({
+  page,
+}) => {
+  await installStudioMocks(page, {
+    models: [
+      {
+        id: 'nano-banana-pro',
+        display_name: 'Nano Banana Pro',
+        provider: 'openrouter',
+        outputs_per_draw: 1,
+        availability: {
+          state: 'paused',
+          can_submit: false,
+          message: '生成服务暂不可用，请稍后重试',
+        },
+        capabilities: {
+          text_to_image: true,
+          image_to_image: true,
+          aspect_ratios: ['1:1'],
+          resolutions: ['1K'],
+          max_reference_images: 4,
+          max_reference_bytes: 26_214_400,
+          draw_count: { min: 1, max: 4, default: 1 },
+        },
+      },
+    ],
+  })
+  await page.goto('/app/create')
+
+  await expect(page.locator('.generator-unavailable')).toHaveText(
+    '生成服务暂不可用，请稍后重试',
+  )
+  await expect(page.locator('.generate-button')).toBeDisabled()
+  await expect(page.getByRole('combobox', { name: '选择模型' })).toContainText(
+    'Nano Banana Pro（暂不可用）',
   )
 })
 
@@ -577,6 +617,7 @@ async function installStudioMocks(
             display_name: 'Nano Banana Pro',
             provider: 'openrouter',
             outputs_per_draw: 1,
+            availability: { state: 'healthy', can_submit: true },
             capabilities: {
               text_to_image: true,
               image_to_image: true,

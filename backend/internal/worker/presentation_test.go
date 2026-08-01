@@ -28,6 +28,7 @@ func TestUserFacingGenerationError(t *testing.T) {
 		"PROVIDER_HTTP_422":       "当前参数无法生成，请调整后重试",
 		"PROVIDER_IMAGE_INVALID":  "生成结果无法处理，请调整参数后重试",
 		"PROVIDER_HTTP_429":       "生成服务繁忙，请稍后重试",
+		"PROVIDER_UNAVAILABLE":    "生成服务暂不可用，请稍后手动重试",
 		"UNRECOGNIZED":            "生成失败，请稍后重试",
 	} {
 		if got := userFacingGenerationError(code); got != want {

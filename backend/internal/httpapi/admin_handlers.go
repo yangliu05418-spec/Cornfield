@@ -263,7 +263,8 @@ func (s *Server) adminModels(w http.ResponseWriter, _ *http.Request) {
 }
 
 func (s *Server) providers(w http.ResponseWriter, r *http.Request) {
-	rows, err := s.db.Query(r.Context(), `SELECT p.id,p.display_name,p.enabled,p.state,p.breaker_open_until,p.last_probe_at,p.last_error_code,p.last_error_at,
+	rows, err := s.db.Query(r.Context(), `SELECT p.id,p.display_name,p.enabled,p.state,p.breaker_open_until,p.last_probe_at,
+		p.last_probe_state,p.last_probe_error_code,p.last_error_code,p.last_error_at,
 		(SELECT count(*) FROM generation_jobs j
 		 JOIN generation_batches b ON b.id=j.batch_id
 		 JOIN model_capability_versions v ON v.model_id=b.model_id AND v.revision=b.capability_revision
@@ -290,12 +291,12 @@ func (s *Server) providers(w http.ResponseWriter, r *http.Request) {
 	defer rows.Close()
 	items := make([]map[string]any, 0)
 	for rows.Next() {
-		var id, name, state string
+		var id, name, state, lastProbeState string
 		var enabled bool
 		var breaker, probe, lastErrorAt *time.Time
-		var errorCode *string
+		var lastProbeErrorCode, errorCode *string
 		var active, successes, availabilityFailures int
-		if err := rows.Scan(&id, &name, &enabled, &state, &breaker, &probe, &errorCode, &lastErrorAt, &active, &successes, &availabilityFailures); err != nil {
+		if err := rows.Scan(&id, &name, &enabled, &state, &breaker, &probe, &lastProbeState, &lastProbeErrorCode, &errorCode, &lastErrorAt, &active, &successes, &availabilityFailures); err != nil {
 			writeError(w, http.StatusInternalServerError, "DATABASE_ERROR", "读取上游状态失败", true, r)
 			return
 		}
@@ -305,7 +306,7 @@ func (s *Server) providers(w http.ResponseWriter, r *http.Request) {
 			value := float64(successes) / float64(total)
 			successRate = &value
 		}
-		items = append(items, map[string]any{"id": id, "display_name": name, "enabled": enabled, "state": state, "breaker_open_until": breaker, "last_probe_at": probe, "last_error_code": errorCode, "last_error_at": lastErrorAt, "active_jobs": active, "terminal_successes_1h": successes, "availability_failures_1h": availabilityFailures, "success_rate_1h": successRate})
+		items = append(items, map[string]any{"id": id, "display_name": name, "enabled": enabled, "state": state, "breaker_open_until": breaker, "last_probe_at": probe, "last_probe_state": lastProbeState, "last_probe_error_code": lastProbeErrorCode, "last_error_code": errorCode, "last_error_at": lastErrorAt, "active_jobs": active, "terminal_successes_1h": successes, "availability_failures_1h": availabilityFailures, "success_rate_1h": successRate})
 	}
 	if err := rows.Err(); err != nil {
 		writeError(w, http.StatusInternalServerError, "DATABASE_ERROR", "读取上游状态失败", true, r)
@@ -330,9 +331,13 @@ func (s *Server) resumeProvider(w http.ResponseWriter, r *http.Request) {
 
 	var enabled bool
 	var state string
+	var lastProbeState string
+	var probeFresh bool
 	var previousErrorCode *string
-	err = tx.QueryRow(r.Context(), `SELECT enabled,state,last_error_code FROM providers WHERE id=$1 FOR UPDATE`, providerID).
-		Scan(&enabled, &state, &previousErrorCode)
+	err = tx.QueryRow(r.Context(), `SELECT enabled,state,last_probe_state,
+		COALESCE(last_probe_at>=now()-interval '90 seconds',false),last_error_code
+		FROM providers WHERE id=$1 FOR UPDATE`, providerID).
+		Scan(&enabled, &state, &lastProbeState, &probeFresh, &previousErrorCode)
 	if isNotFound(err) {
 		writeError(w, http.StatusNotFound, "PROVIDER_NOT_FOUND", "上游不存在", false, r)
 		return
@@ -347,6 +352,14 @@ func (s *Server) resumeProvider(w http.ResponseWriter, r *http.Request) {
 	}
 	if state != "paused" {
 		writeError(w, http.StatusConflict, "PROVIDER_NOT_PAUSED", "上游当前没有暂停", false, r)
+		return
+	}
+	if !probeFresh {
+		writeError(w, http.StatusConflict, "PROVIDER_PROBE_STALE", "最近没有可用于恢复的上游健康检查，请稍后重试", true, r)
+		return
+	}
+	if lastProbeState != "healthy" {
+		writeError(w, http.StatusConflict, "PROVIDER_PROBE_NOT_HEALTHY", "上游健康检查尚未恢复，暂时不能继续任务", true, r)
 		return
 	}
 

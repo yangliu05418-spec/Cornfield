@@ -226,6 +226,7 @@ func (p *DeletionProcessor) deleteUser(ctx context.Context, userID uuid.UUID) er
 		return errors.New("user assets are not fully purged")
 	}
 	for _, statement := range []string{
+		`DELETE FROM director_projects WHERE owner_user_id=$1`,
 		`DELETE FROM upload_sessions WHERE owner_user_id=$1`,
 		`DELETE FROM generation_batches WHERE owner_user_id=$1`,
 		`DELETE FROM asset_folders WHERE owner_user_id=$1`,

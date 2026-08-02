@@ -447,6 +447,72 @@ test('paused provider keeps parameters visible but disables generation', async (
   )
 })
 
+test('director iframe handshakes once and protects a damaged project', async ({
+  page,
+}) => {
+  const projectID = '5d4427a8-57e4-4f37-bf15-caf6d2fc5e64'
+  await installStudioMocks(page)
+  let revision = 3
+  await page.route(
+    `**/api/v1/director-projects/${projectID}`,
+    async (route) => {
+      if (route.request().method() !== 'GET') return route.fallback()
+      return json(route, {
+        id: projectID,
+        name: '损坏工程',
+        revision,
+        document: {
+          format: '3d-director-desk-project',
+          schemaVersion: 1,
+          project: {},
+        },
+        created_at: '2026-08-01T00:00:00Z',
+        updated_at: '2026-08-01T00:00:00Z',
+      })
+    },
+  )
+  await page.route(
+    `**/api/v1/director-projects/${projectID}/reset`,
+    async (route) => {
+      revision += 1
+      return json(route, { revision })
+    },
+  )
+  await page.route('**/director-desk/**', (route) =>
+    route.fulfill({
+      contentType: 'text/html',
+      body: `<!doctype html><body data-sessions="0"><script>
+        window.addEventListener('message', (event) => {
+          if (event.origin !== location.origin || event.data?.type !== 'storyai:director-desk-session') return;
+          document.body.dataset.sessions = String(Number(document.body.dataset.sessions) + 1);
+          if (event.data.payload?.projectDocument) {
+            parent.postMessage({type:'storyai:director-desk-session-error',payload:{code:'invalid-project-document',message:'工程内容不完整或已经损坏'}}, location.origin);
+          }
+        });
+        parent.postMessage({type:'storyai:director-desk-ready'}, location.origin);
+      </script></body>`,
+    }),
+  )
+
+  await page.goto(`/app/director/${projectID}`)
+  const frameBody = page.frameLocator('iframe').locator('body')
+  await expect(frameBody).toHaveAttribute('data-sessions', '1')
+  await expect(
+    page.getByRole('heading', { name: '工程内容无法读取' }),
+  ).toBeVisible()
+
+  const download = page.waitForEvent('download')
+  await page.getByRole('button', { name: '下载原始 JSON' }).click()
+  expect((await download).suggestedFilename()).toBe('损坏工程.json')
+
+  await page.getByRole('button', { name: '重置为空工程' }).click()
+  await page.getByRole('button', { name: '确认重置' }).click()
+  await expect(
+    page.getByRole('heading', { name: '工程内容无法读取' }),
+  ).toBeHidden()
+  await expect(frameBody).toHaveAttribute('data-sessions', '2')
+})
+
 test('asset workspace creates folders, moves assets, and archives without deleting', async ({
   page,
 }, testInfo) => {

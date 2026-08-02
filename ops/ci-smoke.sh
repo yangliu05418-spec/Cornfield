@@ -184,6 +184,73 @@ curl --fail-with-body --silent --show-error \
   http://127.0.0.1:8081/api/v1/auth/login > "${login_json}"
 csrf_token="$(jq -er '.csrf_token' "${login_json}")"
 
+# Director documents must preserve revision semantics, accept the supported
+# built-in model protocol, reject inline bytes, and only reset explicitly.
+director_project_json="${tmp_dir}/director-project.json"
+curl --fail-with-body --silent --show-error --cookie "${cookie_jar}" \
+  --header "X-CSRF-Token: ${csrf_token}" --header 'Content-Type: application/json' \
+  --data '{"name":"CI Director Project"}' \
+  http://127.0.0.1:8081/api/v1/director-projects > "${director_project_json}"
+director_project_id="$(jq -er '.id' "${director_project_json}")"
+test "$(jq -er '.revision' "${director_project_json}")" = "0"
+director_document="$(jq -nc '{
+  format:"3d-director-desk-project",schemaVersion:1,
+  project:{version:1,scene:{backgroundColor:"#0f1113"},
+    assets:[{id:"builtin:ATM_low.fbx",fileName:"ATM_low.fbx",assetSource:"library",url:"builtin://life/ATM_low.fbx"}],
+    animationAssets:[],objects:[],cameras:[{id:"camera-1",name:"Camera 1",fov:50,
+      transform:{position:[0,1,2],rotation:[0,0,0],scale:[1,1,1]},target:[0,0,0]}],
+    activeCameraId:"camera-1",panoramaAssetId:null}}')"
+director_save_json="$(jq -nc --argjson document "${director_document}" \
+  '{document:$document,expected_revision:0}')"
+curl --fail-with-body --silent --show-error --cookie "${cookie_jar}" \
+  --header "X-CSRF-Token: ${csrf_token}" --header 'Content-Type: application/json' \
+  --request PUT --data "${director_save_json}" \
+  "http://127.0.0.1:8081/api/v1/director-projects/${director_project_id}/document" \
+  | jq -e '.revision == 1' >/dev/null
+stale_reset_status="$(curl --silent --show-error --output "${tmp_dir}/director-stale-reset.json" \
+  --write-out '%{http_code}' --cookie "${cookie_jar}" --header "X-CSRF-Token: ${csrf_token}" \
+  --header 'Content-Type: application/json' --request POST --data '{"expected_revision":0}' \
+  "http://127.0.0.1:8081/api/v1/director-projects/${director_project_id}/reset")"
+test "${stale_reset_status}" = "409"
+jq -e '.error.code == "DIRECTOR_PROJECT_CONFLICT"' "${tmp_dir}/director-stale-reset.json" >/dev/null
+curl --fail-with-body --silent --show-error --cookie "${cookie_jar}" \
+  --header "X-CSRF-Token: ${csrf_token}" --header 'Content-Type: application/json' \
+  --request POST --data '{"expected_revision":1}' \
+  "http://127.0.0.1:8081/api/v1/director-projects/${director_project_id}/reset" \
+  | jq -e '.revision == 2' >/dev/null
+curl --fail-with-body --silent --show-error --cookie "${cookie_jar}" \
+  "http://127.0.0.1:8081/api/v1/director-projects/${director_project_id}" \
+  | jq -e '.revision == 2 and .document == null' >/dev/null
+unsafe_director_document="$(jq -nc --argjson document "${director_document}" \
+  '$document | .project.assets[0].url="data:model/gltf-binary;base64,AAAA"')"
+unsafe_director_save_json="$(jq -nc --argjson document "${unsafe_director_document}" \
+  '{document:$document,expected_revision:2}')"
+unsafe_director_status="$(curl --silent --show-error --output "${tmp_dir}/director-unsafe.json" \
+  --write-out '%{http_code}' --cookie "${cookie_jar}" --header "X-CSRF-Token: ${csrf_token}" \
+  --header 'Content-Type: application/json' --request PUT --data "${unsafe_director_save_json}" \
+  "http://127.0.0.1:8081/api/v1/director-projects/${director_project_id}/document")"
+test "${unsafe_director_status}" = "422"
+jq -e '.error.code == "INVALID_DIRECTOR_DOCUMENT"' "${tmp_dir}/director-unsafe.json" >/dev/null
+test "$(docker compose exec -T postgres psql -U studio_bootstrap -d studio -Atc \
+  "SELECT count(*) FROM audit_logs WHERE action='director_project.reset' AND target_id='${director_project_id}'")" = "1"
+other_director_project_id="$(docker compose exec -T postgres psql -U studio_bootstrap -d studio -Atc \
+  "WITH owner AS (
+     INSERT INTO users(username,display_name,password_hash,role,status,must_change_password)
+     VALUES('ci-director-other','Other Director','unused','member','active',false) RETURNING id
+   ), project AS (
+     INSERT INTO director_projects(owner_user_id,name)
+     SELECT id,'Private Director Project' FROM owner RETURNING id
+   ) SELECT id FROM project")"
+other_director_get_status="$(curl --silent --show-error --output "${tmp_dir}/director-other-get.json" \
+  --write-out '%{http_code}' --cookie "${cookie_jar}" \
+  "http://127.0.0.1:8081/api/v1/director-projects/${other_director_project_id}")"
+test "${other_director_get_status}" = "404"
+other_director_reset_status="$(curl --silent --show-error --output "${tmp_dir}/director-other-reset.json" \
+  --write-out '%{http_code}' --cookie "${cookie_jar}" --header "X-CSRF-Token: ${csrf_token}" \
+  --header 'Content-Type: application/json' --request POST --data '{"expected_revision":0}' \
+  "http://127.0.0.1:8081/api/v1/director-projects/${other_director_project_id}/reset")"
+test "${other_director_reset_status}" = "404"
+
 # A fail-closed provider pause must survive healthy balance/key probes and may
 # only be cleared by the authenticated, CSRF-protected, audited admin action.
 docker compose exec -T postgres psql -U studio_bootstrap -d studio -v ON_ERROR_STOP=1 -c \

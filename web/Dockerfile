@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1.7
-FROM node:24.15-alpine@sha256:d1b3b4da11eefd5941e7f0b9cf17783fc99d9c6fc34884a665f40a06dbdfc94f AS build
+FROM node:26.4-alpine@sha256:725aeba2364a9b16beae49e180d83bd597dbd0b15c47f1f28875c290bfd255b9 AS build
 RUN corepack enable
 WORKDIR /src
 COPY web/package.json web/pnpm-lock.yaml web/pnpm-workspace.yaml ./
@@ -7,7 +7,7 @@ RUN --mount=type=cache,target=/root/.local/share/pnpm/store pnpm install --froze
 COPY web/ .
 RUN pnpm build && test -f dist/client/_shell.html
 
-FROM node:24.15-alpine@sha256:d1b3b4da11eefd5941e7f0b9cf17783fc99d9c6fc34884a665f40a06dbdfc94f AS director-build
+FROM node:26.4-alpine@sha256:725aeba2364a9b16beae49e180d83bd597dbd0b15c47f1f28875c290bfd255b9 AS director-build
 WORKDIR /director
 COPY 3d-director-desk-main/package.json 3d-director-desk-main/package-lock.json ./
 RUN --mount=type=cache,target=/root/.npm npm ci

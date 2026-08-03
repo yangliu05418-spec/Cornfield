@@ -320,7 +320,7 @@ curl --fail-with-body --silent --show-error --cookie "${cookie_jar}" \
   http://127.0.0.1:8081/api/v1/generations > "${queued_response}"
 queued_batch_id="$(jq -er '.id' "${queued_response}")"
 docker compose exec -T postgres psql -U studio_bootstrap -d studio -v ON_ERROR_STOP=1 -c \
-  "UPDATE providers SET state='paused',last_error_code='CI_RUNTIME_PAUSE',last_error_at=now() WHERE id='openrouter'" >/dev/null
+  "UPDATE providers SET state='paused',last_probe_state='unknown',last_probe_error_code=NULL,last_error_code='CI_RUNTIME_PAUSE',last_error_at=now() WHERE id='openrouter'" >/dev/null
 docker compose start worker >/dev/null
 for _ in $(seq 1 20); do
   queued_state="$(docker compose exec -T postgres psql -U studio_bootstrap -d studio -At -F ' ' -c \

@@ -74,6 +74,27 @@ export function createCloudDirectorProjectDocument(
   return createDirectorProjectDocument(cloudProject, exportedAt);
 }
 
+const LOCAL_ASSET_URL_PREFIX = "director-asset://local/";
+
+function isCloudAssetReferenceReady(url: string, storageKey?: string) {
+  const normalizedURL = url.trim().toLowerCase();
+  if (normalizedURL.startsWith("data:") || normalizedURL.startsWith("blob:")) return false;
+  if (!storageKey) return !normalizedURL.startsWith(LOCAL_ASSET_URL_PREFIX);
+  return url === `${LOCAL_ASSET_URL_PREFIX}${encodeURIComponent(storageKey)}`;
+}
+
+/**
+ * Device-local imports briefly exist as data/blob URLs before IndexedDB returns
+ * their durable, tenant-scoped reference. Persisting that intermediate state
+ * would either fail validation or overwrite the last good cloud document.
+ */
+export function isCloudDirectorProjectReady(project: DirectorProject) {
+  return project.assets.every((asset) => isCloudAssetReferenceReady(asset.url, asset.storageKey))
+    && (project.animationAssets ?? []).every((asset) =>
+      isCloudAssetReferenceReady(asset.url, asset.storageKey)
+    );
+}
+
 export function getDirectorProjectFingerprint(project: DirectorProject) {
   const text = JSON.stringify(project);
   let hash = 0x811c9dc5;

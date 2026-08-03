@@ -240,7 +240,12 @@ func (m *Maintenance) purgeAsset(ctx context.Context, assetID uuid.UUID, storage
 		return err
 	}
 	if !contentReferenced {
-		if _, err = deleteCanonicalContent(m.AssetRoot, storageKey, digest, time.Now()); err != nil {
+		if resetIfBusy {
+			_, err = deleteCanonicalContent(m.AssetRoot, storageKey, digest, time.Now())
+		} else {
+			_, err = deleteCanonicalContentNow(m.AssetRoot, storageKey, digest)
+		}
+		if err != nil {
 			return err
 		}
 	}

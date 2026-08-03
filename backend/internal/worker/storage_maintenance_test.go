@@ -161,6 +161,25 @@ func TestExpiryDeleteHonorsContentReuseLease(t *testing.T) {
 	}
 }
 
+func TestExplicitDeleteDoesNotWaitForContentReuseLease(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "assets"), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now()
+	digest, key, directory := createContentFixture(t, root, []byte("explicit deletion"), now, true)
+
+	if _, err := deleteCanonicalContentNow(root, key, digest); err != nil {
+		t.Fatalf("explicit deletion was blocked by the reuse lease: %v", err)
+	}
+	if _, err := os.Stat(directory); !os.IsNotExist(err) {
+		t.Fatalf("explicitly deleted content directory still exists: %v", err)
+	}
+	if _, err := deleteCanonicalContentNow(root, key, digest); err != nil {
+		t.Fatalf("repeated explicit deletion was not idempotent: %v", err)
+	}
+}
+
 func TestOrphanScanDoesNotFollowSymlink(t *testing.T) {
 	root := t.TempDir()
 	assetsRoot := filepath.Join(root, "assets")

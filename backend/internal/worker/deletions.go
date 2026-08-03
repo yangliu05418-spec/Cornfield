@@ -152,7 +152,7 @@ func (p *DeletionProcessor) deleteAsset(ctx context.Context, assetID uuid.UUID) 
 	if err != nil || referenced {
 		return err
 	}
-	_, err = deleteCanonicalContent(p.AssetRoot, key, digest, time.Now())
+	_, err = deleteCanonicalContentNow(p.AssetRoot, key, digest)
 	return err
 }
 

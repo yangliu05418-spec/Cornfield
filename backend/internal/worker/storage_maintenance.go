@@ -181,7 +181,7 @@ func inspectContentDirectory(directory, digest string, cutoff time.Time) (orphan
 		}
 		return orphanCandidate{}, false, err
 	}
-	if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() || info.ModTime().After(cutoff) {
+	if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() || (!cutoff.IsZero() && info.ModTime().After(cutoff)) {
 		return orphanCandidate{}, false, nil
 	}
 	entries, err := os.ReadDir(directory)
@@ -200,7 +200,7 @@ func inspectContentDirectory(directory, digest string, cutoff time.Time) (orphan
 			return orphanCandidate{}, false, nil
 		}
 		entryInfo, infoErr := entry.Info()
-		if infoErr != nil || !entryInfo.Mode().IsRegular() || entryInfo.ModTime().After(cutoff) {
+		if infoErr != nil || !entryInfo.Mode().IsRegular() || (!cutoff.IsZero() && entryInfo.ModTime().After(cutoff)) {
 			return orphanCandidate{}, false, nil
 		}
 		fullPath := filepath.Join(directory, name)
@@ -242,6 +242,18 @@ func deleteOrphanCandidate(candidate orphanCandidate, now time.Time, minAge time
 }
 
 func deleteCanonicalContent(assetRoot, storageKey, digest string, now time.Time) (int64, error) {
+	return deleteCanonicalContentBefore(assetRoot, storageKey, digest, now.Add(-defaultContentReuseLease))
+}
+
+// deleteCanonicalContentNow is only safe after acquiring the process-wide
+// content lease and confirming the digest has no live database references.
+// Explicit user deletion satisfies both conditions and must not wait for the
+// crash-recovery lease used by expiry and rollback cleanup.
+func deleteCanonicalContentNow(assetRoot, storageKey, digest string) (int64, error) {
+	return deleteCanonicalContentBefore(assetRoot, storageKey, digest, time.Time{})
+}
+
+func deleteCanonicalContentBefore(assetRoot, storageKey, digest string, cutoff time.Time) (int64, error) {
 	parts, err := parseContentStorageKey(storageKey, digest)
 	if err != nil {
 		return 0, err
@@ -253,7 +265,7 @@ func deleteCanonicalContent(assetRoot, storageKey, digest string, now time.Time)
 	if err != nil {
 		return 0, err
 	}
-	verified, ok, err := inspectContentDirectory(directory, digest, now.Add(-defaultContentReuseLease))
+	verified, ok, err := inspectContentDirectory(directory, digest, cutoff)
 	if err != nil {
 		return 0, err
 	}

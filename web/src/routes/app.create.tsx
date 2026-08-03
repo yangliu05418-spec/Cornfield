@@ -18,6 +18,10 @@ import { MidjourneyOptionsControl } from '#/components/midjourney-options'
 import { PromptRefinerDialog } from '#/components/prompt-refiner-dialog'
 import type { JustifiedWallHandle } from '#/components/justified-wall'
 import { api, APIError, getMe } from '#/lib/api'
+import {
+  optimisticallyRemoveAssets,
+  restoreAssetCaches,
+} from '#/lib/asset-cache'
 import type {
   Asset,
   AssetPage,
@@ -752,15 +756,27 @@ function CreatePage() {
     })
   }
   async function performDeleteAsset(asset: Asset) {
+    const previousAssets = await optimisticallyRemoveAssets(queryClient, [
+      asset.id,
+    ])
+    const wasReference = references.some((item) => item.id === asset.id)
+    setReferences((current) => current.filter((item) => item.id !== asset.id))
     try {
       await api(`/api/v1/assets/${asset.id}`, { method: 'DELETE' })
-      setReferences((current) => current.filter((item) => item.id !== asset.id))
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ['assets'] }),
         queryClient.invalidateQueries({ queryKey: ['generations'] }),
       ])
-      setNotice('图片已进入永久删除流程')
+      setNotice('已从灵感墙移除，正在永久删除')
     } catch (reason) {
+      restoreAssetCaches(queryClient, previousAssets)
+      if (wasReference) {
+        setReferences((current) =>
+          current.some((item) => item.id === asset.id)
+            ? current
+            : [...current, asset],
+        )
+      }
       setNotice(reason instanceof Error ? reason.message : '删除失败')
     }
   }

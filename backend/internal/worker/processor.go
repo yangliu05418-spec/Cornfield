@@ -1041,7 +1041,8 @@ func (w *GenerateWorker) pauseProvider(ctx context.Context, item generationRecor
 	}
 	defer tx.Rollback(ctx)
 	if _, err = tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1,0))`, "provider-slot:"+item.ProviderID); err == nil {
-		_, err = tx.Exec(ctx, `UPDATE providers SET state='paused',last_error_code=$2,last_error_at=now(),updated_at=now() WHERE id=$1`, item.ProviderID, providerErr.Code)
+		_, err = tx.Exec(ctx, `UPDATE providers SET state='paused',last_error_code=$2,last_error_at=now(),
+			last_probe_state='unknown',last_probe_error_code=NULL,updated_at=now() WHERE id=$1`, item.ProviderID, providerErr.Code)
 	}
 	if err == nil {
 		err = failUnavailableProviderJobsInTx(ctx, tx, item.ProviderID)

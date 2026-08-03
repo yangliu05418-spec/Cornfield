@@ -3434,7 +3434,7 @@ select {
 
 .director-project-open {
   display: grid;
-  grid-template-columns: 48px minmax(0, 1fr) auto 20px;
+  grid-template-columns: 48px minmax(0, 1fr);
   align-items: center;
   gap: 14px;
   width: 100%;
@@ -3460,6 +3460,18 @@ select {
 .director-project-copy {
   display: grid;
   gap: 7px;
+  min-width: 0;
+}
+.director-project-title-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+.director-project-title-row strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .director-project-copy strong {
   font-size: 17px;
@@ -3471,7 +3483,11 @@ select {
   font: 11px/1.2 var(--font-mono, monospace);
 }
 .director-project-index {
-  align-self: start;
+  flex: 0 0 auto;
+}
+.director-project-title-row > svg {
+  flex: 0 0 auto;
+  color: #898a8b;
 }
 
 .director-project-card-actions {
@@ -3756,6 +3772,46 @@ select {
 .director-host-save-state.is-error {
   color: #ffb4ae;
   border-color: #6e3732;
+}
+.director-save-recovery {
+  position: absolute;
+  right: 14px;
+  bottom: 54px;
+  z-index: 4;
+  display: grid;
+  gap: 7px;
+  width: min(320px, calc(100% - 28px));
+  padding: 14px;
+  color: #f7f7f8;
+  border: 1px solid #6e3732;
+  border-radius: 12px;
+  background: rgb(28 30 32 / 0.97);
+  box-shadow: 0 18px 46px rgb(0 0 0 / 0.32);
+}
+.director-save-recovery > strong {
+  font-size: 13px;
+}
+.director-save-recovery > span {
+  color: #898a8b;
+  font-size: 12px;
+}
+.director-save-recovery > div {
+  display: flex;
+  gap: 8px;
+  margin-top: 3px;
+}
+.director-save-recovery button {
+  min-height: 34px;
+  padding: 0 12px;
+  color: #f7f7f8;
+  border: 1px solid #3a3d3f;
+  border-radius: 9px;
+  background: #23262a;
+}
+.director-save-recovery button:hover,
+.director-save-recovery button:focus-visible {
+  color: #d1fe17;
+  border-color: #66752c;
 }
 
 @media (max-width: 820px) {

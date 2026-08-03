@@ -17,11 +17,22 @@ const uploadDeadline = 2 * 60 * 1000
 
 type HostMessage = { type?: unknown; payload?: unknown }
 type SaveState = 'saved' | 'saving' | 'conflict' | 'error'
+type SaveFailureMode = 'conflict' | 'retry' | 'blocked'
 type AssetPages = InfiniteData<AssetPage, string>
 type SessionError = { code: string; message: string }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value)
+}
+
+export function directorSaveFailureMode(error: unknown): SaveFailureMode {
+  if (error instanceof APIError && error.status === 409) return 'conflict'
+  if (
+    error instanceof TypeError ||
+    (error instanceof APIError && (error.status === 429 || error.status >= 500))
+  )
+    return 'retry'
+  return 'blocked'
 }
 
 function captureFile(value: unknown, fallbackName: string): File {
@@ -105,8 +116,11 @@ function DirectorEditorPage() {
   const saveTimerRef = useRef<number | null>(null)
   const savingRef = useRef(false)
   const conflictRef = useRef(false)
+  const saveBlockedRef = useRef(false)
+  const saveRetryCountRef = useRef(0)
   const [saveState, setSaveState] = useState<SaveState>('saved')
   const [saveMessage, setSaveMessage] = useState('已保存')
+  const [saveBlocked, setSaveBlocked] = useState(false)
   const [sessionError, setSessionError] = useState<SessionError | null>(null)
   const [resetConfirmOpen, setResetConfirmOpen] = useState(false)
   const [resetting, setResetting] = useState(false)
@@ -158,6 +172,7 @@ function DirectorEditorPage() {
     if (
       savingRef.current ||
       conflictRef.current ||
+      saveBlockedRef.current ||
       pendingDocumentRef.current === null
     )
       return
@@ -165,6 +180,7 @@ function DirectorEditorPage() {
     pendingDocumentRef.current = null
     savingRef.current = true
     let retryAfterFailure = false
+    let retryDelay = 0
     publishSaveState('saving', '正在保存')
     try {
       const result = await api<{ revision: number }>(
@@ -178,19 +194,34 @@ function DirectorEditorPage() {
         },
       )
       revisionRef.current = result.revision
+      saveRetryCountRef.current = 0
+      saveBlockedRef.current = false
+      setSaveBlocked(false)
       publishSaveState('saved', '已保存')
     } catch (error) {
-      if (error instanceof APIError && error.status === 409) {
+      const failureMode = directorSaveFailureMode(error)
+      if (failureMode === 'conflict') {
         conflictRef.current = true
         pendingDocumentRef.current = null
         publishSaveState('conflict', '检测到另一处更新，请刷新或另建项目')
-      } else {
+      } else if (failureMode === 'retry') {
         if (pendingDocumentRef.current === null)
           pendingDocumentRef.current = document
         retryAfterFailure = true
+        retryDelay = Math.min(2 ** saveRetryCountRef.current * 1000, 30_000)
+        saveRetryCountRef.current += 1
         publishSaveState(
           'error',
-          error instanceof Error ? error.message : '保存失败',
+          `保存连接中断，${Math.ceil(retryDelay / 1000)} 秒后重试`,
+        )
+      } else {
+        if (pendingDocumentRef.current === null)
+          pendingDocumentRef.current = document
+        saveBlockedRef.current = true
+        setSaveBlocked(true)
+        publishSaveState(
+          'error',
+          error instanceof Error ? error.message : '自动保存已暂停',
         )
       }
     } finally {
@@ -200,7 +231,7 @@ function DirectorEditorPage() {
           saveTimerRef.current = window.setTimeout(() => {
             saveTimerRef.current = null
             void flushSave()
-          }, 2000)
+          }, retryDelay)
         } else {
           void flushSave()
         }
@@ -212,6 +243,10 @@ function DirectorEditorPage() {
     (document: unknown) => {
       if (conflictRef.current) return
       pendingDocumentRef.current = document
+      if (saveBlockedRef.current) {
+        publishSaveState('error', '自动保存已暂停，请检查后重新保存')
+        return
+      }
       publishSaveState('saving', '等待保存')
       if (saveTimerRef.current !== null)
         window.clearTimeout(saveTimerRef.current)
@@ -247,7 +282,10 @@ function DirectorEditorPage() {
     iframeReadyRef.current = false
     sessionSentRef.current = false
     conflictRef.current = false
+    saveBlockedRef.current = false
+    saveRetryCountRef.current = 0
     pendingDocumentRef.current = null
+    setSaveBlocked(false)
     setSessionError(null)
   }, [projectId])
 
@@ -277,6 +315,29 @@ function DirectorEditorPage() {
     window.setTimeout(() => URL.revokeObjectURL(url), 0)
   }, [project.data])
 
+  const downloadPendingDocument = useCallback(() => {
+    if (!project.data || pendingDocumentRef.current === null) return
+    const serialized = JSON.stringify(pendingDocumentRef.current, null, 2)
+    const url = URL.createObjectURL(
+      new Blob([serialized], { type: 'application/json;charset=utf-8' }),
+    )
+    const link = document.createElement('a')
+    link.href = url
+    link.download = `${project.data.name.replace(/[^\p{L}\p{N}._-]+/gu, '-') || 'director-project'}-unsaved.json`
+    document.body.append(link)
+    link.click()
+    link.remove()
+    window.setTimeout(() => URL.revokeObjectURL(url), 0)
+  }, [project.data])
+
+  const retrySave = useCallback(() => {
+    if (pendingDocumentRef.current === null) return
+    saveBlockedRef.current = false
+    saveRetryCountRef.current = 0
+    setSaveBlocked(false)
+    void flushSave()
+  }, [flushSave])
+
   const resetProject = useCallback(async () => {
     if (!project.data || resetting) return
     setResetting(true)
@@ -297,8 +358,11 @@ function DirectorEditorPage() {
             : current,
       )
       conflictRef.current = false
+      saveBlockedRef.current = false
+      saveRetryCountRef.current = 0
       sessionSentRef.current = false
       setSessionError(null)
+      setSaveBlocked(false)
       setResetConfirmOpen(false)
     } catch (error) {
       publishSaveState(
@@ -455,7 +519,11 @@ function DirectorEditorPage() {
     () => () => {
       if (saveTimerRef.current !== null)
         window.clearTimeout(saveTimerRef.current)
-      if (pendingDocumentRef.current !== null && !conflictRef.current)
+      if (
+        pendingDocumentRef.current !== null &&
+        !conflictRef.current &&
+        !saveBlockedRef.current
+      )
         void flushSave()
     },
     [flushSave],
@@ -532,6 +600,20 @@ function DirectorEditorPage() {
         >
           {saveMessage}
         </span>
+        {saveBlocked && !sessionError && (
+          <aside className="director-save-recovery" role="alert">
+            <strong>自动保存已暂停</strong>
+            <span>当前修改仍保留在浏览器中。</span>
+            <div>
+              <button type="button" onClick={retrySave}>
+                重新保存
+              </button>
+              <button type="button" onClick={downloadPendingDocument}>
+                下载 JSON
+              </button>
+            </div>
+          </aside>
+        )}
       </main>
       <ConfirmDialog
         open={resetConfirmOpen}

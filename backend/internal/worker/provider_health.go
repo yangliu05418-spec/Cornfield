@@ -64,11 +64,19 @@ type providerProbeTransition struct {
 	State         string
 	ErrorCode     string
 	PreserveError bool
+	AutoRecovered bool
 }
 
-func nextProviderProbeTransition(currentState, currentErrorCode string, enabled, breakerOpen bool, health provider.Health) providerProbeTransition {
+func nextProviderProbeTransition(currentState, currentErrorCode, previousProbeState string, enabled, breakerOpen bool, health provider.Health) providerProbeTransition {
 	probeState, probeCode := providerHealthState(health)
 	if currentState == "paused" {
+		if enabled && probeState == "healthy" && previousProbeState == "healthy" {
+			state := "healthy"
+			if breakerOpen {
+				state = "degraded"
+			}
+			return providerProbeTransition{State: state, AutoRecovered: true}
+		}
 		return providerProbeTransition{State: currentState, ErrorCode: currentErrorCode, PreserveError: true}
 	}
 	if !enabled {
@@ -87,14 +95,14 @@ func (p *ProviderProber) persistProbe(ctx context.Context, providerID string, he
 	}
 	defer tx.Rollback(ctx)
 
-	var currentState, currentErrorCode string
+	var currentState, currentErrorCode, previousProbeState string
 	var enabled, breakerOpen bool
-	if err := tx.QueryRow(ctx, `SELECT state,COALESCE(last_error_code,''),enabled,
+	if err := tx.QueryRow(ctx, `SELECT state,COALESCE(last_error_code,''),COALESCE(last_probe_state,'unknown'),enabled,
 		COALESCE(breaker_open_until>now(),false) FROM providers WHERE id=$1 FOR UPDATE`, providerID).
-		Scan(&currentState, &currentErrorCode, &enabled, &breakerOpen); err != nil {
+		Scan(&currentState, &currentErrorCode, &previousProbeState, &enabled, &breakerOpen); err != nil {
 		return err
 	}
-	transition := nextProviderProbeTransition(currentState, currentErrorCode, enabled, breakerOpen, health)
+	transition := nextProviderProbeTransition(currentState, currentErrorCode, previousProbeState, enabled, breakerOpen, health)
 	probeState, probeCode := providerHealthState(health)
 	if transition.PreserveError {
 		_, err = tx.Exec(ctx, `UPDATE providers SET last_probe_state=$2,last_probe_error_code=NULLIF($3,''),
@@ -108,7 +116,17 @@ func (p *ProviderProber) persistProbe(ctx context.Context, providerID string, he
 	if err != nil {
 		return err
 	}
-	return tx.Commit(ctx)
+	if err = tx.Commit(ctx); err != nil {
+		return err
+	}
+	if transition.AutoRecovered && p.Log != nil {
+		p.Log.Info("provider automatically recovered after consecutive healthy probes",
+			"provider", providerID,
+			"previous_error_code", currentErrorCode,
+			"state", transition.State,
+		)
+	}
+	return nil
 }
 
 func providerHealthState(health provider.Health) (state, code string) {

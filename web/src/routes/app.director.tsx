@@ -141,7 +141,13 @@ function DirectorProjectsPage() {
                     <Clapperboard size={22} />
                   </span>
                   <span className="director-project-copy">
-                    <strong>{project.name}</strong>
+                    <span className="director-project-title-row">
+                      <strong>{project.name}</strong>
+                      <span className="director-project-index">
+                        {String(index + 1).padStart(2, '0')}
+                      </span>
+                      <ArrowRight size={18} />
+                    </span>
                     <small>
                       {new Intl.DateTimeFormat('zh-CN', {
                         month: '2-digit',
@@ -151,10 +157,6 @@ function DirectorProjectsPage() {
                       }).format(new Date(project.updated_at))}
                     </small>
                   </span>
-                  <span className="director-project-index">
-                    {String(index + 1).padStart(2, '0')}
-                  </span>
-                  <ArrowRight size={18} />
                 </button>
                 <div className="director-project-card-actions">
                   <button

@@ -83,11 +83,13 @@ it("indexes the locally installed character and prop libraries", () => {
   expect(items.some((item) => item.id === "mixamo-character:camille"))
     .toBe(LOCAL_MIXAMO_CHARACTER_AVAILABLE);
   if (LOCAL_MIXAMO_CHARACTER_AVAILABLE) {
-    expect(items.filter((item) => item.id.startsWith("mixamo-character:"))).toHaveLength(1);
+    expect(items.filter((item) => item.id.startsWith("mixamo-character:"))).toHaveLength(3);
     expect(items.some((item) => item.id === "rigged-character:robot-expressive")).toBe(true);
     expect(items.map((item) => item.name)).toEqual(expect.arrayContaining([
       "Camille（Mixamo）",
       "表情机器人（自带动作）",
+      "XBot（Mixamo）",
+      "Soldier（Mixamo）",
     ]));
   }
 });

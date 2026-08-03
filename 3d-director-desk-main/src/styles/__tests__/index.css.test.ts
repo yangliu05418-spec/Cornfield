@@ -22,6 +22,9 @@ it("uses the Cornfield theme tokens", () => {
   expect(css).toContain(".ui-segmented-item-active");
   expect(css).toMatch(/input:focus-visible,\s*[\r\n]+\s*select:focus-visible,\s*[\r\n]+\s*textarea:focus-visible\s*\{[\s\S]*?outline:\s*1px solid rgb\(var\(--accent-rgb\) \/ 0\.78\);/);
   expect(css).toMatch(/\.ui-field:focus,\s*[\r\n]+\s*\.ui-field:focus-visible,\s*[\r\n]+\s*\.panel-card:not\(\.right-inspector\)\s*input:not\(\[type="range"\]\):not\(\[type="checkbox"\]\):not\(\[type="color"\]\):focus,\s*[\r\n]+\s*\.panel-card:not\(\.right-inspector\)\s*input:not\(\[type="range"\]\):not\(\[type="checkbox"\]\):not\(\[type="color"\]\):focus-visible,\s*[\r\n]+\s*\.panel-card:not\(\.right-inspector\)\s*select:focus,\s*[\r\n]+\s*\.panel-card:not\(\.right-inspector\)\s*select:focus-visible,\s*[\r\n]+\s*\.panel-card:not\(\.right-inspector\)\s*textarea:focus,\s*[\r\n]+\s*\.panel-card:not\(\.right-inspector\)\s*textarea:focus-visible\s*\{[\s\S]*?outline:\s*none;[\s\S]*?box-shadow:\s*0 0 0 1px rgb\(var\(--accent-rgb\) \/ 0\.45\);/);
+  expect(css).toMatch(/\.app-shell\s*\{[\s\S]*?--bg-rgb:\s*15 17 19;[\s\S]*?--panel-rgb:\s*28 30 32;[\s\S]*?--border-rgb:\s*46 48 49;[\s\S]*?--accent-rgb:\s*209 254 23;/);
+  expect(css).not.toContain("--accent-rgb: 77 143 248;");
+  expect(css).not.toContain("background: rgb(37 137 255);");
 });
 
 it("paints a dark first frame before React and theme messages initialize", () => {
@@ -230,6 +233,7 @@ it("renders the model library panel with the same frosted glass background treat
   expect(modelLibraryThumbHoverRule).toContain("background: rgb(var(--surface-hover-rgb));");
   expect(modelLibraryThumbHoverRule).not.toContain("border-color:");
   expect(css).toMatch(/\.model-library-thumb-image\s*\{[\s\S]*?width:\s*100%;[\s\S]*?height:\s*100%;[\s\S]*?object-fit:\s*cover;/);
+  expect(css).toMatch(/\.model-library-grid\s*\{[\s\S]*?grid-template-columns:\s*repeat\(auto-fill,\s*minmax\(66px,\s*1fr\)\);[\s\S]*?justify-items:\s*center;/);
 });
 
 it("renders the viewport aspect ratio picker as a horizontal floating panel", () => {

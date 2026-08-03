@@ -208,6 +208,44 @@ it("loads an embedded cloud document and publishes capture-free project changes"
   expect(localStorage.length).toBe(0);
 });
 
+it("does not publish transient local asset URLs before durable storage is ready", () => {
+  const postMessage = vi.spyOn(window.parent, "postMessage").mockImplementation(() => undefined);
+  initDirectorDeskHostBridge();
+  window.dispatchEvent(new MessageEvent("message", {
+    data: {
+      type: "storyai:director-desk-session",
+      payload: {
+        instanceId: "cloud-project-local-import",
+        embedded: true,
+        tenantScope: TENANT_A,
+        documentRevision: 1,
+        projectDocument: createDirectorProjectDocument(createDefaultDirectorProject()),
+      },
+    },
+    origin: window.location.origin,
+  }));
+
+  const transient = structuredClone(useDirectorStore.getState().project);
+  transient.assets.push({
+    id: "local-model",
+    kind: "prop",
+    sourceType: "model",
+    fileName: "model.glb",
+    url: "blob:https://example.test/transient",
+    assetSource: "local",
+    modelFormat: "glb",
+  });
+  useDirectorStore.setState({ project: transient });
+  expect(postMessage.mock.calls.some(([message]) => message.type === "storyai:director-desk-project-changed")).toBe(false);
+
+  const durable = structuredClone(transient);
+  durable.assets[0].storageKey = `user:${TENANT_A}:model`;
+  durable.assets[0].url = `director-asset://local/${encodeURIComponent(durable.assets[0].storageKey)}`;
+  useDirectorStore.setState({ project: durable });
+
+  expect(postMessage.mock.calls.filter(([message]) => message.type === "storyai:director-desk-project-changed")).toHaveLength(1);
+});
+
 it("reports a damaged embedded document without replacing or publishing it", () => {
   const postMessage = vi.spyOn(window.parent, "postMessage").mockImplementation(() => undefined);
   const before = useDirectorStore.getState().project;

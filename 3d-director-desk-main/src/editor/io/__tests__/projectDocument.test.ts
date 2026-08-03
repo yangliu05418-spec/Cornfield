@@ -7,6 +7,7 @@ import {
   DIRECTOR_PROJECT_SCHEMA_VERSION,
   createCloudDirectorProjectDocument,
   getDirectorProjectFingerprint,
+  isCloudDirectorProjectReady,
   migrateDirectorProjectDocument,
 } from "../projectDocument";
 
@@ -30,6 +31,41 @@ it("omits device-local camera captures from cloud documents", () => {
   expect(document.project.cameras[0].captures).toEqual([]);
   expect(document.project.cameras[0].lastCaptureUrl).toBeNull();
   expect(project.cameras[0].captures).toHaveLength(1);
+});
+
+it("waits for device-local assets to receive a durable storage reference", () => {
+  const project = createDefaultDirectorProject();
+  project.assets.push({
+    id: "local-model",
+    kind: "prop",
+    sourceType: "model",
+    fileName: "model.glb",
+    url: "blob:https://example.test/transient",
+    assetSource: "local",
+    modelFormat: "glb",
+  });
+
+  expect(isCloudDirectorProjectReady(project)).toBe(false);
+
+  project.assets[0].storageKey = "user:tenant:model";
+  project.assets[0].url = "director-asset://local/user%3Atenant%3Amodel";
+  expect(isCloudDirectorProjectReady(project)).toBe(true);
+});
+
+it("rejects mismatched local storage references from cloud autosave", () => {
+  const project = createDefaultDirectorProject();
+  project.animationAssets = [{
+    id: "walk",
+    name: "Walk",
+    fileName: "walk.glb",
+    url: "director-asset://local/user%3Atenant%3Aother",
+    modelFormat: "glb",
+    storageKey: "user:tenant:walk",
+    rigProfile: "mixamo",
+    clips: [],
+  }];
+
+  expect(isCloudDirectorProjectReady(project)).toBe(false);
 });
 
 it("keeps importing legacy bare project JSON", () => {

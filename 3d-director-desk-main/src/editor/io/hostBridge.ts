@@ -17,6 +17,7 @@ import { requestReferenceVideoExport } from "./referenceVideoExport";
 import {
   createCloudDirectorProjectDocument,
   getDirectorProjectFingerprint,
+  isCloudDirectorProjectReady,
   parseDirectorProjectDocument,
 } from "./projectDocument";
 import { listDirectorPluginResults, submitDirectorPluginResult } from "./pluginResultRegistry";
@@ -397,6 +398,7 @@ export function initDirectorDeskHostBridge() {
   window.addEventListener("message", handleHostMessage);
   clearProjectSubscription = useDirectorStore.subscribe((state, previousState) => {
     if (!cloudSessionActive || suppressProjectMessage || state.project === previousState.project) return;
+    if (!isCloudDirectorProjectReady(state.project)) return;
     postDirectorDeskMessageToHost({
       type: "storyai:director-desk-project-changed",
       payload: { document: createCloudDirectorProjectDocument(state.project) },

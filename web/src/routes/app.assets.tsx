@@ -24,6 +24,10 @@ import type { DragEvent, FormEvent } from 'react'
 import { AppShell } from '#/components/app-shell'
 import { ConfirmDialog } from '#/components/confirm-dialog'
 import { api } from '#/lib/api'
+import {
+  optimisticallyRemoveAssets,
+  restoreAssetCaches,
+} from '#/lib/asset-cache'
 import type { Asset, AssetFolder, AssetPage } from '#/lib/api'
 
 export const Route = createFileRoute('/app/assets')({ component: AssetsPage })
@@ -209,19 +213,7 @@ function AssetsPage() {
 
   async function bulkDelete() {
     const ids = [...selected]
-    await queryClient.cancelQueries({ queryKey })
-    const previous = queryClient.getQueryData<AssetPages>(queryKey)
-    queryClient.setQueryData<AssetPages>(queryKey, (current) =>
-      current
-        ? {
-            ...current,
-            pages: current.pages.map((page) => ({
-              ...page,
-              items: page.items.filter((asset) => !selected.has(asset.id)),
-            })),
-          }
-        : current,
-    )
+    const previousAssets = await optimisticallyRemoveAssets(queryClient, ids)
     for (let offset = 0; offset < ids.length; offset += 100) {
       try {
         await api('/api/v1/assets/deletions', {
@@ -229,7 +221,7 @@ function AssetsPage() {
           body: JSON.stringify({ asset_ids: ids.slice(offset, offset + 100) }),
         })
       } catch (error) {
-        if (previous) queryClient.setQueryData(queryKey, previous)
+        restoreAssetCaches(queryClient, previousAssets, ids.slice(0, offset))
         setSelected(new Set(ids.slice(offset)))
         throw error
       }
@@ -254,6 +246,7 @@ function AssetsPage() {
     if (asset) moveAsset(asset, targetFolderID)
   }
   async function deleteAsset(id: string) {
+    const previousAssets = await optimisticallyRemoveAssets(queryClient, [id])
     try {
       await api(`/api/v1/assets/${id}`, { method: 'DELETE' })
       await Promise.all([
@@ -261,8 +254,9 @@ function AssetsPage() {
         queryClient.invalidateQueries({ queryKey: ['generations'] }),
         queryClient.invalidateQueries({ queryKey: ['asset-folders'] }),
       ])
-      setNotice('图片已进入永久删除流程')
+      setNotice('已从灵感墙移除，正在永久删除')
     } catch (error) {
+      restoreAssetCaches(queryClient, previousAssets)
       setNotice(error instanceof Error ? error.message : '删除失败')
     }
   }

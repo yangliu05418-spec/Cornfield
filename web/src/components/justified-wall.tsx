@@ -120,6 +120,11 @@ export function buildWallItems(
   assets: Asset[],
   batches: GenerationBatch[],
 ): WallItem[] {
+  type TimelineItem = {
+    item: WallItem
+    createdAt: number
+    sequence: number
+  }
   const outputAssets = new Map<string, Asset>()
   for (const asset of assets) {
     if (asset.job_id && typeof asset.output_index === 'number') {
@@ -128,8 +133,10 @@ export function buildWallItems(
   }
 
   const claimedAssets = new Set<string>()
-  const slots: WallItem[] = []
+  const timeline: TimelineItem[] = []
+  let sequence = 0
   for (const batch of batches) {
+    const batchCreatedAt = Date.parse(batch.created_at) || 0
     const [ratioWidth, ratioHeight] = batch.aspect_ratio.split(':').map(Number)
     for (const job of batch.jobs) {
       if (job.dismissed_at) continue
@@ -140,46 +147,65 @@ export function buildWallItems(
         const asset = outputAssets.get(slotID)
         if (asset) {
           claimedAssets.add(asset.id)
-          slots.push({
-            id: slotID,
-            width: asset.width,
-            height: asset.height,
-            asset,
-            jobID: job.id,
-            batchID: batch.id,
-            outputIndex: output,
+          timeline.push({
+            createdAt: batchCreatedAt,
+            sequence: sequence++,
+            item: {
+              id: slotID,
+              width: asset.width,
+              height: asset.height,
+              asset,
+              jobID: job.id,
+              batchID: batch.id,
+              outputIndex: output,
+            },
           })
           continue
         }
         if (job.status === 'succeeded') continue
         const terminal = terminalJobStatuses.has(job.status)
-        slots.push({
-          id: slotID,
-          width: ratioWidth || 1,
-          height: ratioHeight || 1,
-          jobID: job.id,
-          batchID: batch.id,
-          modelID: batch.model_id,
-          status: job.status,
-          prompt: batch.prompt,
-          errorMessage: job.error_message,
-          errorCode: job.error_code,
-          outputIndex: output,
-          cancellable: !terminal && !batch.id.startsWith('optimistic:'),
+        timeline.push({
+          createdAt: batchCreatedAt,
+          sequence: sequence++,
+          item: {
+            id: slotID,
+            width: ratioWidth || 1,
+            height: ratioHeight || 1,
+            jobID: job.id,
+            batchID: batch.id,
+            modelID: batch.model_id,
+            status: job.status,
+            prompt: batch.prompt,
+            errorMessage: job.error_message,
+            errorCode: job.error_code,
+            outputIndex: output,
+            cancellable: !terminal && !batch.id.startsWith('optimistic:'),
+          },
         })
       }
     }
   }
 
-  const remainingAssets = assets
-    .filter((asset) => !claimedAssets.has(asset.id))
-    .map((asset) => ({
-      id: asset.id,
-      width: asset.width,
-      height: asset.height,
-      asset,
-    }))
-  return [...slots, ...remainingAssets]
+  for (const asset of assets) {
+    if (claimedAssets.has(asset.id)) continue
+    timeline.push({
+      createdAt: Date.parse(asset.created_at) || 0,
+      sequence: sequence++,
+      item: {
+        id: asset.id,
+        width: asset.width,
+        height: asset.height,
+        asset,
+      },
+    })
+  }
+
+  return timeline
+    .sort(
+      (left, right) =>
+        right.createdAt - left.createdAt || left.sequence - right.sequence,
+    )
+    .map(({ item }) => item)
 }
 
 export const JustifiedWall = forwardRef<
@@ -208,6 +234,9 @@ export const JustifiedWall = forwardRef<
     viewportOffsetY: number
   } | null>(null)
   const knownAssetIDs = useRef(new Set<string>())
+  const visibleAssetIDs = useRef(
+    new Set(items.flatMap((item) => (item.asset ? [item.asset.id] : []))),
+  )
   const [width, setWidth] = useState(0)
   const [preview, setPreview] = useState<Asset | null>(null)
   const [renderItems, setRenderItems] = useState(items)
@@ -270,6 +299,24 @@ export const JustifiedWall = forwardRef<
     const incomingAssetIDs = new Set(
       items.flatMap((item) => (item.asset ? [item.asset.id] : [])),
     )
+    const removedAssetIDs = new Set(
+      [...visibleAssetIDs.current].filter((id) => !incomingAssetIDs.has(id)),
+    )
+    visibleAssetIDs.current = incomingAssetIDs
+    if (removedAssetIDs.size > 0) {
+      const keepItem = (item: WallItem) =>
+        !item.asset || !removedAssetIDs.has(item.asset.id)
+      setRenderItems((current) => current.filter(keepItem))
+      setPendingItems((current) =>
+        current ? current.filter(keepItem) : current,
+      )
+      setPreview((current) =>
+        current && removedAssetIDs.has(current.id) ? null : current,
+      )
+      knownAssetIDs.current = new Set(
+        [...knownAssetIDs.current].filter((id) => !removedAssetIDs.has(id)),
+      )
+    }
     const newAssets = [...incomingAssetIDs].filter(
       (id) => !knownAssetIDs.current.has(id),
     )

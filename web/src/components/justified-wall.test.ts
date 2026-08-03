@@ -147,4 +147,76 @@ describe('buildWallItems', () => {
 
     expect(buildWallItems([], [batch])).toEqual([])
   })
+
+  it('places a newer standalone upload before older generation output', () => {
+    const batch = {
+      id: 'batch',
+      prompt: 'test',
+      aspect_ratio: '1:1',
+      status: 'succeeded',
+      created_at: '2026-08-01T10:00:00Z',
+      jobs: [
+        {
+          id: 'job',
+          status: 'succeeded',
+          expected_outputs: 1,
+          draw_index: 0,
+        },
+      ],
+    } as unknown as GenerationBatch
+    const generated = {
+      id: 'generated',
+      width: 1024,
+      height: 1024,
+      job_id: 'job',
+      output_index: 0,
+      created_at: '2026-08-01T10:01:00Z',
+    } as Asset
+    const directorCapture = {
+      id: 'capture',
+      width: 1024,
+      height: 576,
+      created_at: '2026-08-01T11:00:00Z',
+    } as Asset
+
+    const items = buildWallItems([generated, directorCapture], [batch])
+
+    expect(items.map((item) => item.asset?.id)).toEqual([
+      'capture',
+      'generated',
+    ])
+  })
+
+  it('keeps output order stable within the same generation batch', () => {
+    const batch = {
+      id: 'batch',
+      prompt: 'test',
+      aspect_ratio: '1:1',
+      status: 'succeeded',
+      created_at: '2026-08-01T10:00:00Z',
+      jobs: [
+        {
+          id: 'job',
+          status: 'succeeded',
+          expected_outputs: 2,
+          draw_index: 0,
+        },
+      ],
+    } as unknown as GenerationBatch
+    const assets = [1, 0].map(
+      (outputIndex) =>
+        ({
+          id: `asset-${outputIndex}`,
+          width: 1024,
+          height: 1024,
+          job_id: 'job',
+          output_index: outputIndex,
+          created_at: '2026-08-01T10:01:00Z',
+        }) as Asset,
+    )
+
+    const items = buildWallItems(assets, [batch])
+
+    expect(items.map((item) => item.outputIndex)).toEqual([0, 1])
+  })
 })

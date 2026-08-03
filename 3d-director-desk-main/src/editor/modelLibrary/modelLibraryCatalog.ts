@@ -253,6 +253,26 @@ export const MIXAMO_CHARACTER_MODELS: ModelLibraryItem[] = LOCAL_MIXAMO_CHARACTE
       characterRigProfile: "mixamo",
       characterImportReadiness: "ready",
       characterOrientationCorrection: [0, 0, 0],
+    }, {
+      id: "mixamo-character:xbot",
+      kind: "character",
+      categoryId: "characters",
+      fileName: "xbot.glb",
+      name: "XBot（Mixamo）",
+      url: localMixamoAssetUrl("characters/xbot.glb"),
+      characterRigProfile: "mixamo",
+      characterImportReadiness: "ready",
+      characterOrientationCorrection: [0, 0, 0],
+    }, {
+      id: "mixamo-character:soldier",
+      kind: "character",
+      categoryId: "characters",
+      fileName: "soldier.glb",
+      name: "Soldier（Mixamo）",
+      url: localMixamoAssetUrl("characters/soldier.glb"),
+      characterRigProfile: "mixamo",
+      characterImportReadiness: "ready",
+      characterOrientationCorrection: [0, 0, 0],
     }]
   : [];
 

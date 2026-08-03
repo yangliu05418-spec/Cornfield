@@ -3,6 +3,7 @@ package httpapi
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 
@@ -120,6 +121,61 @@ func TestDirectorDocumentAcceptsBuiltInLibraryAsset(t *testing.T) {
 	}})
 	if err := validateDirectorDocument(document, ownerID); err != nil {
 		t.Fatalf("built-in library asset was rejected: %v", err)
+	}
+}
+
+func TestDirectorDocumentAcceptsSameOriginLibraryAssets(t *testing.T) {
+	t.Parallel()
+	ownerID := uuid.MustParse("5d4427a8-57e4-4f37-bf15-caf6d2fc5e64")
+	for _, assetURL := range []string{
+		"./characters/essential/adult-female/adult-female-lod.glb",
+		"./objects/extra/Back%20Pack/Back_Pack.glb",
+		"/director-desk/local-assets/mixamo/characters/xbot.glb",
+	} {
+		document := directorDocumentWithAssets(t, []map[string]any{{
+			"id": "library-asset", "fileName": "asset.glb", "assetSource": "library", "url": assetURL,
+		}})
+		if err := validateDirectorDocument(document, ownerID); err != nil {
+			t.Fatalf("same-origin asset %q was rejected: %v", assetURL, err)
+		}
+	}
+}
+
+func TestDirectorDocumentRejectsUnsafeStaticPaths(t *testing.T) {
+	t.Parallel()
+	ownerID := uuid.MustParse("5d4427a8-57e4-4f37-bf15-caf6d2fc5e64")
+	for _, assetURL := range []string{
+		"./../private/model.glb",
+		"./%2e%2e/private/model.glb",
+		"./models\\asset.glb",
+		"./models/asset.glb?token=secret",
+		"//example.test/model.glb",
+	} {
+		document := directorDocumentWithAssets(t, []map[string]any{{
+			"id": "library-asset", "fileName": "asset.glb", "assetSource": "library", "url": assetURL,
+		}})
+		if !errors.Is(validateDirectorDocument(document, ownerID), errInvalidDirectorAssetURL) {
+			t.Fatalf("unsafe asset %q was accepted", assetURL)
+		}
+	}
+}
+
+func TestDirectorDocumentValidationMessages(t *testing.T) {
+	t.Parallel()
+	for _, test := range []struct {
+		err     error
+		code    string
+		message string
+	}{
+		{errDirectorDocumentTooLarge, "DIRECTOR_DOCUMENT_TOO_LARGE", "导演台工程不能超过 4 MiB"},
+		{errInvalidDirectorJSON, "INVALID_DIRECTOR_JSON", "导演台工程不是有效的 JSON 对象"},
+		{errInvalidDirectorAssetURL, "INVALID_DIRECTOR_ASSET_URL", "工程包含不受支持的模型路径，请移除该模型后重试"},
+		{errInvalidDirectorDocument, "INVALID_DIRECTOR_DOCUMENT", "导演台工程结构无效，请下载工程文件后重试"},
+	} {
+		code, message := directorDocumentValidationMessage(test.err)
+		if code != test.code || message != test.message {
+			t.Fatalf("validation message = (%q,%q), want (%q,%q)", code, message, test.code, test.message)
+		}
 	}
 }
 

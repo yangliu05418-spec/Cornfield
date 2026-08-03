@@ -21,14 +21,17 @@ const (
 )
 
 var errInvalidDirectorDocument = errors.New("invalid director document")
+var errDirectorDocumentTooLarge = errors.New("director document too large")
+var errInvalidDirectorJSON = errors.New("invalid director json")
+var errInvalidDirectorAssetURL = errors.New("invalid director asset url")
 
 func validateDirectorDocument(document json.RawMessage, ownerID uuid.UUID) error {
 	if len(document) == 0 || len(document) > maxDirectorDocumentBytes {
-		return errInvalidDirectorDocument
+		return errDirectorDocumentTooLarge
 	}
 	var root any
 	if err := json.Unmarshal(document, &root); err != nil {
-		return errInvalidDirectorDocument
+		return errInvalidDirectorJSON
 	}
 	nodes := 0
 	if err := validateDirectorJSONValue(root, 0, &nodes, ""); err != nil {
@@ -67,7 +70,7 @@ func validateDirectorJSONValue(value any, depth int, nodes *int, key string) err
 		}
 		if strings.EqualFold(key, "url") || strings.HasSuffix(strings.ToLower(key), "url") {
 			if !validDirectorAssetURL(item) {
-				return errInvalidDirectorDocument
+				return errInvalidDirectorAssetURL
 			}
 		}
 	case []any:
@@ -162,7 +165,7 @@ func validateDirectorAsset(value any, ownerID uuid.UUID) error {
 	}
 	rawURL, ok := asset["url"].(string)
 	if !ok || !validDirectorAssetURL(rawURL) {
-		return errInvalidDirectorDocument
+		return errInvalidDirectorAssetURL
 	}
 	storageKey, _ := asset["storageKey"].(string)
 	const localPrefix = "director-asset://local/"
@@ -191,8 +194,8 @@ func validDirectorAssetURL(raw string) bool {
 	if value == "" {
 		return false
 	}
-	if strings.HasPrefix(value, "/") && !strings.HasPrefix(value, "//") {
-		return true
+	if strings.HasPrefix(value, "./") || (strings.HasPrefix(value, "/") && !strings.HasPrefix(value, "//")) {
+		return validDirectorStaticPath(value)
 	}
 	if strings.HasPrefix(value, "director-asset://local/") {
 		return len(value) > len("director-asset://local/")
@@ -202,6 +205,30 @@ func validDirectorAssetURL(raw string) bool {
 	}
 	parsed, err := url.Parse(value)
 	return err == nil && (parsed.Scheme == "https" || parsed.Scheme == "http") && parsed.Host != ""
+}
+
+func validDirectorStaticPath(value string) bool {
+	parsed, err := url.Parse(value)
+	if err != nil || parsed.Scheme != "" || parsed.Host != "" || parsed.RawQuery != "" || parsed.Fragment != "" || strings.Contains(parsed.Path, `\`) {
+		return false
+	}
+	pathValue := parsed.Path
+	if strings.HasPrefix(pathValue, "./") {
+		pathValue = strings.TrimPrefix(pathValue, "./")
+	} else if strings.HasPrefix(pathValue, "/") {
+		pathValue = strings.TrimPrefix(pathValue, "/")
+	} else {
+		return false
+	}
+	if pathValue == "" {
+		return false
+	}
+	for _, segment := range strings.Split(pathValue, "/") {
+		if segment == "" || segment == "." || segment == ".." {
+			return false
+		}
+	}
+	return true
 }
 
 func validDirectorIdentity(value map[string]any) bool {

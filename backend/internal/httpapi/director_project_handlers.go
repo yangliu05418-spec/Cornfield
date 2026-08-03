@@ -36,7 +36,12 @@ func decodeDirectorDocument(w http.ResponseWriter, r *http.Request, target any) 
 	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxDirectorDocumentBytes+4096))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(target); err != nil {
-		writeError(w, http.StatusBadRequest, "INVALID_DIRECTOR_DOCUMENT", "导演台工程格式不正确或超过 4 MiB", false, r)
+		var maxBytesError *http.MaxBytesError
+		if errors.As(err, &maxBytesError) {
+			writeError(w, http.StatusRequestEntityTooLarge, "DIRECTOR_DOCUMENT_TOO_LARGE", "导演台工程不能超过 4 MiB", false, r)
+		} else {
+			writeError(w, http.StatusBadRequest, "INVALID_DIRECTOR_JSON", "导演台工程不是有效的 JSON 对象", false, r)
+		}
 		return false
 	}
 	var trailing any
@@ -194,8 +199,13 @@ func (s *Server) saveDirectorProject(w http.ResponseWriter, r *http.Request) {
 	if !decodeDirectorDocument(w, r, &input) {
 		return
 	}
-	if input.ExpectedRevision < 0 || validateDirectorDocument(input.Document, currentSession(r).UserID) != nil {
-		writeError(w, http.StatusUnprocessableEntity, "INVALID_DIRECTOR_DOCUMENT", "导演台工程必须是有效且不超过 4 MiB 的 JSON 对象", false, r)
+	if input.ExpectedRevision < 0 {
+		writeError(w, http.StatusUnprocessableEntity, "INVALID_DIRECTOR_REVISION", "工程版本号无效", false, r)
+		return
+	}
+	if err := validateDirectorDocument(input.Document, currentSession(r).UserID); err != nil {
+		code, message := directorDocumentValidationMessage(err)
+		writeError(w, http.StatusUnprocessableEntity, code, message, false, r)
 		return
 	}
 	var revision int64
@@ -219,6 +229,19 @@ func (s *Server) saveDirectorProject(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"revision": revision})
+}
+
+func directorDocumentValidationMessage(err error) (string, string) {
+	switch {
+	case errors.Is(err, errDirectorDocumentTooLarge):
+		return "DIRECTOR_DOCUMENT_TOO_LARGE", "导演台工程不能超过 4 MiB"
+	case errors.Is(err, errInvalidDirectorJSON):
+		return "INVALID_DIRECTOR_JSON", "导演台工程不是有效的 JSON 对象"
+	case errors.Is(err, errInvalidDirectorAssetURL):
+		return "INVALID_DIRECTOR_ASSET_URL", "工程包含不受支持的模型路径，请移除该模型后重试"
+	default:
+		return "INVALID_DIRECTOR_DOCUMENT", "导演台工程结构无效，请下载工程文件后重试"
+	}
 }
 
 func (s *Server) resetDirectorProject(w http.ResponseWriter, r *http.Request) {

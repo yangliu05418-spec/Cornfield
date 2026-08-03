@@ -1283,17 +1283,17 @@
 
 /* Reference-led editor chrome: floating tool windows around an uninterrupted stage. */
 .app-shell {
-  --bg-rgb: 5 6 8;
-  --surface-rgb: 29 30 34;
-  --surface-hover-rgb: 38 40 45;
-  --panel-rgb: 18 19 22;
-  --field-rgb: 27 28 32;
-  --border-rgb: 55 57 63;
-  --text-rgb: 239 240 242;
-  --text-muted-rgb: 153 156 165;
-  --text-dim-rgb: 101 104 113;
-  --accent-rgb: 77 143 248;
-  --accent-hover-rgb: 105 163 250;
+  --bg-rgb: 15 17 19;
+  --surface-rgb: 28 30 32;
+  --surface-hover-rgb: 35 38 42;
+  --panel-rgb: 28 30 32;
+  --field-rgb: 15 17 19;
+  --border-rgb: 46 48 49;
+  --text-rgb: 247 247 248;
+  --text-muted-rgb: 137 138 139;
+  --text-dim-rgb: 96 98 100;
+  --accent-rgb: 209 254 23;
+  --accent-hover-rgb: 190 231 19;
   --overlay-rgb: 0 0 0;
   --left-sidebar-width: 230px;
   --right-sidebar-width: 230px;
@@ -1304,7 +1304,7 @@
   display: block;
   color-scheme: dark;
   background: rgb(var(--bg-rgb));
-  font-family: "Avenir Next", "PingFang SC", "Microsoft YaHei UI", sans-serif;
+  font-family: "Space Grotesk", "PingFang SC", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
 }
 
 .app-shell::before {
@@ -1437,8 +1437,8 @@
 
 .app-shell .mode-toggle-button[aria-pressed="true"] {
   border-color: transparent;
-  color: #ffffff;
-  background: rgb(37 137 255);
+  color: rgb(15 17 19);
+  background: rgb(var(--accent-rgb));
 }
 
 .app-shell .director-shell-fullbleed {
@@ -1516,7 +1516,7 @@
   height: 26px;
   border: 0;
   border-radius: 8px;
-  color: #bcd7ff;
+  color: rgb(var(--accent-rgb));
   background: rgb(var(--accent-rgb) / 0.12);
 }
 
@@ -1573,7 +1573,7 @@
 }
 
 .app-shell .object-row[aria-selected="true"] {
-  color: #dceaff;
+  color: rgb(var(--accent-rgb));
   background: rgb(var(--accent-rgb) / 0.16);
   box-shadow: inset 2px 0 0 rgb(var(--accent-rgb));
 }
@@ -1783,8 +1783,8 @@
 
 .app-shell .viewport-toolbar-button.ui-icon-button.is-active,
 .app-shell .viewport-toolbar-button.ui-icon-button[aria-pressed="true"] {
-  color: #dceaff;
-  background: rgb(37 137 255);
+  color: rgb(15 17 19);
+  background: rgb(var(--accent-rgb));
   box-shadow: none;
 }
 

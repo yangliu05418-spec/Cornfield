@@ -5,7 +5,7 @@ import { resolve } from "node:path";
 
 const localGuoAssetsAvailable = existsSync(resolve(process.cwd(), "public/local-assets/guo-3d-assets"));
 const appVersion = JSON.parse(readFileSync(resolve(process.cwd(), "package.json"), "utf8")).version ?? "0.0.0";
-const requiredMixamoCharacters = ["camille.fbx", "xbot.glb", "soldier.glb"];
+const requiredMixamoCharacters = ["camille.fbx", "robot-expressive.glb", "xbot.glb", "soldier.glb"];
 const localMixamoCharacterAvailable = requiredMixamoCharacters.every((fileName) =>
   existsSync(resolve(process.cwd(), "public/local-assets/mixamo/characters", fileName))
 );

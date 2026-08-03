@@ -912,7 +912,7 @@
 
 .motion-object-track-label svg {
   flex: 0 0 auto;
-  color: #7dd3fc;
+  color: rgb(var(--accent-rgb));
 }
 
 .motion-object-track > small {
@@ -938,7 +938,7 @@
   height: 22px;
   border: 1px solid rgb(125 211 252 / 0.34);
   border-radius: 6px;
-  color: #7dd3fc;
+  color: rgb(var(--accent-rgb));
   background: rgb(125 211 252 / 0.07);
   font-size: 9px;
 }
@@ -956,7 +956,7 @@
   height: 27px;
   border: 1px solid rgb(125 211 252 / 0.32);
   border-radius: 7px;
-  color: #7dd3fc;
+  color: rgb(var(--accent-rgb));
   background: rgb(125 211 252 / 0.07);
   font-size: 9px;
   white-space: nowrap;

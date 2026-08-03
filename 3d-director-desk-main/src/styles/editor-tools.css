@@ -87,7 +87,7 @@
 
 .model-library-grid {
   display: grid;
-  grid-template-columns: repeat(6, 66px);
+  grid-template-columns: repeat(auto-fill, minmax(66px, 1fr));
   grid-auto-rows: max-content;
   align-content: start;
   column-gap: 10px;
@@ -96,6 +96,7 @@
   padding: 20px;
   overflow-x: hidden;
   overflow-y: auto;
+  justify-items: center;
 }
 
 .model-library-grid::-webkit-scrollbar {

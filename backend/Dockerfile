@@ -28,7 +28,7 @@ ENTRYPOINT ["/worker"]
 # Use the exact PostgreSQL server distribution for psql/pg_dump/pg_restore.
 # Debian bookworm's unversioned postgresql-client currently resolves to an
 # older major and is not a safe restore or migration client for PostgreSQL 18.
-FROM postgres:18.4-bookworm@sha256:1961f96e6029a02c3812d7cb329a3b03a3ac2bb067058dec17b0f5596aca9296 AS tools
+FROM postgres:18.4-bookworm@sha256:882236b897e39051d2368c5ccc6cda944904723506b2dfc97f2a8f5bc9afa382 AS tools
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates && rm -rf /var/lib/apt/lists/* && \
     useradd --uid 65532 --no-create-home --shell /usr/sbin/nologin studio
 COPY --from=build /out/migrate /out/modelctl /out/adminctl /out/canaryctl /usr/local/bin/

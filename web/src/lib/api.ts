@@ -18,6 +18,7 @@ export type Model = {
     aspect_ratios_by_resolution?: Record<string, string[]>
     resolutions: string[]
     qualities?: string[]
+    prompt_optimization_modes?: ('standard' | 'fast')[]
     midjourney_versions?: string[]
     max_reference_images: number
     max_reference_bytes: number
@@ -105,7 +106,10 @@ export type MidjourneyOptions = {
 
 export type GenerationOptions = {
   midjourney?: MidjourneyOptions
-  image?: { quality: 'auto' | 'low' | 'medium' | 'high' }
+  image?: {
+    quality?: 'auto' | 'low' | 'medium' | 'high'
+    prompt_optimization_mode?: 'standard' | 'fast'
+  }
 }
 
 export type PromptRefineFinding = {

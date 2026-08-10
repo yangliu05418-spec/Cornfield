@@ -47,6 +47,7 @@ type Capabilities struct {
 	AspectRatiosByResolution map[string][]string `yaml:"aspect_ratios_by_resolution,omitempty" json:"aspect_ratios_by_resolution,omitempty"`
 	Resolutions              []string            `yaml:"resolutions" json:"resolutions"`
 	Qualities                []string            `yaml:"qualities,omitempty" json:"qualities,omitempty"`
+	PromptOptimizationModes  []string            `yaml:"prompt_optimization_modes,omitempty" json:"prompt_optimization_modes,omitempty"`
 	MaxReferenceImages       int                 `yaml:"max_reference_images" json:"max_reference_images"`
 	MaxReferenceBytes        int64               `yaml:"max_reference_bytes" json:"max_reference_bytes"`
 	DrawCount                DrawCount           `yaml:"draw_count" json:"draw_count"`
@@ -379,6 +380,9 @@ func validateCapabilities(m Model) error {
 	if duplicateOrBlank(capabilities.Qualities) {
 		return fmt.Errorf("model %s has blank or duplicate qualities", m.ID)
 	}
+	if duplicateOrBlank(capabilities.PromptOptimizationModes) {
+		return fmt.Errorf("model %s has blank or duplicate prompt optimization modes", m.ID)
+	}
 	if capabilities.MaxReferenceImages < 0 || capabilities.MaxReferenceImages > 16 {
 		return fmt.Errorf("model %s has invalid max_reference_images", m.ID)
 	}
@@ -431,6 +435,24 @@ func validateCapabilities(m Model) error {
 		if len(m.Policy.AllowedOutputHosts) == 0 {
 			return fmt.Errorf("model %s requires an output host allowlist", m.ID)
 		}
+	case "byteplus":
+		if !capabilities.TextToImage || !capabilities.ImageToImage || len(capabilities.AspectRatios) == 0 || len(capabilities.Resolutions) == 0 {
+			return fmt.Errorf("model %s requires BytePlus text, reference, aspect ratio, and resolution capabilities", m.ID)
+		}
+		if m.OutputsPerDraw != 1 || capabilities.MaxReferenceImages != 10 {
+			return fmt.Errorf("model %s must declare one BytePlus output and ten reference images", m.ID)
+		}
+		if len(capabilities.PromptOptimizationModes) != 2 || capabilities.PromptOptimizationModes[0] != "standard" || capabilities.PromptOptimizationModes[1] != "fast" {
+			return fmt.Errorf("model %s must declare BytePlus prompt optimization modes standard and fast", m.ID)
+		}
+		for _, parameter := range []string{"size", "input_references", "response_format", "output_format", "watermark", "prompt_optimization_mode"} {
+			if !has(parameter) {
+				return fmt.Errorf("model %s is missing BytePlus request parameter %q", m.ID, parameter)
+			}
+		}
+		if len(m.SizeOverrides) != len(capabilities.Resolutions) {
+			return fmt.Errorf("model %s must provide BytePlus size overrides for every resolution", m.ID)
+		}
 	case "legnext":
 		if len(m.Policy.AllowedOutputHosts) == 0 {
 			return fmt.Errorf("model %s requires an output host allowlist", m.ID)
@@ -447,6 +469,9 @@ func validateCapabilities(m Model) error {
 	default:
 		return fmt.Errorf("model %s uses unsupported provider %q", m.ID, m.Provider)
 	}
+	if m.Provider != "byteplus" && len(capabilities.PromptOptimizationModes) > 0 {
+		return fmt.Errorf("model %s declares prompt optimization modes for an unsupported provider", m.ID)
+	}
 	return nil
 }
 
@@ -454,8 +479,8 @@ func validateSizeOverrides(m Model, has func(string) bool) error {
 	if len(m.SizeOverrides) == 0 {
 		return nil
 	}
-	if m.Provider != "openrouter" || !has("size") {
-		return fmt.Errorf("model %s declares size_overrides without OpenRouter size", m.ID)
+	if (m.Provider != "openrouter" && m.Provider != "byteplus") || !has("size") {
+		return fmt.Errorf("model %s declares size_overrides without a supported size parameter", m.ID)
 	}
 	resolutions := make(map[string]struct{}, len(m.Capabilities.Resolutions))
 	for _, resolution := range m.Capabilities.Resolutions {
@@ -483,11 +508,20 @@ func validateSizeOverrides(m Model, has func(string) bool) error {
 			if m.ProviderModel == "bytedance-seed/seedream-4.5" && int64(width)*int64(height) < 3_686_400 {
 				return fmt.Errorf("model %s explicit size %q is below Seedream's minimum pixel area", m.ID, size)
 			}
+			if m.Provider == "byteplus" {
+				area := int64(width) * int64(height)
+				if area < 921_600 || area > 4_624_220 {
+					return fmt.Errorf("model %s explicit size %q is outside BytePlus pixel limits", m.ID, size)
+				}
+			}
 			ratioParts := strings.Split(ratio, ":")
 			ratioWidth, _ := strconv.Atoi(ratioParts[0])
 			ratioHeight, _ := strconv.Atoi(ratioParts[1])
 			expected := float64(ratioWidth) / float64(ratioHeight)
 			actual := float64(width) / float64(height)
+			if m.Provider == "byteplus" && (actual < 1.0/16.0 || actual > 16.0) {
+				return fmt.Errorf("model %s explicit size %q is outside BytePlus aspect ratio limits", m.ID, size)
+			}
 			if math.Abs(actual-expected)/expected > 0.02 {
 				return fmt.Errorf("model %s explicit size %q differs from aspect ratio %s by more than 2%%", m.ID, size, ratio)
 			}

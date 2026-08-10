@@ -30,21 +30,39 @@ type generationRequest struct {
 	Options            provider.GenerationOptions `json:"options"`
 }
 
-func normalizeGenerationOptions(modelID, providerID string, versions, qualities []string, inputCount int, input *generationRequest) error {
+func normalizeGenerationOptions(modelID, providerID string, versions, qualities, promptOptimizationModes []string, inputCount int, input *generationRequest) error {
 	if providerID != "legnext" {
 		if input.Options.Midjourney != nil {
 			return errors.New("midjourney options are not supported by this model")
 		}
-		if len(qualities) == 0 {
-			if input.Options.Image != nil {
+		if input.Options.Image == nil && (len(qualities) > 0 || len(promptOptimizationModes) > 0) {
+			input.Options.Image = &provider.ImageOptions{}
+		}
+		if input.Options.Image != nil {
+			if len(qualities) == 0 && input.Options.Image.Quality != "" {
 				return errors.New("image quality is not supported by this model")
 			}
-		} else {
-			if input.Options.Image == nil {
-				input.Options.Image = &provider.ImageOptions{Quality: qualities[0]}
+			if len(qualities) > 0 {
+				if input.Options.Image.Quality == "" {
+					input.Options.Image.Quality = qualities[0]
+				}
+				if !slices.Contains(qualities, input.Options.Image.Quality) {
+					return errors.New("image quality is outside the supported range")
+				}
 			}
-			if !slices.Contains(qualities, input.Options.Image.Quality) {
-				return errors.New("image quality is outside the supported range")
+			if len(promptOptimizationModes) == 0 && input.Options.Image.PromptOptimizationMode != "" {
+				return errors.New("prompt optimization is not supported by this model")
+			}
+			if len(promptOptimizationModes) > 0 {
+				if input.Options.Image.PromptOptimizationMode == "" {
+					input.Options.Image.PromptOptimizationMode = promptOptimizationModes[0]
+				}
+				if !slices.Contains(promptOptimizationModes, input.Options.Image.PromptOptimizationMode) {
+					return errors.New("prompt optimization is outside the supported range")
+				}
+			}
+			if len(qualities) == 0 && len(promptOptimizationModes) == 0 {
+				return errors.New("image options are not supported by this model")
 			}
 		}
 		if input.AspectRatio == "" {
@@ -478,7 +496,7 @@ func (s *Server) createGeneration(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	promptLength := utf8.RuneCountInString(input.Prompt)
-	if err := normalizeGenerationOptions(model.ID, model.Provider, model.Capabilities.MidjourneyVersions, model.Capabilities.Qualities, len(input.InputAssetIDs), &input); err != nil {
+	if err := normalizeGenerationOptions(model.ID, model.Provider, model.Capabilities.MidjourneyVersions, model.Capabilities.Qualities, model.Capabilities.PromptOptimizationModes, len(input.InputAssetIDs), &input); err != nil {
 		writeError(w, http.StatusUnprocessableEntity, "CAPABILITY_INVALID", err.Error(), false, r)
 		return
 	}

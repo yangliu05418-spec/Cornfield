@@ -28,7 +28,8 @@ type GenerationOptions struct {
 }
 
 type ImageOptions struct {
-	Quality string `json:"quality,omitempty"`
+	Quality                string `json:"quality,omitempty"`
+	PromptOptimizationMode string `json:"prompt_optimization_mode,omitempty"`
 }
 
 type MidjourneyOptions struct {

@@ -22,6 +22,7 @@ type Config struct {
 	LegnextAPIKey            string
 	OpenRouterAPIKey         string
 	BFLAPIKey                string
+	BytePlusAPIKey           string
 	ProviderCallbackSecret   string
 	ProviderURLSigningSecret string
 	ProviderMode             string
@@ -72,6 +73,9 @@ func load(requireProviderKeys bool) (Config, error) {
 			return Config{}, err
 		}
 		if cfg.BFLAPIKey, err = secret("BFL_API_KEY"); err != nil {
+			return Config{}, err
+		}
+		if cfg.BytePlusAPIKey, err = secret("BYTEPLUS_API_KEY"); err != nil {
 			return Config{}, err
 		}
 	}
@@ -170,6 +174,7 @@ func (c Config) validate(requireProviderKeys bool) error {
 			struct{ name, value string }{name: "LEGNEXT_API_KEY", value: c.LegnextAPIKey},
 			struct{ name, value string }{name: "OPENROUTER_API_KEY", value: c.OpenRouterAPIKey},
 			struct{ name, value string }{name: "BFL_API_KEY", value: c.BFLAPIKey},
+			struct{ name, value string }{name: "BYTEPLUS_API_KEY", value: c.BytePlusAPIKey},
 		)
 	}
 	secrets = append(secrets,

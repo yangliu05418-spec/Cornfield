@@ -81,10 +81,12 @@ func main() {
 		adapters["legnext"] = provider.Mock{}
 		adapters["openrouter"] = provider.Mock{}
 		adapters["bfl"] = provider.Mock{}
+		adapters["byteplus"] = provider.Mock{}
 	} else {
 		adapters["legnext"] = provider.NewLegnext(cfg.LegnextAPIKey)
 		adapters["openrouter"] = provider.NewOpenRouterWithSubmitTimeout(cfg.OpenRouterAPIKey, cfg.PublicURL, maxSubmitTimeout)
 		adapters["bfl"] = provider.NewBFL(cfg.BFLAPIKey)
+		adapters["byteplus"] = provider.NewBytePlusWithSubmitTimeout(cfg.BytePlusAPIKey, maxSubmitTimeout)
 	}
 	downloadClient := safehttp.NewDownloadClient(90 * time.Second)
 	generateWorker := &studioWorker.GenerateWorker{

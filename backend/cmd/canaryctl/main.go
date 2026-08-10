@@ -98,38 +98,40 @@ type generationBatch struct {
 }
 
 type canaryCase struct {
-	Key          string
-	Model        modelconfig.Model
-	Revision     string
-	Mode         string
-	AspectRatio  string
-	Resolution   string
-	Quality      string
-	ReferenceID  *uuid.UUID
-	ExpectedSize string
-	Prompt       string
-	PromptSHA256 string
-	Midjourney   *provider.MidjourneyOptions
+	Key                    string
+	Model                  modelconfig.Model
+	Revision               string
+	Mode                   string
+	AspectRatio            string
+	Resolution             string
+	Quality                string
+	PromptOptimizationMode string
+	ReferenceIDs           []uuid.UUID
+	ExpectedSize           string
+	Prompt                 string
+	PromptSHA256           string
+	Midjourney             *provider.MidjourneyOptions
 }
 
 type caseResult struct {
-	Key              string             `json:"key"`
-	ModelID          string             `json:"model_id"`
-	Mode             string             `json:"mode"`
-	AspectRatio      string             `json:"aspect_ratio"`
-	Resolution       string             `json:"resolution"`
-	Quality          string             `json:"quality,omitempty"`
-	PromptSHA256     string             `json:"prompt_sha256"`
-	BatchID          *uuid.UUID         `json:"batch_id,omitempty"`
-	Status           string             `json:"status"`
-	ErrorCode        string             `json:"error_code,omitempty"`
-	ErrorMessage     string             `json:"error_message,omitempty"`
-	ExpectedOutputs  int                `json:"expected_outputs"`
-	CompletedOutputs int                `json:"completed_outputs"`
-	Outputs          []generationOutput `json:"outputs,omitempty"`
-	DurationMS       int64              `json:"duration_ms"`
-	StartedAt        time.Time          `json:"started_at"`
-	CompletedAt      time.Time          `json:"completed_at"`
+	Key                    string             `json:"key"`
+	ModelID                string             `json:"model_id"`
+	Mode                   string             `json:"mode"`
+	AspectRatio            string             `json:"aspect_ratio"`
+	Resolution             string             `json:"resolution"`
+	Quality                string             `json:"quality,omitempty"`
+	PromptOptimizationMode string             `json:"prompt_optimization_mode,omitempty"`
+	PromptSHA256           string             `json:"prompt_sha256"`
+	BatchID                *uuid.UUID         `json:"batch_id,omitempty"`
+	Status                 string             `json:"status"`
+	ErrorCode              string             `json:"error_code,omitempty"`
+	ErrorMessage           string             `json:"error_message,omitempty"`
+	ExpectedOutputs        int                `json:"expected_outputs"`
+	CompletedOutputs       int                `json:"completed_outputs"`
+	Outputs                []generationOutput `json:"outputs,omitempty"`
+	DurationMS             int64              `json:"duration_ms"`
+	StartedAt              time.Time          `json:"started_at"`
+	CompletedAt            time.Time          `json:"completed_at"`
 }
 
 type report struct {
@@ -165,12 +167,12 @@ func run() error {
 	flag.StringVar(&releaseSHA, "release", "", "deployed release commit SHA")
 	flag.StringVar(&configPath, "model-config", "./config/models.yaml", "deployed model catalog")
 	flag.StringVar(&reportPath, "report", "", "resumable JSON report path")
-	flag.StringVar(&profile, "profile", "matrix", "canary profile: matrix or launch")
+	flag.StringVar(&profile, "profile", "matrix", "canary profile: matrix, launch, or byteplus")
 	flag.BoolVar(&archiveOutput, "archive-output", true, "archive generated canary assets")
 	flag.BoolVar(&allowHTTP, "allow-http", false, "allow HTTP for isolated tests only")
 	flag.Parse()
-	if profile != "matrix" && profile != "launch" {
-		return errors.New("--profile must be matrix or launch")
+	if profile != "matrix" && profile != "launch" && profile != "byteplus" {
+		return errors.New("--profile must be matrix, launch, or byteplus")
 	}
 
 	if passwordFile == "" || releaseSHA == "" {
@@ -214,9 +216,17 @@ func run() error {
 	if err != nil {
 		return fmt.Errorf("create canary folder: %w", err)
 	}
-	referenceID, err := client.ensureReference(ctx, folderID)
-	if err != nil {
-		return fmt.Errorf("prepare reference image: %w", err)
+	referenceCount := 1
+	if profile == "byteplus" {
+		referenceCount = 10
+	}
+	referenceIDs := make([]uuid.UUID, 0, referenceCount)
+	for index := 0; index < referenceCount; index++ {
+		referenceID, referenceErr := client.ensureReference(ctx, folderID)
+		if referenceErr != nil {
+			return fmt.Errorf("prepare reference image %d: %w", index+1, referenceErr)
+		}
+		referenceIDs = append(referenceIDs, referenceID)
 	}
 	store, err := openReport(reportPath, releaseSHA, catalog.Hash, username)
 	if err != nil {
@@ -226,7 +236,7 @@ func run() error {
 	seed := deterministicSeed(releaseSHA)
 	allPassed := true
 	createPermits := newCreatePermitStream(ctx, 5*time.Second)
-	caseGroups := buildCanaryGroups(catalog, profile, releaseSHA, seed, referenceID)
+	caseGroups := buildCanaryGroups(catalog, profile, releaseSHA, seed, referenceIDs)
 	for _, cases := range caseGroups {
 		if err := runModel(ctx, client, store, folderID, archiveOutput, cases, createPermits); err != nil {
 			allPassed = false
@@ -249,23 +259,29 @@ func run() error {
 	return errors.New("canary incomplete or failed; resume with the same --report")
 }
 
-func buildCanaryGroups(catalog *modelconfig.Catalog, profile, release string, seed int64, referenceID uuid.UUID) [][]canaryCase {
+func buildCanaryGroups(catalog *modelconfig.Catalog, profile, release string, seed int64, referenceIDs []uuid.UUID) [][]canaryCase {
 	groups := make([][]canaryCase, 0)
 	for _, model := range catalog.Models {
 		if !model.Enabled {
+			continue
+		}
+		if profile == "byteplus" {
+			if model.ID == "byteplus-seedream-5-0-pro" {
+				groups = append(groups, buildBytePlusCases(model, catalog.Hash, release, seed, referenceIDs))
+			}
 			continue
 		}
 		if profile == "launch" {
 			var cases []canaryCase
 			switch model.ID {
 			case "legnext-midjourney":
-				cases = buildLaunchMidjourneyCases(model, catalog.Hash, seed, referenceID)
+				cases = buildLaunchMidjourneyCases(model, catalog.Hash, seed, referenceIDs[0])
 			case "openrouter-gemini-3-1-flash-image", "bfl-flux-2-max":
 				text := buildTextCases(model, catalog.Hash, release, seed)
 				if len(text) > 0 {
 					cases = append(cases, text[0])
 				}
-				cases = append(cases, buildImageCase(model, catalog.Hash, release, seed, referenceID))
+				cases = append(cases, buildImageCase(model, catalog.Hash, release, seed, referenceIDs[0]))
 			}
 			if len(cases) > 0 {
 				groups = append(groups, cases)
@@ -274,7 +290,7 @@ func buildCanaryGroups(catalog *modelconfig.Catalog, profile, release string, se
 		}
 		cases := buildTextCases(model, catalog.Hash, release, seed)
 		if model.Capabilities.ImageToImage {
-			cases = append(cases, buildImageCase(model, catalog.Hash, release, seed, referenceID))
+			cases = append(cases, buildImageCase(model, catalog.Hash, release, seed, referenceIDs[0]))
 		}
 		groups = append(groups, cases)
 	}
@@ -284,11 +300,15 @@ func buildCanaryGroups(catalog *modelconfig.Catalog, profile, release string, se
 func buildLaunchMidjourneyCases(model modelconfig.Model, revision string, seed int64, referenceID uuid.UUID) []canaryCase {
 	makeCase := func(name, resolution, ratio, prompt string, reference *uuid.UUID, raw, tile bool) canaryCase {
 		key := "launch|" + name
-		return canaryCase{
+		item := canaryCase{
 			Key: key, Model: model, Revision: revision, Mode: map[bool]string{true: "image", false: "text"}[reference != nil],
-			AspectRatio: ratio, Resolution: resolution, ReferenceID: reference, Prompt: prompt, PromptSHA256: hashText(prompt),
+			AspectRatio: ratio, Resolution: resolution, Prompt: prompt, PromptSHA256: hashText(prompt),
 			Midjourney: &provider.MidjourneyOptions{Version: "8.2", Resolution: strings.ToLower(resolution), Speed: "fast", Stylize: 100, Raw: raw, Tile: tile},
 		}
+		if reference != nil {
+			item.ReferenceIDs = []uuid.UUID{*reference}
+		}
+		return item
 	}
 	cases := make([]canaryCase, 0, 20)
 	for _, resolution := range []string{"SD", "HD"} {
@@ -538,6 +558,10 @@ func buildTextCases(model modelconfig.Model, revision, _ string, seed int64) []c
 				key := caseKey(model.ID, "text", resolution, ratio, quality)
 				prompt := randomPrompt(seed, key, false)
 				item := canaryCase{Key: key, Model: model, Revision: revision, Mode: "text", AspectRatio: ratio, Resolution: resolution, Quality: quality, Prompt: prompt, PromptSHA256: hashText(prompt)}
+				if modes := model.Capabilities.PromptOptimizationModes; len(modes) > 0 {
+					item.PromptOptimizationMode = modes[len(cases)%len(modes)]
+					item.Key += "|" + item.PromptOptimizationMode
+				}
 				if overrides := model.SizeOverrides[resolution]; overrides != nil {
 					item.ExpectedSize = overrides[ratio]
 				}
@@ -562,11 +586,40 @@ func buildImageCase(model modelconfig.Model, revision, _ string, seed int64, ref
 	}
 	key := caseKey(model.ID, "image", resolution, ratio, quality)
 	prompt := randomPrompt(seed, key, true)
-	item := canaryCase{Key: key, Model: model, Revision: revision, Mode: "image", AspectRatio: ratio, Resolution: resolution, Quality: quality, ReferenceID: &referenceID, Prompt: prompt, PromptSHA256: hashText(prompt)}
+	item := canaryCase{Key: key, Model: model, Revision: revision, Mode: "image", AspectRatio: ratio, Resolution: resolution, Quality: quality, ReferenceIDs: []uuid.UUID{referenceID}, Prompt: prompt, PromptSHA256: hashText(prompt)}
+	if modes := model.Capabilities.PromptOptimizationModes; len(modes) > 0 {
+		item.PromptOptimizationMode = modes[0]
+		item.Key += "|" + item.PromptOptimizationMode
+	}
 	if overrides := model.SizeOverrides[resolution]; overrides != nil {
 		item.ExpectedSize = overrides[ratio]
 	}
 	return item
+}
+
+func buildBytePlusCases(model modelconfig.Model, revision, release string, seed int64, referenceIDs []uuid.UUID) []canaryCase {
+	cases := buildTextCases(model, revision, release, seed)
+	for _, input := range []struct {
+		name       string
+		resolution string
+		ratio      string
+		mode       string
+		refs       int
+	}{
+		{name: "one-reference", resolution: "1K", ratio: "1:1", mode: "standard", refs: 1},
+		{name: "two-references", resolution: "1.5K", ratio: "4:3", mode: "fast", refs: 2},
+		{name: "ten-references", resolution: "2K", ratio: "16:9", mode: "standard", refs: 10},
+	} {
+		key := "byteplus|image|" + input.name
+		prompt := randomPrompt(seed, key, true)
+		cases = append(cases, canaryCase{
+			Key: key, Model: model, Revision: revision, Mode: "image", AspectRatio: input.ratio,
+			Resolution: input.resolution, PromptOptimizationMode: input.mode,
+			ReferenceIDs: append([]uuid.UUID(nil), referenceIDs[:input.refs]...),
+			ExpectedSize: model.SizeOverrides[input.resolution][input.ratio], Prompt: prompt, PromptSHA256: hashText(prompt),
+		})
+	}
+	return cases
 }
 
 func newCreatePermitStream(ctx context.Context, interval time.Duration) <-chan struct{} {
@@ -607,7 +660,7 @@ func runModel(ctx context.Context, client *apiClient, store *reportStore, folder
 	defer cancelModel()
 	jobs := make(chan canaryCase)
 	results := make(chan caseResult)
-	workerCount := min(4, len(pending))
+	workerCount := min(4, pending[0].Model.Policy.MaxConcurrency, len(pending))
 	var workers sync.WaitGroup
 	for range workerCount {
 		workers.Add(1)
@@ -671,11 +724,8 @@ func runModel(ctx context.Context, client *apiClient, store *reportStore, folder
 
 func (c *apiClient) runCase(ctx context.Context, folderID uuid.UUID, archiveOutput bool, item canaryCase) caseResult {
 	started := time.Now().UTC()
-	result := caseResult{Key: item.Key, ModelID: item.Model.ID, Mode: item.Mode, AspectRatio: item.AspectRatio, Resolution: item.Resolution, Quality: item.Quality, PromptSHA256: item.PromptSHA256, Status: "failed", ExpectedOutputs: item.Model.OutputsPerDraw, StartedAt: started}
-	inputAssets := []uuid.UUID{}
-	if item.ReferenceID != nil {
-		inputAssets = append(inputAssets, *item.ReferenceID)
-	}
+	result := caseResult{Key: item.Key, ModelID: item.Model.ID, Mode: item.Mode, AspectRatio: item.AspectRatio, Resolution: item.Resolution, Quality: item.Quality, PromptOptimizationMode: item.PromptOptimizationMode, PromptSHA256: item.PromptSHA256, Status: "failed", ExpectedOutputs: item.Model.OutputsPerDraw, StartedAt: started}
+	inputAssets := append([]uuid.UUID(nil), item.ReferenceIDs...)
 	options := provider.GenerationOptions{}
 	if len(item.Model.Capabilities.MidjourneyVersions) > 0 {
 		options.Midjourney = item.Midjourney
@@ -685,6 +735,12 @@ func (c *apiClient) runCase(ctx context.Context, folderID uuid.UUID, archiveOutp
 	}
 	if item.Quality != "" {
 		options.Image = &provider.ImageOptions{Quality: item.Quality}
+	}
+	if item.PromptOptimizationMode != "" {
+		if options.Image == nil {
+			options.Image = &provider.ImageOptions{}
+		}
+		options.Image.PromptOptimizationMode = item.PromptOptimizationMode
 	}
 	payload := map[string]any{
 		"model_id": item.Model.ID, "capability_revision": item.Revision, "prompt": item.Prompt,

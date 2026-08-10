@@ -335,13 +335,15 @@ func TestCompletedSubmissionCannotBypassDurableStaging(t *testing.T) {
 
 func TestAttemptUsageDropsArbitraryProviderBodyFields(t *testing.T) {
 	usage := sanitizeAttemptUsage(map[string]any{
-		"cost":            0.02,
-		"prompt_tokens":   float64(12),
-		"reference_count": 1,
-		"raw_response":    "data:image/png;base64,must-not-survive",
-		"api_key":         "sk-must-not-survive",
-		"unknown_number":  99,
-		"total_tokens":    math.Inf(1),
+		"cost":             0.02,
+		"prompt_tokens":    float64(12),
+		"reference_count":  1,
+		"generated_images": 1,
+		"input_images":     10,
+		"raw_response":     "data:image/png;base64,must-not-survive",
+		"api_key":          "sk-must-not-survive",
+		"unknown_number":   99,
+		"total_tokens":     math.Inf(1),
 		"cost_details": map[string]any{
 			"upstream_inference_cost": 0.01,
 			"provider_message":        "must-not-survive",
@@ -360,6 +362,9 @@ func TestAttemptUsageDropsArbitraryProviderBodyFields(t *testing.T) {
 	}
 	if !strings.Contains(text, `"reference_count":1`) {
 		t.Fatalf("expected reference count was removed: %s", text)
+	}
+	if !strings.Contains(text, `"generated_images":1`) || !strings.Contains(text, `"input_images":10`) {
+		t.Fatalf("expected BytePlus usage was removed: %s", text)
 	}
 }
 

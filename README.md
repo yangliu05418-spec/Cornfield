@@ -1,113 +1,172 @@
-# Cornfield
+<p align="center">
+  <img src="web/public/cornfield-cube.svg" width="72" height="72" alt="Cornfield logo" />
+</p>
 
-内部使用的文生图/图生图工作台。V1 集成 Legnext（Midjourney）、OpenRouter 与 Black Forest Labs 官方 FLUX API，不包含积分、支付、社区或 Draw 编辑能力。
+<h1 align="center">Cornfield</h1>
 
-## 已实现
+<p align="center">
+  <strong>让灵感从一段描述，走向一张图，再抵达一个完整镜头。</strong>
+</p>
 
-- TanStack Start SPA：`/` 预渲染落地页，`/app/*` 静态 shell，无 Node 生产运行时。
-- 高保真创作页：justified rows、行虚拟化、五档缩放、生成占位、逐 draw 取消、预览/参考/复制/下载。
-- Go API：Argon2id 登录、opaque session、CSRF、用户管理、事务化 batch/job、SSE、流式上传和 X-Accel-Redirect。
-- Go Worker：River、公平调度、Legnext/OpenRouter/BFL Adapter、mock provider、轮询/回调对账、模糊提交保护、数据库心跳、结果校验和 libvips 缩略图。
-- PostgreSQL 18：业务真相、River 队列、可靠事件与 LISTEN/NOTIFY。
-- 本地不可变资产：SHA-256 路径、原子提交、受保护直出、90 天清理、孤儿扫描和磁盘压力保护。
-- 不可变模型能力快照：任务始终按创建时的 capability revision 执行，模型配置更新不会改变已排队任务。
-- Docker Compose：四个长期服务；迁移和模型应用是一次性 job；监控使用可选 profile。
+<p align="center">
+  面向创作团队的私有 AI 视觉工作台，统一承载多模型生成、灵感管理与 3D 分镜预演。
+</p>
 
-## 本地验证
+<p align="center">
+  <a href="https://github.com/yangliu05418-spec/Cornfield/actions/workflows/ci.yml"><img src="https://github.com/yangliu05418-spec/Cornfield/actions/workflows/ci.yml/badge.svg" alt="CI" /></a>
+  <a href="https://github.com/yangliu05418-spec/Cornfield/releases"><img src="https://img.shields.io/github/v/release/yangliu05418-spec/Cornfield?display_name=tag&sort=semver" alt="Release" /></a>
+  <img src="https://img.shields.io/badge/Go-1.26-00ADD8?logo=go&logoColor=white" alt="Go 1.26" />
+  <img src="https://img.shields.io/badge/React-19-61DAFB?logo=react&logoColor=111827" alt="React 19" />
+  <img src="https://img.shields.io/badge/PostgreSQL-18-4169E1?logo=postgresql&logoColor=white" alt="PostgreSQL 18" />
+</p>
 
-```powershell
+---
+
+## 为什么是 Cornfield
+
+传统 AI 图片工具解决的是“生成一张图”，Cornfield 关注的是完整的视觉创作流：选择合适的模型与参数，持续抽卡和比较结果，沉淀可检索的素材，再进入 3D 导演台完成构图、机位与镜头预演。
+
+它不是 API 中转站，也不包含积分、支付或社区系统。Cornfield 使用团队自有的 Provider 凭据，把体验、资产和任务状态留在可控的私有环境中。
+
+## 核心能力
+
+| 能力 | 体验 |
+| --- | --- |
+| **统一多模型创作** | 在同一生成器中使用 Legnext、OpenRouter 与 Black Forest Labs，按模型能力动态展示比例、分辨率、画质和参考图选项。 |
+| **实时灵感墙** | 生成后立即出现原位占位，通过 SSE 更新状态；justified rows、行级虚拟化和多档缩放让大规模图片浏览仍然流畅。 |
+| **渐进式图片交付** | 320 / 640 缩略图与模糊占位先于成功事件准备，1280 异步补齐，避免新图片首屏直接加载高分辨率原图。 |
+| **资产组织** | 支持搜索、文件夹、归档、批量移动与永久删除；创作流与资产管理共享同一份可靠数据。 |
+| **确定性 Prompt Refiner** | 用户主动检查长度、非法结构与风险词组，逐项确认、可撤销；规则引擎不调用 LLM，不产生额外 Token 成本。 |
+| **3D 导演台** | 管理云端导演台项目，在浏览器中摆放角色、道具、灯光与机位；截图可直接置入灵感墙，继续进入生成工作流。 |
+
+## 创作链路
+
+```mermaid
+flowchart LR
+    A["描述与参考图"] --> B["模型与能力参数"]
+    B --> C["异步生成任务"]
+    C --> D["实时占位与状态"]
+    D --> E["灵感墙"]
+    E --> F["资产组织"]
+    F --> G["3D 镜头预演"]
+    G --> E
+```
+
+- 生成器在任务提交后保持可编辑，创作无需等待上一批结束。
+- Midjourney 一次 draw 对应四张结果，并保持输出顺序稳定。
+- 新图片不会抢夺用户当前滚动位置；离开顶部时以“新图片”提示承接更新。
+- 失败项提供中文、可行动反馈，可隐藏、编辑参数或在安全条件下重试。
+- 文生图与图生图共享统一任务协议，刷新、断线和 Worker 重启后都能恢复状态。
+
+## 技术架构
+
+```mermaid
+flowchart LR
+    B["Browser"] --> N["Host Nginx"]
+    N --> W["TanStack Start SPA"]
+    N --> A["Go API"]
+    N -->|"X-Accel-Redirect"| F["Immutable assets"]
+    A --> P["PostgreSQL 18"]
+    P -->|"LISTEN / NOTIFY"| A
+    A -->|"SSE"| B
+    P --> Q["River queue"]
+    Q --> R["Go Worker + libvips"]
+    R --> L["Legnext"]
+    R --> O["OpenRouter"]
+    R --> X["BFL API"]
+    R --> F
+```
+
+| 层级 | 选型 |
+| --- | --- |
+| Web | TanStack Start SPA、React 19、TypeScript、TanStack Query / Router / Virtual、Tailwind CSS 4 |
+| 3D | React Three Fiber、Three.js、Zustand；以同源子应用按需加载，不进入主应用首包 |
+| API | Go 1.26、`net/http`、pgx；纯 Go 镜像，不执行生成或图片处理 |
+| Worker | Go、River、libvips；公平调度、Provider Adapter、轮询对账、下载与缩略图处理 |
+| Data | PostgreSQL 18 作为业务真相、任务队列与可靠事件源 |
+| Storage | 本地不可变内容寻址存储、SHA-256 去重、原子写入、Nginx 授权直出 |
+| Delivery | Docker Compose、宿主机 Nginx、digest 固定的 ARM64 OCI 镜像 |
+
+系统有意保持四个核心常驻服务：`web`、`api`、`worker`、`postgres`。没有 Redis、Kafka、MinIO 或 Node.js 生产运行时。
+
+## 稳定性设计
+
+- **成本安全优先**：上游提交结果不确定时进入 `submission_uncertain`，不自动重提，避免重复计费。
+- **状态可恢复**：业务状态、Provider attempt 与事件持久化；通知只负责唤醒，不承担事实存储。
+- **隔离故障域**：API 不做长耗时任务，Worker 独立执行生成、轮询、下载、校验和缩略图处理。
+- **上游保护**：Provider 级并发限制、分类重试、熔断、健康探针与自动恢复。
+- **安全交付**：文件型 Secret、最小权限数据库角色、CSRF、Argon2id、受保护资产路径和默认关闭的公网数据库端口。
+- **可观测发布**：Mock Provider CI、真实 Provider canary、SBOM、provenance、漏洞扫描与 digest 固定发布。
+
+## 快速验证
+
+### 环境要求
+
+- Go 1.26+
+- Node.js 20+
+- pnpm 11+
+- Docker Engine 与 Docker Compose v2（完整集成验证）
+
+### 克隆与检查
+
+```bash
+git clone https://github.com/yangliu05418-spec/Cornfield.git
+cd Cornfield
+
+# Go API / Worker / tools
 cd backend
-& 'C:\Program Files\Go\bin\go.exe' test ./...
-& 'C:\Program Files\Go\bin\go.exe' vet ./...
-& 'C:\Program Files\Go\bin\go.exe' run ./cmd/modelctl validate
+go test ./...
+go vet ./...
+go run ./cmd/modelctl validate
 
-cd ..\web
+# Cornfield Web
+cd ../web
 pnpm install --frozen-lockfile
 pnpm check
 pnpm typecheck
 pnpm lint
 pnpm test
 pnpm build
-pnpm exec playwright install chromium
-pnpm e2e
+
+# 3D 导演台
+cd ../3d-director-desk-main
+npm ci
+npm test
+npm run build:embedded
 ```
 
-CI 还会执行 `go test -race`、纯 Go 二进制构建、生产镜像构建、Compose 网络与权限约束检查，并在 fresh PostgreSQL 上运行 `ops/ci-smoke.sh`。该 smoke 以 `PROVIDER_MODE=mock` 覆盖最小权限数据库角色、登录、图像上传与验证、图生图、幂等重放、Worker、资产响应和 SSE，不消耗真实额度；它只允许在一次性 CI runner/disposable checkout 中执行，不能在保存真实 secret 的生产 checkout 中运行。真实模式由 Compose 默认启用。
+完整 CI 还会执行 race detector、静态检查、浏览器 E2E、生产镜像构建，以及基于全新 PostgreSQL 和 Mock Provider 的 Compose smoke。Mock smoke 不消耗真实 Provider 额度。
 
-## Docker Compose 部署
+> 生产环境故意不提供“带默认密码的一键启动”。数据库角色、Provider Key、内部签名 Secret、TLS、目录权限和不可变镜像必须在部署前显式配置。
 
-1. 将已通过 CI 的版本部署到 `/opt/internal-image-studio`，在创建运行时 secret 前把该目录、所有父目录、`ops/`、`config/`、`compose.yaml` 和 `.env` 固定为 `root` 持有且组/其他用户不可写；禁止从普通用户可写的 checkout 直接以 root 运行维护脚本。复制 `.env.example` 为 `.env`，设置真实 HTTPS URL。`DATA_ROOT` 固定为 `/srv/internal-image-studio/data`，必须与宿主 Nginx 和备份配置一致。生产部署从 GitHub release workflow 下载 `cornfield-image-digests-<commit>`，校验其中的 `SHA256SUMS` 和 `RELEASE_COMMIT`，再把 `digests.env` 的四个 `*_IMAGE` 引用写入 `.env`；它们必须全部使用 `@sha256:` 固定。
-2. 创建以下文件；每个文件只放一行 secret 本身，不要带引号：
-   - `secrets/postgres_bootstrap_password`
-   - `secrets/postgres_owner_password`
-   - `secrets/postgres_api_password`
-   - `secrets/postgres_worker_password`
-   - `secrets/legnext_api_key`
-   - `secrets/openrouter_api_key`
-   - `secrets/provider_callback_secret`
-   - `secrets/provider_url_signing_secret`
-   - `secrets/grafana_admin_password`（仅监控 profile 需要）
-   - `secrets/alertmanager_webhook_url`（仅告警 profile 需要，内容为单行 HTTPS webhook URL）
+## 目录结构
 
-   四个数据库密码分别生成、互不复用，每个至少 32 个无空白字符；`studio_bootstrap` 只用于数据库引导，migration/model apply 使用 `studio_owner`，API 与 Worker 使用各自的最小权限角色。两个 Provider key 从用户提供的原始文件中只提取 token 本身；不要把说明文字、引号或 Markdown 一并写入 secret。两个内部签名 secret 分别使用 `openssl rand -base64 48` 生成，不能复用。除监控 secret 外，上述 secret 源文件须由 UID/GID `65532:65532` 持有并设为 `0600`；Grafana secret 使用 `472:472`，Alertmanager webhook secret 使用 `65534:65534`，两者同样设为 `0600`。Compose 的 file-backed secret 是 bind mount，不能依赖容器内 UID remap。数据库密码不得写入 `.env`、`DATABASE_URL`、命令行或 `.pgpass`。
-
-3. 在宿主机建立与容器数值 GID 一致的只读共享组，并显式创建每一层数据目录。不要只把叶子目录交给 `install -d`：GNU `install` 会把缺失的中间目录按 `root:root 0755` 创建，导致 preflight 或运行时权限失败。下面的 `cornfield-runtime` 必须占用 GID `65532`；如果该 GID 已被其他用途占用，先完成主机身份规划，不要复用一个无关的权限域。
-
-   ```bash
-   getent group 65532 >/dev/null || groupadd --gid 65532 cornfield-runtime
-   test "$(getent group 65532 | cut -d: -f1)" = "cornfield-runtime"
-   install -d -o 65532 -g 65532 -m 0750 \
-     /srv/internal-image-studio/data \
-     /srv/internal-image-studio/data/assets
-   install -d -o 65532 -g 65532 -m 0700 \
-     /srv/internal-image-studio/data/uploads \
-     /srv/internal-image-studio/data/uploads/tmp \
-     /srv/internal-image-studio/data/uploads/quarantine
-   ```
-
-4. 先安装宿主 Nginx，将 [站点配置](ops/nginx/internal-image-studio.conf) 安装到 `.env` 的 `NGINX_SITE_CONFIG` 指定路径，并替换唯一域名与证书/私钥路径。设置 `NGINX_WORKER_USER` 为宿主 `nginx.conf` 的实际 `user`（Debian/Ubuntu 通常是 `www-data`），将该 worker 账号加入 `cornfield-runtime` 后重启 Nginx，使已经运行的 worker 真正继承 GID `65532`：
-
-   ```bash
-   usermod -aG cornfield-runtime www-data
-   systemctl restart nginx
-   ```
-
-   正式资产目录/文件由 Worker 以 GID `65532` 和只读组权限写入；Nginx 不加入该组会让 `X-Accel-Redirect` 返回 `403`。Compose 将 API 的整个 `/data` 挂为只读，仅用嵌套挂载开放 `/data/uploads` 写权限；只有 Worker 能写完整数据树，不要把 API 的父挂载改成可写。上传目录使用 `0700`，因此加入共享组不会让 Nginx 读取 quarantine。`APP_PUBLIC_URL` 必须是标准 `443` 端口、无账号、路径、query 或 fragment 的 bare HTTPS origin，其 host 必须与配置中的 `server_name` 完全一致。Callback 与 Provider asset location 必须保持关闭 access log；`/_protected_assets/` 必须保持 `internal`。
-5. 默认先完成备份边界：将 `/var/backups/internal-image-studio` 及其 `database` 子目录都创建为 `root:root 0700`，创建 `root:root 0755` 的 `/var/lib/node_exporter/textfile_collector`，并把 `RESTORE_CHECK_ROOT` 挂载为独立于系统盘和数据盘、`root:root` 且组/其他用户不可写的真实目录。三个路径及其父组件都不能是 symlink。按 [运维手册](docs/OPERATIONS.md#备份) 创建 `root:root 0600` 的 `/etc/internal-image-studio/backup.env`，再执行 `install -o root -g root -m 0644 ops/systemd/* /etc/systemd/system/ && systemctl daemon-reload && systemctl enable internal-image-studio-maintenance-recovery.service internal-image-studio-backup.timer internal-image-studio-restore-check.timer`；先启动一次 maintenance recovery，再在首次部署完成并手工演练成功后启动 timer。preflight 会逐字比对全部 unit、验证 boot recovery 与两个 timer 已启用。明确接受关闭持续备份风险时可设置 `BACKUP_ENABLED=false`，此时只跳过 Restic、恢复盘、备份指标和维护 unit 检查；它不替代上线或迁移前经过校验的冷快照。
-6. 在 `.env` 中设置 `RELEASE_REQUIRE_DIGESTS=true`。以 root 设置 `chmod 0755 ops/*.sh` 后运行 `STUDIO_ROOT=/opt/internal-image-studio ops/preflight.sh`；preflight 还会拒绝非 root 持有、组/其他用户可写、symlink 或不可执行的维护代码/Compose 配置，验证 UID/GID/mode、规范的数据路径、以 UID `65532` 实测目录可写、检查完整资产树权限、确认 Nginx worker 的账号与当前进程都已继承 GID `65532`，并要求 `NGINX_SITE_CONFIG` 指向的文件与仓库审查版本逐字一致且确实出现在 `nginx -T` 的活动配置中。启用持续备份时，它还会读取备份环境、验证备份/恢复路径与 node-exporter textfile 目录；无论是否启用，都会执行完整 Nginx/TLS 配置测试。通过后执行 `docker compose pull` 与 `docker compose up -d --no-build`。检查会拒绝未固定 digest 的四个应用镜像、缺失或权限错误的 secret、错误的 HTTPS origin/Nginx/TLS 配置，以及允许内联脚本的 CSP。`db-bootstrap`、migration 和 model apply 必须成功退出后，API/Worker 才会启动。
-7. 创建首个管理员：
-
-```bash
-read -r -s -p "Admin password: " CORNFIELD_ADMIN_PASSWORD; printf '\n'
-printf '%s\n' "$CORNFIELD_ADMIN_PASSWORD" | docker compose run --rm -T --no-deps model-apply \
-  adminctl --username admin --display-name "Studio Admin"
-unset CORNFIELD_ADMIN_PASSWORD
+```text
+backend/                  Go API、Worker、迁移、任务与 Provider Adapter
+web/                      Cornfield SPA、灵感墙、资产与管理界面
+3d-director-desk-main/    按需加载的 3D 导演台子应用
+config/                   版本化模型能力配置
+docs/                     运维与模型能力文档
+ops/                      Nginx、监控、发布与验证脚本
+product-spec-v1/          产品、信息架构与统一任务协议基线
 ```
 
-开启监控：
+## 文档
 
-```bash
-docker compose --profile observability up -d
-```
+- [模型能力与真实参数边界](docs/MODEL_CAPABILITIES.md)
+- [生产部署、发布、回滚与故障处理](docs/OPERATIONS.md)
+- [负载测试](ops/load/README.md)
+- [产品与统一任务协议](product-spec-v1/README.md)
+- [第三方组件与词典声明](THIRD_PARTY_NOTICES.md)
 
-node-exporter 会从宿主 textfile 目录读取备份与恢复演练的原子结果指标；首次启用监控后应各手动成功执行一次 systemd service，避免“从未成功”的时效告警保持触发。
+## 协作约定
 
-仅启用 observability profile 会评估规则但不会向外发送通知。配置并演练外部 HTTPS receiver 后，再启用告警：
+1. 从 `main` 创建短生命周期分支。
+2. 每个提交只解决一个清晰问题，避免跨域重构。
+3. 模型能力变化必须先更新配置、校验并通过真实 canary，不在运行时自动猜测。
+4. 任何 Secret、Prompt 原文、图片正文和本地绝对路径都不得进入 Git 或日志。
+5. PR 合并前必须通过与改动范围相匹配的测试。
 
-```bash
-docker compose --profile observability --profile alerting up -d
-curl -fsS http://127.0.0.1:9093/-/ready
-```
+## 使用范围
 
-详细的 health/readiness、真实 Provider canary 边界、备份恢复、告警、发布回滚和 `submission_uncertain` 对账见 [运维手册](docs/OPERATIONS.md)。100 RPS 批次创建与 200 SSE 会话脚本见 [负载测试说明](ops/load/README.md)。产品和接口基线仍保存在 [product-spec-v1](product-spec-v1/README.md)。
-
-## 关键边界
-
-- API 不执行生成、轮询、下载或缩略图任务。
-- Provider Adapter 不写业务表。
-- 前端不读取 River 表。
-- Callback 只唤醒对账，不作为结果真相。
-- 上游 POST 超时且无法确认接受时进入 `submission_uncertain`，不会自动重复计费。
-- 对不能真正取消的上游，用户主动取消会尽快进入 `cancelled`。未取消任务到达生成 deadline 时，Worker 会先做一次认证 final poll，尽量恢复刚完成的已付费结果；若远端仍未终止且取消未被接受，任务进入 `failed`。两种场景都可通过 `upstream_active_until` 在远端终态或“原 generation deadline + 有界观察宽限”前继续占用用户/Provider/模型并发；宽限通常等于模型生成 timeout，最多 1 小时。Worker 只做后台观察并丢弃取消任务的迟到结果；支持真实取消且已接受取消的上游不会保留该租约。
-- API key、密码、base64 图片和文件系统绝对路径禁止进入日志。
-- 宿主 Nginx 通过仅绑定 `127.0.0.1` 的端口访问 Web/API，因此 `frontend` 必须是宿主可达的普通 bridge；默认 host binding 也固定为 loopback。Worker 通过独立 egress 网络访问 Provider；PostgreSQL 始终只连接 internal backend 网络且不发布端口。
+Cornfield 当前定位为团队内部创作基础设施，不包含公开注册、计费、积分、支付或社区能力。项目未声明为开源软件；第三方组件和素材的许可信息以 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) 及各子目录声明为准。

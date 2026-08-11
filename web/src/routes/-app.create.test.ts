@@ -1,8 +1,12 @@
 import { QueryClient } from '@tanstack/react-query'
 import { describe, expect, it } from 'vitest'
 
-import { applyGenerationEvent, failedJobAction } from './app.create'
-import type { Asset, GenerationBatch } from '#/lib/api'
+import {
+  applyGenerationEvent,
+  failedJobAction,
+  generationImageOptions,
+} from './app.create'
+import type { Asset, GenerationBatch, Model } from '#/lib/api'
 
 describe('generation SSE cache', () => {
   it('merges successful assets idempotently and replaces the job state', () => {
@@ -68,5 +72,16 @@ describe('failed job actions', () => {
         status: 'submission_uncertain',
       } as GenerationBatch['jobs'][number]),
     ).toBe('none')
+  })
+})
+
+describe('generation image options', () => {
+  it('sends BytePlus prompt optimization without inventing a quality field', () => {
+    const model = {
+      capabilities: { prompt_optimization_modes: ['standard', 'fast'] },
+    } as unknown as Model
+    expect(generationImageOptions(model, 'auto', 'fast')).toEqual({
+      image: { prompt_optimization_mode: 'fast' },
+    })
   })
 })

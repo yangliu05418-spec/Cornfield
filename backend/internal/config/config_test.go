@@ -88,11 +88,13 @@ func TestLoadRequiresLiveSecrets(t *testing.T) {
 	t.Setenv("LEGNEXT_API_KEY", "")
 	t.Setenv("OPENROUTER_API_KEY", "")
 	t.Setenv("BFL_API_KEY", "")
+	t.Setenv("BYTEPLUS_API_KEY", "")
 	t.Setenv("PROVIDER_CALLBACK_SECRET", "")
 	t.Setenv("PROVIDER_URL_SIGNING_SECRET", "")
 	t.Setenv("LEGNEXT_API_KEY_FILE", "")
 	t.Setenv("OPENROUTER_API_KEY_FILE", "")
 	t.Setenv("BFL_API_KEY_FILE", "")
+	t.Setenv("BYTEPLUS_API_KEY_FILE", "")
 	t.Setenv("PROVIDER_CALLBACK_SECRET_FILE", "")
 	t.Setenv("PROVIDER_URL_SIGNING_SECRET_FILE", "")
 
@@ -109,9 +111,11 @@ func TestLoadAPIDoesNotRequireProviderBillingKeys(t *testing.T) {
 	t.Setenv("LEGNEXT_API_KEY", "")
 	t.Setenv("OPENROUTER_API_KEY", "")
 	t.Setenv("BFL_API_KEY", "")
+	t.Setenv("BYTEPLUS_API_KEY", "")
 	t.Setenv("LEGNEXT_API_KEY_FILE", t.TempDir()+"/must-not-be-read")
 	t.Setenv("OPENROUTER_API_KEY_FILE", t.TempDir()+"/must-not-be-read")
 	t.Setenv("BFL_API_KEY_FILE", t.TempDir()+"/must-not-be-read")
+	t.Setenv("BYTEPLUS_API_KEY_FILE", t.TempDir()+"/must-not-be-read")
 	t.Setenv("PROVIDER_CALLBACK_SECRET", strings.Repeat("c", 32))
 	t.Setenv("PROVIDER_URL_SIGNING_SECRET", strings.Repeat("u", 32))
 	setDatabasePasswordFile(t, "db-password-000000000000000000000000")
@@ -120,7 +124,7 @@ func TestLoadAPIDoesNotRequireProviderBillingKeys(t *testing.T) {
 	if err != nil {
 		t.Fatalf("API configuration unexpectedly required billing keys: %v", err)
 	}
-	if cfg.LegnextAPIKey != "" || cfg.OpenRouterAPIKey != "" || cfg.BFLAPIKey != "" {
+	if cfg.LegnextAPIKey != "" || cfg.OpenRouterAPIKey != "" || cfg.BFLAPIKey != "" || cfg.BytePlusAPIKey != "" {
 		t.Fatal("API configuration contains provider billing keys")
 	}
 }
@@ -145,6 +149,7 @@ func TestLoadAcceptsProductionLiveConfiguration(t *testing.T) {
 	t.Setenv("LEGNEXT_API_KEY", "legnext-test-key")
 	t.Setenv("OPENROUTER_API_KEY", "sk-or-v1-test")
 	t.Setenv("BFL_API_KEY", "bfl-test-key")
+	t.Setenv("BYTEPLUS_API_KEY", "byteplus-test-key")
 	t.Setenv("PROVIDER_CALLBACK_SECRET", strings.Repeat("c", 32))
 	t.Setenv("PROVIDER_URL_SIGNING_SECRET", strings.Repeat("u", 32))
 	setDatabasePasswordFile(t, "db-password-000000000000000000000000")

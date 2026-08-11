@@ -3,7 +3,7 @@
 ## 上线门槛
 
 - GitHub CI 全绿：Go test/vet/race/build、模型配置校验、前端 check/typecheck/lint/unit/E2E/build、镜像构建、Compose 配置与 fresh-database mock smoke 均通过。
-- `PROVIDER_MODE=live`；四个互不相同的数据库密码、两个 Provider key 与两个相互独立的内部签名 secret 均存在。file-backed secret 的宿主源文件由 `65532:65532` 持有且权限为 `0600`；内部签名 secret 均不少于 32 字节。Grafana 密码单独由 `472:472` 持有，Alertmanager webhook URL 单独由 `65534:65534` 持有，权限均为 `0600`。
+- `PROVIDER_MODE=live`；四个互不相同的数据库密码、四个 Provider key 与两个相互独立的内部签名 secret 均存在。file-backed secret 的宿主源文件由 `65532:65532` 持有且权限为 `0600`；内部签名 secret 均不少于 32 字节。Grafana 密码单独由 `472:472` 持有，Alertmanager webhook URL 单独由 `65534:65534` 持有，权限均为 `0600`。
 - `studio_bootstrap` 是唯一数据库 bootstrap superuser；`studio_owner`、`studio_api`、`studio_worker` 均为 `NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS`。API 不能读取 River 表，Worker 不能读取 session token/hash。数据库密码只通过 `DATABASE_PASSWORD_FILE` 读取，不出现在 `.env`、连接 URL、命令行或 `.pgpass`。
 - `APP_ENV=production`、`SESSION_COOKIE_SECURE=true`；`APP_PUBLIC_URL` 是使用标准 443 端口、不含账号、路径、query 或 fragment 的 bare HTTPS origin，其 host 与宿主 Nginx 的 `server_name` 完全一致。
 - `.env` 中的 `DATA_ROOT=/srv/internal-image-studio/data` 与 Nginx alias、备份环境一致；`data`/`assets` 为 `65532:65532 0750`，`uploads`/`tmp`/`quarantine` 为 `65532:65532 0700`，UID `65532` 已实测可写。Compose 中 API 的 `/data` 父挂载只读，仅 `/data/uploads` 通过嵌套挂载可写；Worker 才能写完整数据树。宿主存在 GID `65532` 的 `cornfield-runtime` 组，实际 Nginx worker 用户与所有当前 worker 进程都已继承该组，因此能只读 traverse/读取资产；数据目录、PostgreSQL volume 和 Restic 仓库均不在临时磁盘。
@@ -54,8 +54,8 @@ CI 的 image job 在全新 Compose project 和临时 `DATA_ROOT` 上执行 `CI=t
 静态与非计费验证分三层：
 
 1. `modelctl validate` 校验本地 schema 和能力约束。
-2. `modelctl verify-remote` 使用 OpenRouter capability API 做只读 drift 检查；Legnext 没有可机读的 capability endpoint，因此会明确显示 skipped。
-3. live Worker 每 30 秒探测一次：OpenRouter 校验 key，Legnext 查询余额；结果写入 `providers` 并显示在管理员 Provider 页面。
+2. `modelctl verify-remote` 使用 OpenRouter capability API 做只读 drift 检查；Legnext、BFL 与 BytePlus 没有可机读的 capability endpoint，因此会明确显示 skipped。
+3. live Worker 每 30 秒执行 Provider 健康循环；BytePlus 的无计费缺参探针结果缓存 5 分钟，结果写入 `providers` 并显示在管理员 Provider 页面。
 
 在有 Go 工具链的受控发布机上执行 OpenRouter drift 检查，key 只通过文件读取：
 
@@ -72,6 +72,7 @@ go run ./cmd/modelctl verify-remote
 
 - OpenRouter：各 1 次文生图和图生图，1 draw、1:1、1K。
 - Legnext：各 1 次文生图和图生图，1 draw；预期一个 draw 返回模型配置声明的多张输出。
+- BytePlus Seedream 5.0 Pro：使用 `canaryctl --profile byteplus` 执行 24 项尺寸矩阵与 1/2/10 张参考图的 3 项图生图验证；并发不得超过 2。
 - 对每次任务记录本地 batch/job ID、Provider request/job ID、开始/结束时间和实际用量；确认刷新与 SSE 重连可恢复、最终资产已复制到本地、下载可用、上游临时 URL 失效后历史资产仍可读。
 - 观察 callback 命中和主动 poll 对账；不要把 key、签名 URL、prompt-bearing callback body 或 base64 输出复制进工单/日志。
 

@@ -86,6 +86,19 @@ type JobEventEnvelope = {
   }
 }
 
+export function generationImageOptions(
+  model: Model,
+  quality: string,
+  promptOptimizationMode: 'standard' | 'fast',
+): GenerationOptions {
+  const image: NonNullable<GenerationOptions['image']> = {}
+  if (model.capabilities.qualities?.length)
+    image.quality = quality as NonNullable<typeof image.quality>
+  if (model.capabilities.prompt_optimization_modes?.length)
+    image.prompt_optimization_mode = promptOptimizationMode
+  return Object.keys(image).length ? { image } : {}
+}
+
 function mergeAssetHead(queryClient: QueryClient, head: AssetPage): void {
   queryClient.setQueryData<AssetPages>(wallAssetsQueryKey, (current) => {
     if (!current?.pages.length) {
@@ -265,6 +278,9 @@ function CreatePage() {
   const [ratio, setRatio] = useState('1:1')
   const [resolution, setResolution] = useState('1K')
   const [quality, setQuality] = useState('auto')
+  const [promptOptimizationMode, setPromptOptimizationMode] = useState<
+    'standard' | 'fast'
+  >('standard')
   const [draws, setDraws] = useState(1)
   const [midjourney, setMidjourney] = useState<MidjourneyOptions>({
     version: '8.2',
@@ -324,6 +340,7 @@ function CreatePage() {
         ratio,
         resolution,
         quality,
+        promptOptimizationMode,
         draws,
         midjourney,
         references: references.map((asset) => asset.id),
@@ -334,6 +351,7 @@ function CreatePage() {
       ratio,
       resolution,
       quality,
+      promptOptimizationMode,
       draws,
       midjourney,
       references,
@@ -448,6 +466,14 @@ function CreatePage() {
       setResolution(activeModel.capabilities.resolutions[0] ?? 'auto')
     if (!(activeModel.capabilities.qualities ?? []).includes(quality))
       setQuality(activeModel.capabilities.qualities?.[0] ?? 'auto')
+    if (
+      !(activeModel.capabilities.prompt_optimization_modes ?? []).includes(
+        promptOptimizationMode,
+      )
+    )
+      setPromptOptimizationMode(
+        activeModel.capabilities.prompt_optimization_modes?.[0] ?? 'standard',
+      )
     if (activeModel.id === 'legnext-midjourney') setDraws(1)
     setDraws((current) =>
       Math.min(
@@ -466,7 +492,15 @@ function CreatePage() {
         )
         .slice(0, limit)
     })
-  }, [activeModel, availableRatios, modelID, quality, ratio, resolution])
+  }, [
+    activeModel,
+    availableRatios,
+    modelID,
+    promptOptimizationMode,
+    quality,
+    ratio,
+    resolution,
+  ])
   useEffect(() => {
     const userID = me.data?.user.id
     if (!userID) return
@@ -668,9 +702,11 @@ function CreatePage() {
         ? (midjourney.resolution ?? 'sd').toUpperCase()
         : 'auto'
       : resolution
-    const imageOptions = activeModel.capabilities.qualities?.length
-      ? { image: { quality: quality as 'auto' | 'low' | 'medium' | 'high' } }
-      : {}
+    const imageOptions = generationImageOptions(
+      activeModel,
+      quality,
+      promptOptimizationMode,
+    )
     return {
       model_id: activeModel.id,
       capability_revision: models.data.revision,
@@ -830,6 +866,8 @@ function CreatePage() {
     setResolution(batch.resolution)
     if (batch.options?.midjourney) setMidjourney(batch.options.midjourney)
     if (batch.options?.image?.quality) setQuality(batch.options.image.quality)
+    if (batch.options?.image?.prompt_optimization_mode)
+      setPromptOptimizationMode(batch.options.image.prompt_optimization_mode)
     const restored = await Promise.all(
       (batch.input_asset_ids ?? []).map((id) =>
         api<Asset>(`/api/v1/assets/${id}`).catch(() => null),
@@ -1148,33 +1186,55 @@ function CreatePage() {
                   hasReference={references.length > 0}
                   onChange={setMidjourney}
                 />
-              ) : activeModel?.capabilities.qualities?.length ? (
-                <GeneratorSelect
-                  label="选择画质"
-                  value={quality}
-                  items={activeModel.capabilities.qualities.map((item) => ({
-                    value: item,
-                    label:
-                      { auto: '自动', low: '低', medium: '中', high: '高' }[
-                        item
-                      ] ?? item,
-                  }))}
-                  icon={<span className="resolution-icon" />}
-                  onChange={setQuality}
-                />
               ) : (
-                !!activeModel?.capabilities.resolutions.length && (
-                  <GeneratorSelect
-                    label="选择分辨率"
-                    value={resolution}
-                    items={activeModel.capabilities.resolutions.map((item) => ({
-                      value: item,
-                      label: item,
-                    }))}
-                    icon={<span className="resolution-icon" />}
-                    onChange={setResolution}
-                  />
-                )
+                <>
+                  {!!activeModel?.capabilities.resolutions.length && (
+                    <GeneratorSelect
+                      label="选择分辨率"
+                      value={resolution}
+                      items={activeModel.capabilities.resolutions.map(
+                        (item) => ({ value: item, label: item }),
+                      )}
+                      icon={<span className="resolution-icon" />}
+                      onChange={setResolution}
+                    />
+                  )}
+                  {!!activeModel?.capabilities.qualities?.length && (
+                    <GeneratorSelect
+                      label="选择画质"
+                      value={quality}
+                      items={activeModel.capabilities.qualities.map((item) => ({
+                        value: item,
+                        label:
+                          {
+                            auto: '自动',
+                            low: '低',
+                            medium: '中',
+                            high: '高',
+                          }[item] ?? item,
+                      }))}
+                      icon={<span className="resolution-icon" />}
+                      onChange={setQuality}
+                    />
+                  )}
+                  {!!activeModel?.capabilities.prompt_optimization_modes
+                    ?.length && (
+                    <GeneratorSelect
+                      label="选择提示词优化模式"
+                      value={promptOptimizationMode}
+                      items={activeModel.capabilities.prompt_optimization_modes.map(
+                        (item) => ({
+                          value: item,
+                          label: item === 'fast' ? '快速' : '标准',
+                        }),
+                      )}
+                      icon={<Sparkles size={14} />}
+                      onChange={(value) =>
+                        setPromptOptimizationMode(value as 'standard' | 'fast')
+                      }
+                    />
+                  )}
+                </>
               )}
               <div className="draw-control" aria-label="抽卡次数">
                 {isMidjourney ? (

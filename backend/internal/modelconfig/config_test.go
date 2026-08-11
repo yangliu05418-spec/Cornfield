@@ -77,7 +77,7 @@ func TestProductionCatalogIsValid(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load production catalog: %v", err)
 	}
-	if len(catalog.Models) != 10 || catalog.Hash == "" {
+	if len(catalog.Models) != 11 || catalog.Hash == "" {
 		t.Fatalf("unexpected catalog: %+v", catalog)
 	}
 	flash, ok := catalog.Find("openrouter-gemini-3-1-flash-image")
@@ -210,7 +210,7 @@ func TestProviderConcurrencyUsesOneCatalogValue(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for provider, want := range map[string]int{"legnext": 2, "openrouter": 4, "bfl": 4} {
+	for provider, want := range map[string]int{"legnext": 2, "openrouter": 4, "bfl": 4, "byteplus": 2} {
 		if limits[provider] != want {
 			t.Fatalf("provider %s limit = %d, want %d", provider, limits[provider], want)
 		}
@@ -270,6 +270,59 @@ func TestSeedreamSizeOverridesRejectUnsafeArea(t *testing.T) {
 	model.Capabilities.Resolutions = []string{"2K"}
 	model.SizeOverrides = map[string]map[string]string{"2K": {"16:9": "2048x1152"}}
 	if err := validateCapabilities(model); err == nil || !strings.Contains(err.Error(), "minimum pixel area") {
+		t.Fatalf("validateCapabilities() = %v", err)
+	}
+}
+
+func TestBytePlusSeedreamCatalog(t *testing.T) {
+	catalog, err := Load(filepath.Join("..", "..", "..", "config", "models.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	model, ok := catalog.Find("byteplus-seedream-5-0-pro")
+	if !ok {
+		t.Fatal("BytePlus Seedream 5.0 Pro missing")
+	}
+	if model.ProviderModel != "dola-seedream-5-0-pro-260628" || model.OutputsPerDraw != 1 || model.Capabilities.MaxReferenceImages != 10 {
+		t.Fatalf("unexpected model contract: %+v", model)
+	}
+	if strings.Join(model.Capabilities.PromptOptimizationModes, ",") != "standard,fast" || len(model.SizeOverrides) != 3 {
+		t.Fatalf("unexpected BytePlus capabilities: %+v", model.Capabilities)
+	}
+	expected := map[string]map[string]string{
+		"1K": {
+			"1:1": "1024x1024", "4:3": "1152x864", "3:4": "864x1152", "16:9": "1424x800",
+			"9:16": "800x1424", "3:2": "1248x832", "2:3": "832x1248", "21:9": "1568x672",
+		},
+		"1.5K": {
+			"1:1": "1536x1536", "4:3": "1792x1344", "3:4": "1344x1792", "16:9": "2048x1152",
+			"9:16": "1152x2048", "3:2": "1872x1248", "2:3": "1248x1872", "21:9": "2352x1008",
+		},
+		"2K": {
+			"1:1": "2048x2048", "4:3": "2368x1776", "3:4": "1776x2368", "16:9": "2816x1584",
+			"9:16": "1584x2816", "3:2": "2496x1664", "2:3": "1664x2496", "21:9": "3136x1344",
+		},
+	}
+	for resolution, sizes := range expected {
+		if len(model.SizeOverrides[resolution]) != len(sizes) {
+			t.Fatalf("%s size mappings = %d", resolution, len(model.SizeOverrides[resolution]))
+		}
+		for ratio, size := range sizes {
+			if got := model.SizeOverrides[resolution][ratio]; got != size {
+				t.Fatalf("%s %s = %q, want %q", resolution, ratio, got, size)
+			}
+		}
+	}
+}
+
+func TestBytePlusSizeOverridesRejectUnsafeArea(t *testing.T) {
+	catalog, err := Load(filepath.Join("..", "..", "..", "config", "models.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	model, _ := catalog.Find("byteplus-seedream-5-0-pro")
+	model.SizeOverrides["1K"]["1:1"] = "512x512"
+	if err := validateCapabilities(model); err == nil || !strings.Contains(err.Error(), "BytePlus pixel limits") {
 		t.Fatalf("validateCapabilities() = %v", err)
 	}
 }

@@ -31,6 +31,7 @@ export POSTGRES_WORKER_PASSWORD_SECRET_SOURCE="${secret_root}/postgres_worker_pa
 export LEGNEXT_API_KEY_SECRET_SOURCE="${secret_root}/legnext_api_key"
 export OPENROUTER_API_KEY_SECRET_SOURCE="${secret_root}/openrouter_api_key"
 export BFL_API_KEY_SECRET_SOURCE="${secret_root}/bfl_api_key"
+export BYTEPLUS_API_KEY_SECRET_SOURCE="${secret_root}/byteplus_api_key"
 export PROVIDER_CALLBACK_SECRET_SOURCE="${secret_root}/provider_callback_secret"
 export PROVIDER_URL_SIGNING_SECRET_SOURCE="${secret_root}/provider_url_signing_secret"
 tmp_dir=""
@@ -78,12 +79,14 @@ printf '%s' 'ci-worker-password-0000000000000000000000000000' > "${POSTGRES_WORK
 printf '%s' 'ci-legnext-key' > "${LEGNEXT_API_KEY_SECRET_SOURCE}"
 printf '%s' 'ci-openrouter-key' > "${OPENROUTER_API_KEY_SECRET_SOURCE}"
 printf '%s' 'ci-bfl-key-000000' > "${BFL_API_KEY_SECRET_SOURCE}"
+printf '%s' 'ci-byteplus-key-000000' > "${BYTEPLUS_API_KEY_SECRET_SOURCE}"
 printf '%s' 'ci-callback-secret-00000000000000000000000000000000' > "${PROVIDER_CALLBACK_SECRET_SOURCE}"
 printf '%s' 'ci-provider-url-secret-000000000000000000000000000000' > "${PROVIDER_URL_SIGNING_SECRET_SOURCE}"
 chmod 0600 \
   "${POSTGRES_BOOTSTRAP_PASSWORD_SECRET_SOURCE}" "${POSTGRES_OWNER_PASSWORD_SECRET_SOURCE}" \
   "${POSTGRES_API_PASSWORD_SECRET_SOURCE}" "${POSTGRES_WORKER_PASSWORD_SECRET_SOURCE}" \
   "${LEGNEXT_API_KEY_SECRET_SOURCE}" "${OPENROUTER_API_KEY_SECRET_SOURCE}" "${BFL_API_KEY_SECRET_SOURCE}" \
+  "${BYTEPLUS_API_KEY_SECRET_SOURCE}" \
   "${PROVIDER_CALLBACK_SECRET_SOURCE}" "${PROVIDER_URL_SIGNING_SECRET_SOURCE}"
 sudo chown -R 65532:65532 "${secret_root}"
 
@@ -113,6 +116,9 @@ test "${deletion_privileges}" = "t"
 bfl_display_name="$(docker compose exec -T postgres psql -U studio_bootstrap -d studio -Atc \
   "SELECT display_name FROM providers WHERE id='bfl'")"
 test "${bfl_display_name}" = "Black Forest Labs"
+byteplus_display_name="$(docker compose exec -T postgres psql -U studio_bootstrap -d studio -Atc \
+  "SELECT display_name FROM providers WHERE id='byteplus'")"
+test "${byteplus_display_name}" = "BytePlus ModelArk"
 
 admin_password='ci-smoke-password-123456'
 printf '%s\n' "${admin_password}" | docker compose run --rm -T --no-deps model-apply adminctl \

@@ -135,6 +135,8 @@ func verifyRemote(catalog *modelconfig.Catalog) {
 			fmt.Printf("skipped %s: Legnext has no machine-readable capability endpoint\n", model.ID)
 		case "bfl":
 			fmt.Printf("skipped %s: BFL has no machine-readable capability endpoint\n", model.ID)
+		case "byteplus":
+			fmt.Printf("skipped %s: BytePlus has no machine-readable capability endpoint\n", model.ID)
 		}
 	}
 	if report.HasDrift() {

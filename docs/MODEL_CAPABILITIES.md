@@ -1,6 +1,6 @@
 # 模型能力边界
 
-本表记录 Cornfield 当前启用模型的生产能力上限。OpenRouter 模型以其 Dedicated Image API 的实时 endpoint discovery 为准；部署前由 `modelctl verify-remote` 检测漂移。日期：2026-07-20。
+本表记录 Cornfield 当前启用模型的生产能力上限。OpenRouter 模型以其 Dedicated Image API 的实时 endpoint discovery 为准；部署前由 `modelctl verify-remote` 检测漂移。日期：2026-08-10。
 
 | Cornfield 模型 | 参考图上限 | Cornfield 单图上限 | 边界说明 |
 |---|---:|---:|---|
@@ -11,6 +11,7 @@
 | GPT Image 2 | 16 | 25 MiB | OpenRouter OpenAI endpoint 声明 `input_references.max=16`。画质可传 `quality=auto/low/medium/high`；该 endpoint 不声明比例或分辨率字段。 |
 | Grok Imagine Image Quality | 3 | 25 MiB | OpenRouter 与 xAI 多图编辑文档的上限一致。 |
 | Seedream 4.5 | 14 | 25 MiB | OpenRouter Seed endpoint 声明 14。上游常见约束是输入图与输出图合计最多 15；Cornfield 每 draw 请求 1 张输出，因此最多开放 14 张输入。 |
+| Seedream 5.0 Pro（BytePlus 官方） | 10 | 25 MiB | Pro 单请求固定输出 1 张，支持 2–10 张多参考图；Cornfield 使用显式像素尺寸与 `standard/fast` 提示词优化，不发送流式、连续组图、seed 或 guidance 字段。 |
 | FLUX.2 Max（BFL 官方） | 8 | 25 MiB | 官方 API 上限为 8；Playground 的 10 张不属于 API 合约。输出最大 4MP、边长至少 64px、尺寸为 16 的倍数。 |
 
 实现规则：
@@ -27,6 +28,7 @@
 - [OpenRouter image endpoint discovery](https://openrouter.ai/blog/announcements/image-api/)
 - [BFL FLUX.2 overview](https://docs.bfl.ai/flux_2/flux2_overview)
 - [BFL FLUX.2 Max API](https://docs.bfl.ai/api-reference/models/generate-or-edit-an-image-with-flux2-%5Bmax%5D)
+- [BytePlus Image Generation API](https://docs.byteplus.com/en/docs/ModelArk/1541523)
 - [Google image generation](https://ai.google.dev/gemini-api/docs/image-generation)
 - [xAI multi-image editing](https://docs.x.ai/developers/model-capabilities/images/multi-image-editing)
 - [Legnext model information](https://docs.legnext.ai/getting-started/models)

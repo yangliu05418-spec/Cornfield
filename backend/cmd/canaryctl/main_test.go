@@ -45,11 +45,11 @@ func TestProductionCatalogCanaryMatrix(t *testing.T) {
 			imageCases++
 		}
 	}
-	if textCases != 222 {
-		t.Fatalf("text matrix contains %d cases, want 222", textCases)
+	if textCases != 246 {
+		t.Fatalf("text matrix contains %d cases, want 246", textCases)
 	}
-	if imageCases != 8 {
-		t.Fatalf("image smoke matrix contains %d cases, want 8", imageCases)
+	if imageCases != 9 {
+		t.Fatalf("image smoke matrix contains %d cases, want 9", imageCases)
 	}
 }
 
@@ -58,7 +58,7 @@ func TestLaunchProfileContainsTwentyFourCases(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	groups := buildCanaryGroups(catalog, "launch", "release", 42, uuid.New())
+	groups := buildCanaryGroups(catalog, "launch", "release", 42, []uuid.UUID{uuid.New()})
 	total := 0
 	counts := make(map[string]int)
 	for _, group := range groups {
@@ -69,6 +69,35 @@ func TestLaunchProfileContainsTwentyFourCases(t *testing.T) {
 	}
 	if total != 24 || counts["legnext-midjourney"] != 20 || counts["openrouter-gemini-3-1-flash-image"] != 2 || counts["bfl-flux-2-max"] != 2 {
 		t.Fatalf("launch profile total=%d counts=%v", total, counts)
+	}
+}
+
+func TestBytePlusProfileContainsTwentySevenCases(t *testing.T) {
+	catalog, err := modelconfig.Load(filepath.Join("..", "..", "..", "config", "models.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	references := make([]uuid.UUID, 10)
+	for index := range references {
+		references[index] = uuid.New()
+	}
+	groups := buildCanaryGroups(catalog, "byteplus", "release", 42, references)
+	if len(groups) != 1 || len(groups[0]) != 27 {
+		t.Fatalf("BytePlus groups = %d, cases = %v", len(groups), groups)
+	}
+	text, images := 0, 0
+	for _, item := range groups[0] {
+		if item.Mode == "text" {
+			text++
+			if item.PromptOptimizationMode != "standard" && item.PromptOptimizationMode != "fast" {
+				t.Fatalf("missing prompt mode: %+v", item)
+			}
+		} else {
+			images++
+		}
+	}
+	if text != 24 || images != 3 || len(groups[0][26].ReferenceIDs) != 10 {
+		t.Fatalf("BytePlus text=%d image=%d last refs=%d", text, images, len(groups[0][26].ReferenceIDs))
 	}
 }
 

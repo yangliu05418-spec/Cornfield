@@ -59,7 +59,7 @@ func (s *Server) refinePrompt(w http.ResponseWriter, r *http.Request) {
 	result := s.promptRefiner.Refine(input.Prompt)
 	diagnostics := make([]promptDiagnostic, 0, 4)
 	normalized := input
-	if err := normalizeGenerationOptions(model.ID, model.Provider, model.Capabilities.MidjourneyVersions, model.Capabilities.Qualities, len(input.InputAssetIDs), &normalized); err != nil {
+	if err := normalizeGenerationOptions(model.ID, model.Provider, model.Capabilities.MidjourneyVersions, model.Capabilities.Qualities, model.Capabilities.PromptOptimizationModes, len(input.InputAssetIDs), &normalized); err != nil {
 		diagnostics = append(diagnostics, promptDiagnostic{Code: "CAPABILITY_INVALID", Severity: "warning", Message: "当前模型参数需要调整：" + err.Error()})
 	}
 	allowedRatios := model.AspectRatiosForResolution(normalized.Resolution)

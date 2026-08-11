@@ -159,12 +159,13 @@ func main() {
 }
 
 func run() error {
-	var baseURL, username, passwordFile, releaseSHA, configPath, reportPath, profile string
+	var baseURL, username, passwordFile, promptFile, releaseSHA, configPath, reportPath, profile string
 	var allowHTTP bool
 	var archiveOutput bool
 	flag.StringVar(&baseURL, "base-url", "https://corn.kumadrama.com", "Cornfield HTTPS origin")
 	flag.StringVar(&username, "username", defaultUsername, "existing canary username")
 	flag.StringVar(&passwordFile, "password-file", "", "root-managed file containing the canary password")
+	flag.StringVar(&promptFile, "prompt-file", "", "optional file containing one prompt for every canary case")
 	flag.StringVar(&releaseSHA, "release", "", "deployed release commit SHA")
 	flag.StringVar(&configPath, "model-config", "./config/models.yaml", "deployed model catalog")
 	flag.StringVar(&reportPath, "report", "", "resumable JSON report path")
@@ -244,6 +245,13 @@ func run() error {
 	allPassed := true
 	createPermits := newCreatePermitStream(ctx, 5*time.Second)
 	caseGroups := buildCanaryGroups(catalog, profile, releaseSHA, seed, referenceIDs)
+	if promptFile != "" {
+		prompt, promptErr := readPrompt(promptFile)
+		if promptErr != nil {
+			return fmt.Errorf("read prompt: %w", promptErr)
+		}
+		applyPromptOverride(caseGroups, prompt)
+	}
 	for _, cases := range caseGroups {
 		if err := runModel(ctx, client, store, folderID, archiveOutput, cases, createPermits); err != nil {
 			allPassed = false
@@ -370,6 +378,31 @@ func readPassword(path string) (string, error) {
 		return "", errors.New("password file is empty")
 	}
 	return password, nil
+}
+
+func readPrompt(path string) (string, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return "", err
+	}
+	prompt := strings.TrimSpace(string(data))
+	if prompt == "" {
+		return "", errors.New("prompt file is empty")
+	}
+	return prompt, nil
+}
+
+func applyPromptOverride(groups [][]canaryCase, prompt string) {
+	for groupIndex := range groups {
+		for caseIndex := range groups[groupIndex] {
+			item := &groups[groupIndex][caseIndex]
+			item.Prompt = prompt
+			if item.Mode == "image" {
+				item.Prompt += " Preserve the reference image's character identity and visual design."
+			}
+			item.PromptSHA256 = hashText(item.Prompt)
+		}
+	}
 }
 
 func (c *apiClient) login(ctx context.Context, username, password string) error {

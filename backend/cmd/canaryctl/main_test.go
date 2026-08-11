@@ -119,3 +119,22 @@ func TestPromptsAreDeterministicButCaseSpecific(t *testing.T) {
 		t.Fatal("different cases produced identical prompts")
 	}
 }
+
+func TestApplyPromptOverridePreservesImageInstruction(t *testing.T) {
+	groups := [][]canaryCase{{
+		{Mode: "text", Prompt: "old", PromptSHA256: hashText("old")},
+		{Mode: "image", Prompt: "old", PromptSHA256: hashText("old")},
+	}}
+	applyPromptOverride(groups, "reference prompt")
+
+	if groups[0][0].Prompt != "reference prompt" {
+		t.Fatalf("text prompt = %q", groups[0][0].Prompt)
+	}
+	imagePrompt := "reference prompt Preserve the reference image's character identity and visual design."
+	if groups[0][1].Prompt != imagePrompt {
+		t.Fatalf("image prompt = %q", groups[0][1].Prompt)
+	}
+	if groups[0][0].PromptSHA256 != hashText("reference prompt") || groups[0][1].PromptSHA256 != hashText(imagePrompt) {
+		t.Fatal("prompt hashes were not refreshed")
+	}
+}

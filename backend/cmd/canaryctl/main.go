@@ -32,8 +32,9 @@ import (
 )
 
 const (
-	defaultUsername      = "Intern2"
-	maximumResponseBytes = 4 << 20
+	defaultUsername         = "Intern2"
+	maximumResponseBytes    = 4 << 20
+	referenceUploadInterval = 3 * time.Second
 )
 
 type apiClient struct {
@@ -221,7 +222,13 @@ func run() error {
 		referenceCount = 10
 	}
 	referenceIDs := make([]uuid.UUID, 0, referenceCount)
+	referencePermits := newCreatePermitStream(ctx, referenceUploadInterval)
 	for index := 0; index < referenceCount; index++ {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-referencePermits:
+		}
 		referenceID, referenceErr := client.ensureReference(ctx, folderID)
 		if referenceErr != nil {
 			return fmt.Errorf("prepare reference image %d: %w", index+1, referenceErr)

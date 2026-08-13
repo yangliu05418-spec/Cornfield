@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"image"
 	"image/color"
-	stdDraw "image/draw"
 	"image/jpeg"
 	"image/png"
 	"io"
@@ -239,7 +238,15 @@ func (w *AssetOperationWorker) decompose(ctx context.Context, record assetOperat
 			}
 			return err
 		}
-		businessCtx, cancel := context.WithTimeout(ctx, 10*time.Minute)
+		operationTimeout, timeoutErr := w.layerOperationTimeout(record)
+		if timeoutErr != nil {
+			release()
+			if w.Generator != nil && w.Generator.Breaker != nil {
+				w.Generator.Breaker.Abandon(breakerKey)
+			}
+			return w.failOperationAndCancel(ctx, record, "PROVIDER_NOT_CONFIGURED", "智能分层服务配置无效")
+		}
+		businessCtx, cancel := context.WithTimeout(ctx, operationTimeout)
 		started := time.Now()
 		result, submitErr := decomposer.DecomposeLayers(businessCtx, provider.LayerDecompositionRequest{
 			Model: *record.ProviderModel, Image: dataURL, Prompt: valueOrPointer(record.Prompt),
@@ -455,15 +462,13 @@ func compositeEditorDocument(ctx context.Context, document studioEditor.Document
 				sourceBounds.Min.Y+int(math.Round(float64(sourceBounds.Dy())*(object.Crop.Y+object.Crop.Height))),
 			).Intersect(sourceBounds)
 		}
-		layer := image.NewRGBA(canvas.Bounds())
 		matrix := f64.Aff3{object.Transform[0], object.Transform[2], object.Transform[4], object.Transform[1], object.Transform[3], object.Transform[5]}
-		draw.BiLinear.Transform(layer, matrix, source, crop, draw.Src, nil)
-		if object.Opacity >= 0.999 {
-			stdDraw.Draw(canvas, canvas.Bounds(), layer, image.Point{}, stdDraw.Over)
-		} else {
-			mask := image.NewUniform(color.Alpha{A: uint8(math.Round(object.Opacity * 255))})
-			stdDraw.DrawMask(canvas, canvas.Bounds(), layer, image.Point{}, mask, image.Point{}, stdDraw.Over)
+		var options *draw.Options
+		if object.Opacity < 0.999 {
+			options = &draw.Options{SrcMask: image.NewUniform(color.Alpha{A: uint8(math.Round(object.Opacity * 255))})}
 		}
+		draw.BiLinear.Transform(canvas, matrix, source, crop, draw.Over, options)
+		source = nil
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
@@ -916,7 +921,9 @@ func bytePlusLayerURLAllowed(value *url.URL) bool {
 		return false
 	}
 	host := strings.ToLower(strings.TrimSuffix(value.Hostname(), "."))
-	return host == "bytepluses.com" || strings.HasSuffix(host, ".bytepluses.com") || host == "byteplus.com" || strings.HasSuffix(host, ".byteplus.com")
+	return host == "bytepluses.com" || strings.HasSuffix(host, ".bytepluses.com") ||
+		host == "byteplus.com" || strings.HasSuffix(host, ".byteplus.com") ||
+		host == "tos-ap-southeast-1.volces.com" || strings.HasSuffix(host, ".tos-ap-southeast-1.volces.com")
 }
 
 func (w *AssetOperationWorker) beginAssetAttempt(ctx context.Context, record assetOperationRecord, operation string) (int64, error) {
@@ -1127,11 +1134,12 @@ func (w *AssetOperationWorker) RunSubmissionRecovery(ctx context.Context) {
 }
 
 func (w *AssetOperationWorker) recoverStaleSubmissions(ctx context.Context) {
+	recoveryAge := w.operationRecoveryAge()
 	rows, err := w.DB.Query(ctx, `SELECT DISTINCT o.id FROM asset_operations o
 		JOIN provider_attempts a ON a.asset_operation_id=o.id
 		WHERE o.operation_type='layer_decomposition' AND o.status='submitting'
 		  AND a.operation='submit' AND a.finished_at IS NULL
-		  AND a.created_at < now()-interval '11 minutes' LIMIT 100`)
+		  AND a.created_at < now()-$1::interval LIMIT 100`, recoveryAge.String())
 	if err != nil {
 		w.Log.Warn("asset operation submission recovery scan failed", "error", err)
 		return
@@ -1157,6 +1165,24 @@ func (w *AssetOperationWorker) recoverStaleSubmissions(ctx context.Context) {
 			w.Log.Warn("asset operation submission recovery failed", "asset_operation_id", id, "error", persistErr)
 		}
 	}
+}
+
+func (w *AssetOperationWorker) layerOperationTimeout(record assetOperationRecord) (time.Duration, error) {
+	if w.Catalog == nil || record.ModelID == nil {
+		return 0, errors.New("layer operation model is unavailable")
+	}
+	model, ok := w.Catalog.Find(*record.ModelID)
+	if !ok || model.Policy.LayerDecompositionTimeoutSeconds <= 0 {
+		return 0, errors.New("layer operation timeout is unavailable")
+	}
+	return time.Duration(model.Policy.LayerDecompositionTimeoutSeconds) * time.Second, nil
+}
+
+func (w *AssetOperationWorker) operationRecoveryAge() time.Duration {
+	if w.Catalog == nil || w.Catalog.MaxOperationTimeout() <= 0 {
+		return 11 * time.Minute
+	}
+	return w.Catalog.MaxOperationTimeout() + time.Minute
 }
 
 func (w *AssetOperationWorker) retryOperation(ctx context.Context, record assetOperationRecord, providerErr *provider.Error) error {

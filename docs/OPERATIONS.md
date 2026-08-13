@@ -73,6 +73,7 @@ go run ./cmd/modelctl verify-remote
 - OpenRouter：各 1 次文生图和图生图，1 draw、1:1、1K。
 - Legnext：各 1 次文生图和图生图，1 draw；预期一个 draw 返回模型配置声明的多张输出。
 - BytePlus Seedream 5.0 Pro：使用 `canaryctl --profile byteplus` 执行 24 项尺寸矩阵与 1/2/10 张参考图的 3 项图生图验证；并发不得超过 2。
+- BytePlus 智能分层发布必须分两步：先使用 `--profile layer-protocol` 直接验证 Provider 协议，再在能力开启并部署后使用 `--profile layer-e2e` 验证上传、工程保存、SSE、分层、缩略图、发布和 ZIP。协议产物与报告必须保存在 Git 之外的权限受控目录。
 - 对每次任务记录本地 batch/job ID、Provider request/job ID、开始/结束时间和实际用量；确认刷新与 SSE 重连可恢复、最终资产已复制到本地、下载可用、上游临时 URL 失效后历史资产仍可读。
 - 观察 callback 命中和主动 poll 对账；不要把 key、签名 URL、prompt-bearing callback body 或 base64 输出复制进工单/日志。
 
@@ -264,6 +265,34 @@ curl -fsS http://127.0.0.1:9090/api/v1/query?query=image_studio_restore_check_la
 ### 真实 Provider 发布矩阵
 
 真实 Provider 测试不进入普通 CI。新 release 健康后，使用 digest 固定的 Tools 镜像运行 `canaryctl`；它只通过登录、CSRF、上传、生成、轮询和资产组织 API 工作，不直接修改业务表。报告按 case 原子落盘，同一命令可安全续跑。测试产物进入 Intern2 的 `Canary <release>` 文件夹并归档。
+
+图片工作台使用两个独立的 Canary profile：
+
+- `layer-protocol` 直接读取权限受控的 BytePlus Key 文件，不依赖数据库或能力开关。它按 `auto / 1K / 1.5K / 2K` 执行四次请求，验证图层、bbox、Alpha、输出主机和重组画面。报告不记录 Prompt、签名 URL、Base64 或 Key；任一错误立即停止。
+- `layer-e2e` 只通过 Cornfield 公开 API 工作，需要用户密码文件与 release SHA。它执行六组工作台链路，并至少覆盖一次单层发布、合成发布和 ZIP 下载。成功产物归入 `Canary Layers <release>` 并归档。
+
+当前 BytePlus AP 分层输出白名单为 `*.tos-ap-southeast-1.volces.com`，代码必须继续要求 HTTPS 和安全重定向校验；不得扩大为整个 `volces.com`。
+
+示例：
+
+```bash
+# 发布前协议验证；应在权限受控目录运行。
+canaryctl \
+  --profile layer-protocol \
+  --provider-key-file /run/secrets/byteplus_api_key \
+  --report /srv/internal-image-studio/canary/layer-protocol/report.json \
+  --artifact-dir /srv/internal-image-studio/canary/layer-protocol/artifacts
+
+# 能力开启并部署后的完整产品验证。
+canaryctl \
+  --profile layer-e2e \
+  --base-url https://corn.kumadrama.com \
+  --username Intern1 \
+  --password-file /run/secrets/canary_password \
+  --release "$RELEASE_SHA" \
+  --model-config /app/config/models.yaml \
+  --report /srv/internal-image-studio/canary/layer-e2e/report.json
+```
 
 ```bash
 canary_root=/srv/internal-image-studio/canary

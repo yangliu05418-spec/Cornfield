@@ -1,9 +1,11 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -11,6 +13,7 @@ import (
 	"fmt"
 	"image"
 	"image/color"
+	stdDraw "image/draw"
 	"image/png"
 	"io"
 	"math"
@@ -26,9 +29,14 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"golang.org/x/image/draw"
+	"golang.org/x/image/font"
+	"golang.org/x/image/font/basicfont"
+	"golang.org/x/image/math/fixed"
 
 	"internal-image-studio/internal/modelconfig"
 	"internal-image-studio/internal/provider"
+	"internal-image-studio/internal/safehttp"
 )
 
 const (
@@ -81,6 +89,76 @@ type assetPresentation struct {
 	BlurDataURL string    `json:"blur_data_url"`
 	Thumb320URL string    `json:"thumb_320_url"`
 	Thumb640URL string    `json:"thumb_640_url"`
+}
+
+type editorDocument struct {
+	SchemaVersion int            `json:"schema_version"`
+	Canvas        editorCanvas   `json:"canvas"`
+	Objects       []editorObject `json:"objects"`
+}
+
+type editorCanvas struct {
+	Width  int `json:"width"`
+	Height int `json:"height"`
+}
+
+type editorCrop struct {
+	X      float64 `json:"x"`
+	Y      float64 `json:"y"`
+	Width  float64 `json:"width"`
+	Height float64 `json:"height"`
+}
+
+type editorObject struct {
+	ID        string      `json:"id"`
+	AssetID   uuid.UUID   `json:"asset_id"`
+	Transform [6]float64  `json:"transform"`
+	Opacity   float64     `json:"opacity"`
+	Visible   bool        `json:"visible"`
+	Locked    bool        `json:"locked"`
+	ZIndex    int         `json:"z_index"`
+	Crop      *editorCrop `json:"crop,omitempty"`
+}
+
+type editorProject struct {
+	ID            uuid.UUID      `json:"id"`
+	SourceAssetID uuid.UUID      `json:"source_asset_id"`
+	Document      editorDocument `json:"document"`
+	Revision      int64          `json:"revision"`
+}
+
+type layerAsset struct {
+	ID          uuid.UUID `json:"id"`
+	Width       int       `json:"width"`
+	Height      int       `json:"height"`
+	BlurDataURL string    `json:"blur_data_url"`
+}
+
+type layerSetItem struct {
+	ID                    uuid.UUID  `json:"id"`
+	ZIndex                int        `json:"z_index"`
+	Name                  string     `json:"name"`
+	BoundingBoxAbsolute   []int      `json:"bounding_box_absolute"`
+	BoundingBoxNormalized []float64  `json:"bounding_box_normalized"`
+	Asset                 layerAsset `json:"asset"`
+}
+
+type layerSet struct {
+	ID           uuid.UUID      `json:"id"`
+	BaseAsset    layerAsset     `json:"base_asset"`
+	Items        []layerSetItem `json:"items"`
+	PackageReady bool           `json:"package_ready"`
+}
+
+type assetOperation struct {
+	ID                  uuid.UUID  `json:"id"`
+	Status              string     `json:"status"`
+	SourceRevision      int64      `json:"source_revision"`
+	SubmissionUncertain bool       `json:"submission_uncertain"`
+	ErrorCode           *string    `json:"error_code"`
+	ErrorMessage        *string    `json:"error_message"`
+	ResultAssetID       *uuid.UUID `json:"result_asset_id"`
+	LayerSet            *layerSet  `json:"layer_set"`
 }
 
 type generationJob struct {
@@ -159,22 +237,30 @@ func main() {
 }
 
 func run() error {
-	var baseURL, username, passwordFile, promptFile, releaseSHA, configPath, reportPath, profile string
+	var baseURL, username, passwordFile, promptFile, providerKeyFile, artifactDir, releaseSHA, configPath, reportPath, profile string
 	var allowHTTP bool
 	var archiveOutput bool
 	flag.StringVar(&baseURL, "base-url", "https://corn.kumadrama.com", "Cornfield HTTPS origin")
 	flag.StringVar(&username, "username", defaultUsername, "existing canary username")
 	flag.StringVar(&passwordFile, "password-file", "", "root-managed file containing the canary password")
 	flag.StringVar(&promptFile, "prompt-file", "", "optional file containing one prompt for every canary case")
+	flag.StringVar(&providerKeyFile, "provider-key-file", "", "root-managed BytePlus API key file for layer-protocol")
+	flag.StringVar(&artifactDir, "artifact-dir", "", "private output directory for layer protocol artifacts")
 	flag.StringVar(&releaseSHA, "release", "", "deployed release commit SHA")
 	flag.StringVar(&configPath, "model-config", "./config/models.yaml", "deployed model catalog")
 	flag.StringVar(&reportPath, "report", "", "resumable JSON report path")
-	flag.StringVar(&profile, "profile", "matrix", "canary profile: matrix, launch, or byteplus")
+	flag.StringVar(&profile, "profile", "matrix", "canary profile: matrix, launch, byteplus, layer-protocol, or layer-e2e")
 	flag.BoolVar(&archiveOutput, "archive-output", true, "archive generated canary assets")
 	flag.BoolVar(&allowHTTP, "allow-http", false, "allow HTTP for isolated tests only")
 	flag.Parse()
-	if profile != "matrix" && profile != "launch" && profile != "byteplus" {
-		return errors.New("--profile must be matrix, launch, or byteplus")
+	if profile != "matrix" && profile != "launch" && profile != "byteplus" && profile != "layer-protocol" && profile != "layer-e2e" {
+		return errors.New("--profile must be matrix, launch, byteplus, layer-protocol, or layer-e2e")
+	}
+	if profile == "layer-protocol" {
+		if providerKeyFile == "" || reportPath == "" || artifactDir == "" {
+			return errors.New("layer-protocol requires --provider-key-file, --report, and --artifact-dir")
+		}
+		return runLayerProtocol(providerKeyFile, reportPath, artifactDir)
 	}
 
 	if passwordFile == "" || releaseSHA == "" {
@@ -212,6 +298,12 @@ func run() error {
 	}
 	if err = client.probeSSE(ctx); err != nil {
 		return fmt.Errorf("SSE probe: %w", err)
+	}
+	if profile == "layer-e2e" {
+		if reportPath == "" {
+			reportPath = "layer-e2e-" + shortSHA(releaseSHA) + ".json"
+		}
+		return runLayerE2E(ctx, client, reportPath, releaseSHA, catalog.Hash, username)
 	}
 
 	folderID, err := client.ensureFolder(ctx, "Canary "+shortSHA(releaseSHA))
@@ -916,6 +1008,403 @@ func (c *apiClient) validateAssetPresentation(ctx context.Context, assetID uuid.
 	return nil
 }
 
+type layerE2ECase struct {
+	Name      string
+	Size      string
+	Mode      string
+	Prompt    string
+	Transform bool
+}
+
+type layerE2EResult struct {
+	Name            string     `json:"name"`
+	Size            string     `json:"size"`
+	Mode            string     `json:"prompt_optimization_mode"`
+	Status          string     `json:"status"`
+	ErrorCode       string     `json:"error_code,omitempty"`
+	ErrorMessage    string     `json:"error_message,omitempty"`
+	ProjectID       *uuid.UUID `json:"project_id,omitempty"`
+	OperationID     *uuid.UUID `json:"operation_id,omitempty"`
+	LayerSetID      *uuid.UUID `json:"layer_set_id,omitempty"`
+	LayerCount      int        `json:"layer_count,omitempty"`
+	DurationMS      int64      `json:"duration_ms"`
+	SSELatencyMS    int64      `json:"sse_latency_ms,omitempty"`
+	SnapshotVariant bool       `json:"required_variants_ready"`
+}
+
+type layerE2EReport struct {
+	ReleaseSHA         string           `json:"release_sha"`
+	CapabilityRevision string           `json:"capability_revision"`
+	Username           string           `json:"username"`
+	StartedAt          time.Time        `json:"started_at"`
+	CompletedAt        *time.Time       `json:"completed_at,omitempty"`
+	Results            []layerE2EResult `json:"results"`
+}
+
+func runLayerE2E(ctx context.Context, client *apiClient, reportPath, release, revision, username string) error {
+	report := layerE2EReport{ReleaseSHA: release, CapabilityRevision: revision, Username: username, StartedAt: time.Now().UTC()}
+	folderID, err := client.ensureFolder(ctx, "Canary Layers "+shortSHA(release))
+	if err != nil {
+		return fmt.Errorf("create layer canary folder: %w", err)
+	}
+	cases := []layerE2ECase{
+		{Name: "auto-standard", Size: "auto", Mode: "standard"},
+		{Name: "1k-fast", Size: "1K", Mode: "fast"},
+		{Name: "1.5k-standard", Size: "1.5K", Mode: "standard"},
+		{Name: "2k-standard", Size: "2K", Mode: "standard"},
+		{Name: "elements-1k", Size: "1K", Mode: "standard", Prompt: "Separate the central figure, title, lime circle, blue rectangle, and background into independent layers."},
+		{Name: "transformed-bbox-2k", Size: "2K", Mode: "fast", Transform: true, Prompt: "Separate the central figure inside <bbox>350 160 650 880</bbox>, the title, both geometric shapes, and the background."},
+	}
+	for _, item := range cases {
+		result := client.runLayerE2ECase(ctx, folderID, item)
+		report.Results = append(report.Results, result)
+		if err = writePrivateJSON(reportPath, report); err != nil {
+			return err
+		}
+		fmt.Printf("layer-e2e %s %s (%dms)\n", item.Name, result.Status, result.DurationMS)
+		if result.Status != "passed" {
+			return fmt.Errorf("layer e2e stopped after %s: %s %s", item.Name, result.ErrorCode, result.ErrorMessage)
+		}
+	}
+	now := time.Now().UTC()
+	report.CompletedAt = &now
+	if err = writePrivateJSON(reportPath, report); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (c *apiClient) runLayerE2ECase(ctx context.Context, folderID uuid.UUID, item layerE2ECase) layerE2EResult {
+	started := time.Now()
+	result := layerE2EResult{Name: item.Name, Size: item.Size, Mode: item.Mode, Status: "failed"}
+	fail := func(err error) layerE2EResult {
+		result.ErrorCode, result.ErrorMessage = errorFields(err)
+		result.DurationMS = time.Since(started).Milliseconds()
+		return result
+	}
+	poster, err := layerProtocolPoster()
+	if err != nil {
+		return fail(err)
+	}
+	assetID, err := c.uploadPNG(ctx, folderID, "layer-canary-"+item.Name+".png", poster)
+	if err != nil {
+		return fail(err)
+	}
+	var project editorProject
+	if err = c.json(ctx, http.MethodPost, "/api/v1/assets/"+assetID.String()+"/editor-project", nil, &project, ""); err != nil {
+		return fail(err)
+	}
+	result.ProjectID = &project.ID
+	if item.Transform {
+		angle, scale := 8*math.Pi/180, 0.86
+		a, b := math.Cos(angle)*scale, math.Sin(angle)*scale
+		cc, d := -math.Sin(angle)*scale, math.Cos(angle)*scale
+		cx, cy := float64(project.Document.Canvas.Width)/2, float64(project.Document.Canvas.Height)/2
+		project.Document.Objects[0].Transform = [6]float64{a, b, cc, d, cx - a*cx - cc*cy + 70, cy - b*cx - d*cy - 45}
+		project.Document.Objects[0].Crop = &editorCrop{X: 0.06, Y: 0.08, Width: 0.88, Height: 0.82}
+		var saved struct {
+			Revision int64 `json:"revision"`
+		}
+		if err = c.json(ctx, http.MethodPut, "/api/v1/editor-projects/"+project.ID.String()+"/document", map[string]any{"expected_revision": project.Revision, "document": project.Document}, &saved, ""); err != nil {
+			return fail(err)
+		}
+		project.Revision = saved.Revision
+	}
+	var created struct {
+		ID uuid.UUID `json:"id"`
+	}
+	operationStarted := time.Now()
+	if err = c.json(ctx, http.MethodPost, "/api/v1/editor-projects/"+project.ID.String()+"/layer-decompositions", map[string]any{
+		"expected_revision": project.Revision, "prompt": item.Prompt, "resolution": item.Size, "prompt_optimization_mode": item.Mode,
+	}, &created, uuid.NewString()); err != nil {
+		return fail(err)
+	}
+	result.OperationID = &created.ID
+	sse := make(chan time.Duration, 1)
+	operationCtx, cancel := context.WithTimeout(ctx, 15*time.Minute)
+	defer cancel()
+	go func() {
+		if latency, eventErr := c.waitForOperationEvent(operationCtx, created.ID, operationStarted); eventErr == nil {
+			sse <- latency
+		}
+	}()
+	operation, err := c.waitForOperation(operationCtx, created.ID)
+	if err != nil {
+		return fail(err)
+	}
+	select {
+	case latency := <-sse:
+		result.SSELatencyMS = latency.Milliseconds()
+	case <-time.After(3 * time.Second):
+		return fail(errors.New("terminal SSE event was not observed"))
+	}
+	if operation.SubmissionUncertain || operation.Status != "succeeded" || operation.LayerSet == nil {
+		return fail(fmt.Errorf("operation %s: %v %v", operation.Status, operation.ErrorCode, operation.ErrorMessage))
+	}
+	if err = c.validateLayerSet(ctx, operation.LayerSet); err != nil {
+		return fail(err)
+	}
+	result.LayerSetID = &operation.LayerSet.ID
+	result.LayerCount = len(operation.LayerSet.Items)
+	result.SnapshotVariant = true
+
+	// Exercise each publish path once while keeping the other paid cases focused.
+	if item.Name == "auto-standard" {
+		var published assetPresentation
+		if err = c.json(ctx, http.MethodPost, "/api/v1/layer-sets/"+operation.LayerSet.ID.String()+"/items/"+operation.LayerSet.Items[0].ID.String()+"/publish", nil, &published, ""); err != nil {
+			return fail(err)
+		}
+		if err = c.validateAssetPresentation(ctx, published.ID); err != nil {
+			return fail(err)
+		}
+		if err = c.organize(ctx, published.ID, folderID, true); err != nil {
+			return fail(err)
+		}
+		if err = c.createAndValidateLayerPackage(ctx, operation.LayerSet.ID); err != nil {
+			return fail(err)
+		}
+	}
+	if item.Name == "2k-standard" {
+		project.Document = documentFromLayerSet(*operation.LayerSet)
+		var saved struct {
+			Revision int64 `json:"revision"`
+		}
+		if err = c.json(ctx, http.MethodPut, "/api/v1/editor-projects/"+project.ID.String()+"/document", map[string]any{"expected_revision": project.Revision, "document": project.Document}, &saved, ""); err != nil {
+			return fail(err)
+		}
+		var publish struct {
+			ID uuid.UUID `json:"id"`
+		}
+		if err = c.json(ctx, http.MethodPost, "/api/v1/editor-projects/"+project.ID.String()+"/publish", map[string]any{"expected_revision": saved.Revision}, &publish, uuid.NewString()); err != nil {
+			return fail(err)
+		}
+		publishedOperation, waitErr := c.waitForOperation(operationCtx, publish.ID)
+		if waitErr != nil || publishedOperation.ResultAssetID == nil {
+			if waitErr != nil {
+				return fail(waitErr)
+			}
+			return fail(errors.New("editor publish completed without an asset"))
+		}
+		if err = c.validateAssetPresentation(ctx, *publishedOperation.ResultAssetID); err != nil {
+			return fail(err)
+		}
+		if err = c.organize(ctx, *publishedOperation.ResultAssetID, folderID, true); err != nil {
+			return fail(err)
+		}
+	}
+	result.Status = "passed"
+	result.DurationMS = time.Since(started).Milliseconds()
+	return result
+}
+
+func (c *apiClient) uploadPNG(ctx context.Context, folderID uuid.UUID, filename string, data []byte) (uuid.UUID, error) {
+	var session uploadState
+	if err := c.json(ctx, http.MethodPost, "/api/v1/uploads", map[string]any{"filename": filename, "media_type": "image/png", "size": len(data)}, &session, ""); err != nil {
+		return uuid.Nil, err
+	}
+	uploadURL := session.ContentURL
+	if uploadURL == "" {
+		uploadURL = "/api/v1/uploads/" + session.ID.String() + "/content"
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPut, c.base.ResolveReference(&url.URL{Path: uploadURL}).String(), bytes.NewReader(data))
+	if err != nil {
+		return uuid.Nil, err
+	}
+	req.Header.Set("Content-Type", "image/png")
+	req.Header.Set("X-CSRF-Token", c.csrf)
+	res, err := c.http.Do(req)
+	if err != nil {
+		return uuid.Nil, err
+	}
+	_, _ = io.Copy(io.Discard, io.LimitReader(res.Body, maximumResponseBytes))
+	res.Body.Close()
+	if res.StatusCode != http.StatusAccepted {
+		return uuid.Nil, fmt.Errorf("upload returned HTTP %d", res.StatusCode)
+	}
+	deadline := time.Now().Add(2 * time.Minute)
+	for time.Now().Before(deadline) {
+		if err = c.json(ctx, http.MethodGet, "/api/v1/uploads/"+session.ID.String(), nil, &session, ""); err != nil {
+			return uuid.Nil, err
+		}
+		if session.Status == "ready" && session.AssetID != nil {
+			if err = c.organize(ctx, *session.AssetID, folderID, true); err != nil {
+				return uuid.Nil, err
+			}
+			return *session.AssetID, c.validateAssetPresentation(ctx, *session.AssetID)
+		}
+		if session.Status == "failed" || session.Status == "expired" {
+			return uuid.Nil, fmt.Errorf("upload %s: %v", session.Status, session.ErrorCode)
+		}
+		time.Sleep(time.Second)
+	}
+	return uuid.Nil, errors.New("upload timed out")
+}
+
+func (c *apiClient) waitForOperation(ctx context.Context, id uuid.UUID) (assetOperation, error) {
+	for {
+		var operation assetOperation
+		if err := c.json(ctx, http.MethodGet, "/api/v1/asset-operations/"+id.String(), nil, &operation, ""); err != nil {
+			return operation, err
+		}
+		switch operation.Status {
+		case "succeeded":
+			return operation, nil
+		case "failed", "cancelled", "submission_uncertain":
+			return operation, fmt.Errorf("operation %s: %v %v", operation.Status, operation.ErrorCode, operation.ErrorMessage)
+		}
+		select {
+		case <-ctx.Done():
+			return operation, ctx.Err()
+		case <-time.After(2 * time.Second):
+		}
+	}
+}
+
+func (c *apiClient) waitForOperationEvent(ctx context.Context, operationID uuid.UUID, started time.Time) (time.Duration, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.base.ResolveReference(&url.URL{Path: "/api/v1/events"}).String(), nil)
+	if err != nil {
+		return 0, err
+	}
+	res, err := c.http.Do(req)
+	if err != nil {
+		return 0, err
+	}
+	defer res.Body.Close()
+	if res.StatusCode != http.StatusOK {
+		return 0, fmt.Errorf("SSE returned HTTP %d", res.StatusCode)
+	}
+	scanner := bufio.NewScanner(res.Body)
+	scanner.Buffer(make([]byte, 4096), maximumResponseBytes)
+	for scanner.Scan() {
+		line := scanner.Text()
+		if !strings.HasPrefix(line, "data: ") {
+			continue
+		}
+		var envelope struct {
+			Payload struct {
+				ID     uuid.UUID `json:"id"`
+				Status string    `json:"status"`
+			} `json:"payload"`
+		}
+		if json.Unmarshal([]byte(strings.TrimPrefix(line, "data: ")), &envelope) != nil || envelope.Payload.ID != operationID {
+			continue
+		}
+		if envelope.Payload.Status == "succeeded" || envelope.Payload.Status == "failed" || envelope.Payload.Status == "submission_uncertain" || envelope.Payload.Status == "cancelled" {
+			return time.Since(started), nil
+		}
+	}
+	return 0, scanner.Err()
+}
+
+func (c *apiClient) validateLayerSet(ctx context.Context, set *layerSet) error {
+	if set.ID == uuid.Nil || len(set.Items) < 1 || len(set.Items) > 16 {
+		return errors.New("layer set has invalid output count")
+	}
+	if err := c.validateAssetPresentation(ctx, set.BaseAsset.ID); err != nil {
+		return fmt.Errorf("base presentation: %w", err)
+	}
+	seen := map[int]struct{}{0: {}}
+	for _, item := range set.Items {
+		if item.ID == uuid.Nil || item.ZIndex < 1 || item.Name == "" {
+			return errors.New("layer item metadata is invalid")
+		}
+		if _, exists := seen[item.ZIndex]; exists {
+			return errors.New("layer z-index is duplicated")
+		}
+		seen[item.ZIndex] = struct{}{}
+		if len(item.BoundingBoxAbsolute) != 4 || len(item.BoundingBoxNormalized) != 4 {
+			return errors.New("layer bounding box is invalid")
+		}
+		left, top, right, bottom := item.BoundingBoxAbsolute[0], item.BoundingBoxAbsolute[1], item.BoundingBoxAbsolute[2], item.BoundingBoxAbsolute[3]
+		if left < 0 || top < 0 || right <= left || bottom <= top || right > set.BaseAsset.Width || bottom > set.BaseAsset.Height {
+			return errors.New("layer absolute bounding box is out of bounds")
+		}
+		for _, value := range item.BoundingBoxNormalized {
+			if value < 0 || value > 1000 {
+				return errors.New("layer normalized bounding box is out of bounds")
+			}
+		}
+		if err := c.validateAssetPresentation(ctx, item.Asset.ID); err != nil {
+			return fmt.Errorf("layer %d presentation: %w", item.ZIndex, err)
+		}
+	}
+	return nil
+}
+
+func documentFromLayerSet(set layerSet) editorDocument {
+	document := editorDocument{SchemaVersion: 1, Canvas: editorCanvas{Width: set.BaseAsset.Width, Height: set.BaseAsset.Height}}
+	document.Objects = append(document.Objects, editorObject{ID: "base-" + set.ID.String(), AssetID: set.BaseAsset.ID, Transform: [6]float64{1, 0, 0, 1, 0, 0}, Opacity: 1, Visible: true, ZIndex: 0})
+	for _, item := range set.Items {
+		left, top, right, bottom := item.BoundingBoxAbsolute[0], item.BoundingBoxAbsolute[1], item.BoundingBoxAbsolute[2], item.BoundingBoxAbsolute[3]
+		document.Objects = append(document.Objects, editorObject{ID: item.ID.String(), AssetID: item.Asset.ID, Transform: [6]float64{float64(right-left) / float64(item.Asset.Width), 0, 0, float64(bottom-top) / float64(item.Asset.Height), float64(left), float64(top)}, Opacity: 1, Visible: true, ZIndex: item.ZIndex})
+	}
+	return document
+}
+
+func (c *apiClient) createAndValidateLayerPackage(ctx context.Context, layerSetID uuid.UUID) error {
+	var created struct {
+		ID         uuid.UUID `json:"id"`
+		Status     string    `json:"status"`
+		ContentURL string    `json:"content_url"`
+	}
+	if err := c.json(ctx, http.MethodPost, "/api/v1/layer-sets/"+layerSetID.String()+"/package", nil, &created, uuid.NewString()); err != nil {
+		return err
+	}
+	if created.Status != "succeeded" {
+		operation, err := c.waitForOperation(ctx, created.ID)
+		if err != nil || operation.Status != "succeeded" {
+			if err != nil {
+				return err
+			}
+			return errors.New("layer package did not succeed")
+		}
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.base.ResolveReference(&url.URL{Path: "/api/v1/layer-sets/" + layerSetID.String() + "/package/content"}).String(), nil)
+	if err != nil {
+		return err
+	}
+	res, err := c.http.Do(req)
+	if err != nil {
+		return err
+	}
+	defer res.Body.Close()
+	if res.StatusCode != http.StatusOK || res.Header.Get("Content-Type") != "application/zip" {
+		return fmt.Errorf("layer package returned HTTP %d %q", res.StatusCode, res.Header.Get("Content-Type"))
+	}
+	_, err = io.Copy(io.Discard, io.LimitReader(res.Body, 513<<20))
+	return err
+}
+
+func writePrivateJSON(path string, value any) error {
+	data, err := json.MarshalIndent(value, "", "  ")
+	if err != nil {
+		return err
+	}
+	if err = os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return err
+	}
+	temporary, err := os.CreateTemp(filepath.Dir(path), ".layer-e2e-*.tmp")
+	if err != nil {
+		return err
+	}
+	name := temporary.Name()
+	defer os.Remove(name)
+	if err = temporary.Chmod(0o600); err == nil {
+		_, err = temporary.Write(data)
+	}
+	if err == nil {
+		err = temporary.Sync()
+	}
+	closeErr := temporary.Close()
+	if err == nil {
+		err = closeErr
+	}
+	if err != nil {
+		return err
+	}
+	return os.Rename(name, path)
+}
+
 func openReport(path, release, revision, username string) (*reportStore, error) {
 	store := &reportStore{path: path, report: report{ReleaseSHA: release, CapabilityRevision: revision, Username: username, StartedAt: time.Now().UTC()}}
 	data, err := os.ReadFile(path)
@@ -1016,6 +1505,410 @@ func finishResult(result caseResult, started time.Time) caseResult {
 	result.DurationMS = result.CompletedAt.Sub(started).Milliseconds()
 	result.ErrorMessage = bounded(result.ErrorMessage, 1024)
 	return result
+}
+
+type layerProtocolCase struct {
+	Name   string
+	Prompt string
+	Size   string
+	Mode   string
+}
+
+type layerProtocolResult struct {
+	Name              string         `json:"name"`
+	Size              string         `json:"size"`
+	Mode              string         `json:"prompt_optimization_mode"`
+	Status            string         `json:"status"`
+	ErrorCode         string         `json:"error_code,omitempty"`
+	ErrorMessage      string         `json:"error_message,omitempty"`
+	DurationMS        int64          `json:"duration_ms"`
+	ProviderRequestID string         `json:"provider_request_id,omitempty"`
+	OutputCount       int            `json:"output_count,omitempty"`
+	OutputSizes       []string       `json:"output_sizes,omitempty"`
+	OutputSHA256      []string       `json:"output_sha256,omitempty"`
+	OutputHosts       []string       `json:"output_hosts,omitempty"`
+	Usage             map[string]any `json:"usage,omitempty"`
+}
+
+type layerProtocolReport struct {
+	Model       string                `json:"model"`
+	Endpoint    string                `json:"endpoint"`
+	StartedAt   time.Time             `json:"started_at"`
+	CompletedAt time.Time             `json:"completed_at"`
+	Results     []layerProtocolResult `json:"results"`
+}
+
+func runLayerProtocol(keyFile, reportPath, artifactDir string) error {
+	key, err := readSecretFile(keyFile)
+	if err != nil {
+		return fmt.Errorf("read BytePlus API key: %w", err)
+	}
+	if err = os.MkdirAll(artifactDir, 0o700); err != nil {
+		return fmt.Errorf("create artifact directory: %w", err)
+	}
+	if err = os.Chmod(artifactDir, 0o700); err != nil {
+		return fmt.Errorf("protect artifact directory: %w", err)
+	}
+	poster, err := layerProtocolPoster()
+	if err != nil {
+		return err
+	}
+	if err = os.WriteFile(filepath.Join(artifactDir, "input.png"), poster, 0o600); err != nil {
+		return err
+	}
+	imageData := "data:image/png;base64," + base64.StdEncoding.EncodeToString(poster)
+	adapter := provider.NewBytePlusWithSubmitTimeout(key, 5*time.Minute)
+	key = ""
+	downloadClient := safehttp.NewDownloadClient(90 * time.Second)
+	cases := []layerProtocolCase{
+		{Name: "auto-standard", Size: "auto", Mode: "standard"},
+		{Name: "elements-fast", Prompt: "Separate the central figure, the CORNFIELD title, the lime circle, and the blue rectangle into independent layers.", Size: "1K", Mode: "fast"},
+		{Name: "bbox-1.5k", Prompt: "Separate the title <bbox>80 50 600 160</bbox>, central figure <bbox>350 180 650 900</bbox>, lime circle <bbox>80 650 320 900</bbox>, and blue rectangle <bbox>700 600 930 880</bbox>.", Size: "1.5K", Mode: "standard"},
+		{Name: "bbox-2k", Prompt: "Precisely separate the title <bbox>80 50 600 160</bbox>, central figure <bbox>350 180 650 900</bbox>, lime circle <bbox>80 650 320 900</bbox>, and blue rectangle <bbox>700 600 930 880</bbox>.", Size: "2K", Mode: "standard"},
+	}
+	report := layerProtocolReport{Model: "dola-seedream-5-0-pro-260628", Endpoint: "https://ark.ap-southeast.bytepluses.com/api/v3/images/generations", StartedAt: time.Now().UTC()}
+	for _, item := range cases {
+		result := layerProtocolResult{Name: item.Name, Size: item.Size, Mode: item.Mode, Status: "failed"}
+		started := time.Now()
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+		response, callErr := adapter.DecomposeLayers(ctx, provider.LayerDecompositionRequest{
+			Model: report.Model, Image: imageData, Prompt: item.Prompt, Size: item.Size, PromptOptimizationMode: item.Mode,
+		})
+		cancel()
+		result.DurationMS = time.Since(started).Milliseconds()
+		result.Usage = response.Usage
+		result.ProviderRequestID = response.Telemetry.ProviderRequestID
+		if callErr != nil {
+			result.ErrorCode, result.ErrorMessage = providerErrorFields(callErr)
+			report.Results = append(report.Results, result)
+			report.CompletedAt = time.Now().UTC()
+			_ = writeLayerProtocolReport(reportPath, report)
+			return fmt.Errorf("layer protocol case %s failed: %s", item.Name, result.ErrorCode)
+		}
+		caseDir := filepath.Join(artifactDir, item.Name)
+		if err = os.MkdirAll(caseDir, 0o700); err != nil {
+			return err
+		}
+		if err = validateLayerProtocolResult(downloadClient, caseDir, response, &result); err != nil {
+			result.ErrorCode, result.ErrorMessage = "CANARY_LAYER_INVALID", bounded(err.Error(), 1024)
+			report.Results = append(report.Results, result)
+			report.CompletedAt = time.Now().UTC()
+			_ = writeLayerProtocolReport(reportPath, report)
+			return fmt.Errorf("layer protocol case %s invalid: %w", item.Name, err)
+		}
+		result.Status = "passed"
+		report.Results = append(report.Results, result)
+		if err = writeLayerProtocolReport(reportPath, report); err != nil {
+			return err
+		}
+	}
+	report.CompletedAt = time.Now().UTC()
+	return writeLayerProtocolReport(reportPath, report)
+}
+
+func readSecretFile(path string) (string, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return "", err
+	}
+	value := strings.TrimSpace(string(data))
+	if value == "" || strings.ContainsAny(value, "\r\n\x00") {
+		return "", errors.New("secret file must contain one non-empty line")
+	}
+	return value, nil
+}
+
+func providerErrorFields(err error) (string, string) {
+	var providerErr *provider.Error
+	if errors.As(err, &providerErr) {
+		return providerErr.Code, bounded(providerErr.Message, 1024)
+	}
+	return "CANARY_PROVIDER_ERROR", bounded(err.Error(), 1024)
+}
+
+func validateLayerProtocolResult(client *http.Client, directory string, response provider.LayerDecompositionResult, result *layerProtocolResult) error {
+	if len(response.Items) < 2 || len(response.Items) > 17 {
+		return fmt.Errorf("unexpected output count %d", len(response.Items))
+	}
+	if generated, ok := numericUsage(response.Usage["generated_images"]); ok && generated != int64(len(response.Items)) {
+		return fmt.Errorf("usage generated_images=%d, outputs=%d", generated, len(response.Items))
+	}
+	seen := make(map[int]struct{}, len(response.Items))
+	files := make(map[int]string, len(response.Items))
+	var base image.Image
+	for index, item := range response.Items {
+		if _, duplicate := seen[item.ZIndex]; duplicate {
+			return fmt.Errorf("duplicate z_index %d", item.ZIndex)
+		}
+		seen[item.ZIndex] = struct{}{}
+		if index == 0 && item.ZIndex != 0 {
+			return errors.New("first output is not the base layer")
+		}
+		parsed, err := url.Parse(item.URL)
+		if err != nil || parsed.Hostname() == "" {
+			return errors.New("output URL is invalid")
+		}
+		result.OutputHosts = appendUnique(result.OutputHosts, strings.ToLower(parsed.Hostname()))
+		if !layerOutputURLAllowed(parsed) {
+			return errors.New("output URL is outside the BytePlus allowlist")
+		}
+		path := filepath.Join(directory, fmt.Sprintf("layer-%02d.png", item.ZIndex))
+		if err = downloadProtocolLayer(client, item.URL, path); err != nil {
+			return err
+		}
+		file, err := os.Open(path)
+		if err != nil {
+			return err
+		}
+		decoded, format, err := image.Decode(file)
+		_ = file.Close()
+		if err != nil || format != "png" {
+			return fmt.Errorf("layer %d is not a decodable PNG", item.ZIndex)
+		}
+		if item.ZIndex > 0 && !imageHasTransparency(decoded) {
+			return fmt.Errorf("layer %d has no transparent pixels", item.ZIndex)
+		}
+		if item.ZIndex == 0 {
+			base = decoded
+		}
+		files[item.ZIndex] = path
+		info, statErr := os.Stat(path)
+		if statErr != nil {
+			return statErr
+		}
+		hash, hashErr := fileSHA256(path)
+		if hashErr != nil {
+			return hashErr
+		}
+		result.OutputSHA256 = append(result.OutputSHA256, hash)
+		result.OutputSizes = append(result.OutputSizes, fmt.Sprintf("%dx%d:%d", decoded.Bounds().Dx(), decoded.Bounds().Dy(), info.Size()))
+	}
+	if base == nil {
+		return errors.New("base layer is missing")
+	}
+	baseBounds := base.Bounds()
+	for _, item := range response.Items[1:] {
+		if item.BoundingBox == nil || strings.TrimSpace(item.Name) == "" || strings.TrimSpace(item.Description) == "" {
+			return fmt.Errorf("layer %d metadata is incomplete", item.ZIndex)
+		}
+		box := item.BoundingBox.Absolute
+		if box[0] < 0 || box[1] < 0 || box[2] > baseBounds.Dx() || box[3] > baseBounds.Dy() {
+			return fmt.Errorf("layer %d bounding box exceeds base", item.ZIndex)
+		}
+	}
+	if err := recomposeProtocolLayers(response.Items, files, baseBounds, filepath.Join(directory, "recomposed.png")); err != nil {
+		return err
+	}
+	result.OutputCount = len(response.Items)
+	sort.Strings(result.OutputHosts)
+	return nil
+}
+
+func downloadProtocolLayer(client *http.Client, rawURL, target string) error {
+	current := rawURL
+	for redirects := 0; redirects <= 3; redirects++ {
+		parsed, err := url.Parse(current)
+		if err != nil || !layerOutputURLAllowed(parsed) {
+			return errors.New("layer URL is outside the BytePlus allowlist")
+		}
+		req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, current, nil)
+		if err != nil {
+			return err
+		}
+		res, err := client.Do(req)
+		if err != nil {
+			return err
+		}
+		if res.StatusCode >= 300 && res.StatusCode < 400 {
+			location, parseErr := res.Location()
+			res.Body.Close()
+			if parseErr != nil || !layerOutputURLAllowed(location) {
+				return errors.New("layer redirect rejected")
+			}
+			current = location.String()
+			continue
+		}
+		if res.StatusCode != http.StatusOK {
+			res.Body.Close()
+			return fmt.Errorf("layer download returned HTTP %d", res.StatusCode)
+		}
+		file, err := os.OpenFile(target, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+		if err != nil {
+			res.Body.Close()
+			return err
+		}
+		written, copyErr := io.Copy(file, io.LimitReader(res.Body, 50<<20+1))
+		res.Body.Close()
+		if copyErr == nil {
+			copyErr = file.Sync()
+		}
+		closeErr := file.Close()
+		if copyErr == nil {
+			copyErr = closeErr
+		}
+		if copyErr != nil || written > 50<<20 {
+			_ = os.Remove(target)
+			return errors.New("layer download failed or exceeded 50 MiB")
+		}
+		return nil
+	}
+	return errors.New("too many layer redirects")
+}
+
+func layerOutputURLAllowed(value *url.URL) bool {
+	if value == nil || value.Scheme != "https" || value.User != nil || value.Hostname() == "" {
+		return false
+	}
+	host := strings.ToLower(strings.TrimSuffix(value.Hostname(), "."))
+	return host == "bytepluses.com" || strings.HasSuffix(host, ".bytepluses.com") ||
+		host == "byteplus.com" || strings.HasSuffix(host, ".byteplus.com") ||
+		host == "tos-ap-southeast-1.volces.com" || strings.HasSuffix(host, ".tos-ap-southeast-1.volces.com")
+}
+
+func recomposeProtocolLayers(items []provider.LayerDecompositionItem, files map[int]string, bounds image.Rectangle, target string) error {
+	canvas := image.NewNRGBA(image.Rect(0, 0, bounds.Dx(), bounds.Dy()))
+	for _, item := range items {
+		file, err := os.Open(files[item.ZIndex])
+		if err != nil {
+			return err
+		}
+		layer, _, err := image.Decode(file)
+		_ = file.Close()
+		if err != nil {
+			return err
+		}
+		destination := canvas.Bounds()
+		if item.BoundingBox != nil {
+			box := item.BoundingBox.Absolute
+			destination = image.Rect(box[0], box[1], box[2], box[3])
+		}
+		draw.BiLinear.Scale(canvas, destination, layer, layer.Bounds(), draw.Over, nil)
+	}
+	file, err := os.OpenFile(target, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+	if err != nil {
+		return err
+	}
+	err = png.Encode(file, canvas)
+	if err == nil {
+		err = file.Sync()
+	}
+	if closeErr := file.Close(); err == nil {
+		err = closeErr
+	}
+	return err
+}
+
+func imageHasTransparency(value image.Image) bool {
+	bounds := value.Bounds()
+	for y := bounds.Min.Y; y < bounds.Max.Y; y++ {
+		for x := bounds.Min.X; x < bounds.Max.X; x++ {
+			_, _, _, alpha := value.At(x, y).RGBA()
+			if alpha < 0xffff {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func fileSHA256(path string) (string, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return "", err
+	}
+	defer file.Close()
+	hash := sha256.New()
+	if _, err = io.Copy(hash, file); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(hash.Sum(nil)), nil
+}
+
+func numericUsage(value any) (int64, bool) {
+	switch typed := value.(type) {
+	case float64:
+		return int64(typed), true
+	case int:
+		return int64(typed), true
+	case int64:
+		return typed, true
+	case json.Number:
+		parsed, err := typed.Int64()
+		return parsed, err == nil
+	default:
+		return 0, false
+	}
+}
+
+func appendUnique(values []string, value string) []string {
+	for _, existing := range values {
+		if existing == value {
+			return values
+		}
+	}
+	return append(values, value)
+}
+
+func writeLayerProtocolReport(path string, report layerProtocolReport) error {
+	data, err := json.MarshalIndent(report, "", "  ")
+	if err != nil {
+		return err
+	}
+	directory := filepath.Dir(path)
+	if err = os.MkdirAll(directory, 0o700); err != nil {
+		return err
+	}
+	temporary, err := os.CreateTemp(directory, ".layer-report-*.tmp")
+	if err != nil {
+		return err
+	}
+	name := temporary.Name()
+	defer os.Remove(name)
+	if err = temporary.Chmod(0o600); err == nil {
+		_, err = temporary.Write(data)
+	}
+	if err == nil {
+		err = temporary.Sync()
+	}
+	if closeErr := temporary.Close(); err == nil {
+		err = closeErr
+	}
+	if err != nil {
+		return err
+	}
+	return os.Rename(name, path)
+}
+
+func layerProtocolPoster() ([]byte, error) {
+	const size = 2048
+	canvas := image.NewRGBA(image.Rect(0, 0, size, size))
+	stdDraw.Draw(canvas, canvas.Bounds(), image.NewUniform(color.RGBA{R: 15, G: 17, B: 19, A: 255}), image.Point{}, stdDraw.Src)
+	for y := 1300; y < 1780; y++ {
+		for x := 160; x < 640; x++ {
+			dx, dy := x-400, y-1540
+			if dx*dx+dy*dy <= 240*240 {
+				canvas.SetRGBA(x, y, color.RGBA{R: 209, G: 254, B: 23, A: 255})
+			}
+		}
+	}
+	stdDraw.Draw(canvas, image.Rect(1420, 1220, 1900, 1760), image.NewUniform(color.RGBA{R: 45, G: 88, B: 210, A: 255}), image.Point{}, stdDraw.Src)
+	stdDraw.Draw(canvas, image.Rect(850, 720, 1198, 1700), image.NewUniform(color.RGBA{R: 226, G: 211, B: 191, A: 255}), image.Point{}, stdDraw.Src)
+	for y := 420; y < 820; y++ {
+		for x := 824; x < 1224; x++ {
+			dx, dy := x-1024, y-620
+			if dx*dx+dy*dy <= 200*200 {
+				canvas.SetRGBA(x, y, color.RGBA{R: 226, G: 211, B: 191, A: 255})
+			}
+		}
+	}
+	textLayer := image.NewRGBA(image.Rect(0, 0, 160, 20))
+	face := basicfont.Face7x13
+	drawer := font.Drawer{Dst: textLayer, Src: image.NewUniform(color.White), Face: face, Dot: fixed.P(2, 14)}
+	drawer.DrawString("C O R N F I E L D")
+	draw.NearestNeighbor.Scale(canvas, image.Rect(160, 100, 1360, 300), textLayer, textLayer.Bounds(), draw.Over, nil)
+	var output bytes.Buffer
+	err := png.Encode(&output, canvas)
+	return output.Bytes(), err
 }
 
 func terminalBatch(status string) bool {

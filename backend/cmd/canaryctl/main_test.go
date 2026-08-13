@@ -1,14 +1,23 @@
 package main
 
 import (
+	"bytes"
 	"context"
+	"image"
+	"image/color"
+	"image/png"
+	"net/http"
+	"net/http/httptest"
+	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
 
 	"internal-image-studio/internal/modelconfig"
+	"internal-image-studio/internal/provider"
 )
 
 func TestCreatePermitStreamDoesNotBurst(t *testing.T) {
@@ -27,6 +36,128 @@ func TestCreatePermitStreamDoesNotBurst(t *testing.T) {
 	case <-time.After(3 * interval):
 		t.Fatal("timed out waiting for the next create permit")
 	}
+}
+
+func TestValidateLayerProtocolResult(t *testing.T) {
+	base := encodeTestPNG(t, solidTestImage(8, 8, color.NRGBA{R: 20, G: 30, B: 40, A: 255}))
+	layerImage := solidTestImage(4, 4, color.NRGBA{R: 255, A: 0})
+	layerImage.SetNRGBA(1, 1, color.NRGBA{R: 255, A: 255})
+	layer := encodeTestPNG(t, layerImage)
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/base.png" {
+			_, _ = w.Write(base)
+			return
+		}
+		_, _ = w.Write(layer)
+	}))
+	defer server.Close()
+	items := []provider.LayerDecompositionItem{
+		{URL: server.URL + "/base.png", ZIndex: 0, MediaType: "image/png"},
+		{URL: server.URL + "/layer.png", ZIndex: 1, MediaType: "image/png", Name: "shape", Description: "red shape", BoundingBox: &provider.LayerBoundingBox{Absolute: [4]int{2, 2, 6, 6}, Normalized: [4]float64{250, 250, 750, 750}}},
+	}
+	// The production validator deliberately rejects this local host before any
+	// network request, proving protocol artifacts cannot bypass the same host gate.
+	result := layerProtocolResult{}
+	err := validateLayerProtocolResult(server.Client(), t.TempDir(), provider.LayerDecompositionResult{Items: items, Usage: map[string]any{"generated_images": 2}}, &result)
+	if err == nil || err.Error() != "output URL is outside the BytePlus allowlist" {
+		t.Fatalf("validation error = %v", err)
+	}
+}
+
+func TestLayerProtocolPosterIsDeterministic2048PNG(t *testing.T) {
+	first, err := layerProtocolPoster()
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := layerProtocolPoster()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if hashText(string(first)) != hashText(string(second)) {
+		t.Fatal("poster is not deterministic")
+	}
+	decoded, err := png.Decode(bytes.NewReader(first))
+	if err != nil || decoded.Bounds().Dx() != 2048 || decoded.Bounds().Dy() != 2048 {
+		t.Fatalf("poster bounds = %v, error = %v", decoded.Bounds(), err)
+	}
+}
+
+func TestWriteLayerProtocolReportDoesNotContainPromptOrSecrets(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "report.json")
+	report := layerProtocolReport{Model: "model", Results: []layerProtocolResult{{Name: "auto", Status: "passed", ProviderRequestID: "request"}}}
+	if err := writeLayerProtocolReport(path, report); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(data)
+	for _, forbidden := range []string{"prompt_text", "base64,", "signed_url", "api_key", "authorization"} {
+		if strings.Contains(strings.ToLower(text), forbidden) {
+			t.Fatalf("report contains %q: %s", forbidden, text)
+		}
+	}
+}
+
+func TestWriteLayerE2EReportDoesNotContainPromptOrSecrets(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "report.json")
+	operationID := uuid.New()
+	report := layerE2EReport{
+		ReleaseSHA: "release",
+		Results: []layerE2EResult{{
+			Name: "auto-standard", Status: "passed", OperationID: &operationID,
+		}},
+	}
+	if err := writePrivateJSON(path, report); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, forbidden := range []string{"prompt_text", "base64,", "signed_url", "api_key", "authorization", "password"} {
+		if strings.Contains(strings.ToLower(string(data)), forbidden) {
+			t.Fatalf("report contains %q: %s", forbidden, data)
+		}
+	}
+}
+
+func TestDocumentFromLayerSetUsesBoundingBoxes(t *testing.T) {
+	set := layerSet{
+		ID: uuid.New(), BaseAsset: layerAsset{ID: uuid.New(), Width: 2048, Height: 1024},
+		Items: []layerSetItem{{
+			ID: uuid.New(), ZIndex: 1, Asset: layerAsset{ID: uuid.New(), Width: 200, Height: 100},
+			BoundingBoxAbsolute: []int{100, 50, 500, 250},
+		}},
+	}
+	document := documentFromLayerSet(set)
+	if document.Canvas.Width != 2048 || document.Canvas.Height != 1024 || len(document.Objects) != 2 {
+		t.Fatalf("document = %+v", document)
+	}
+	want := [6]float64{2, 0, 0, 2, 100, 50}
+	if document.Objects[1].Transform != want || document.Objects[1].ZIndex != 1 {
+		t.Fatalf("layer transform = %v, want %v", document.Objects[1].Transform, want)
+	}
+}
+
+func solidTestImage(width, height int, value color.NRGBA) *image.NRGBA {
+	imageValue := image.NewNRGBA(image.Rect(0, 0, width, height))
+	for y := 0; y < height; y++ {
+		for x := 0; x < width; x++ {
+			imageValue.SetNRGBA(x, y, value)
+		}
+	}
+	return imageValue
+}
+
+func encodeTestPNG(t *testing.T, value image.Image) []byte {
+	t.Helper()
+	var output bytes.Buffer
+	if err := png.Encode(&output, value); err != nil {
+		t.Fatal(err)
+	}
+	return output.Bytes()
 }
 
 func TestProductionCatalogCanaryMatrix(t *testing.T) {

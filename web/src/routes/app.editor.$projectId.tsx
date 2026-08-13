@@ -310,6 +310,16 @@ function ImageEditorPage() {
     [],
   )
 
+  useEffect(() => {
+    const beforeUnload = (event: BeforeUnloadEvent) => {
+      if (!dirtyRef.current) return
+      event.preventDefault()
+      event.returnValue = ''
+    }
+    window.addEventListener('beforeunload', beforeUnload)
+    return () => window.removeEventListener('beforeunload', beforeUnload)
+  }, [])
+
   function applyDocument(next: EditorDocument, remember = true) {
     if (!documentRef.current || operationRunning) return
     if (remember) {
@@ -1719,56 +1729,93 @@ function ImageEditorPage() {
               </button>
             </div>
             <div className="editor-layer-list">
-              {sortedObjects.map((object) => (
-                <button
-                  key={object.id}
-                  type="button"
-                  className={object.id === selectedID ? 'active' : ''}
-                  draggable={!operationRunning}
-                  onClick={() => setSelectedID(object.id)}
-                  onDragStart={(event) => {
-                    event.dataTransfer.effectAllowed = 'move'
-                    event.dataTransfer.setData(
-                      'application/x-cornfield-layer',
-                      object.id,
-                    )
-                  }}
-                  onDragOver={(event) => {
-                    if (
-                      event.dataTransfer.types.includes(
+              {sortedObjects.map((object) => {
+                const layerName =
+                  object.name ??
+                  currentLayerSet?.items.find((item) => item.id === object.id)
+                    ?.name ??
+                  (object.z_index === 0 ? '背景' : `图层 ${object.z_index}`)
+                return (
+                  <div
+                    key={object.id}
+                    className={`editor-layer-row${object.id === selectedID ? ' active' : ''}`}
+                    draggable={!operationRunning}
+                    onDragStart={(event) => {
+                      event.dataTransfer.effectAllowed = 'move'
+                      event.dataTransfer.setData(
                         'application/x-cornfield-layer',
+                        object.id,
                       )
-                    )
+                    }}
+                    onDragOver={(event) => {
+                      if (
+                        event.dataTransfer.types.includes(
+                          'application/x-cornfield-layer',
+                        )
+                      )
+                        event.preventDefault()
+                    }}
+                    onDrop={(event) => {
                       event.preventDefault()
-                  }}
-                  onDrop={(event) => {
-                    event.preventDefault()
-                    moveLayerTo(
-                      event.dataTransfer.getData(
-                        'application/x-cornfield-layer',
-                      ),
-                      object.id,
-                    )
-                  }}
-                >
-                  <img
-                    src={objectAssets?.get(object.asset_id)?.thumb_320_url}
-                    alt=""
-                  />
-                  <span>
-                    {object.name ??
-                      currentLayerSet?.items.find(
-                        (item) => item.id === object.id,
-                      )?.name ??
-                      (object.z_index === 0
-                        ? '背景'
-                        : `图层 ${object.z_index}`)}
-                  </span>
-                  <i>
-                    {object.visible ? <Eye size={13} /> : <EyeOff size={13} />}
-                  </i>
-                </button>
-              ))}
+                      moveLayerTo(
+                        event.dataTransfer.getData(
+                          'application/x-cornfield-layer',
+                        ),
+                        object.id,
+                      )
+                    }}
+                  >
+                    <button
+                      className="editor-layer-select"
+                      type="button"
+                      aria-label={`选择图层 ${layerName}`}
+                      onClick={() => setSelectedID(object.id)}
+                    >
+                      <img
+                        src={objectAssets?.get(object.asset_id)?.thumb_320_url}
+                        alt=""
+                      />
+                      <span>{layerName}</span>
+                    </button>
+                    <div className="editor-layer-quick-actions">
+                      <button
+                        type="button"
+                        aria-label={`${object.visible ? '隐藏' : '显示'}图层 ${layerName}`}
+                        disabled={operationRunning}
+                        onClick={() =>
+                          updateObject(object.id, (item) => ({
+                            ...item,
+                            visible: !item.visible,
+                          }))
+                        }
+                      >
+                        {object.visible ? (
+                          <Eye size={13} />
+                        ) : (
+                          <EyeOff size={13} />
+                        )}
+                      </button>
+                      <button
+                        type="button"
+                        aria-label={`${object.locked ? '解锁' : '锁定'}图层 ${layerName}`}
+                        disabled={operationRunning}
+                        onClick={() =>
+                          updateObject(object.id, (item) => ({
+                            ...item,
+                            locked: !item.locked,
+                          }))
+                        }
+                      >
+                        {object.locked ? (
+                          <Lock size={13} />
+                        ) : (
+                          <Unlock size={13} />
+                        )}
+                      </button>
+                    </div>
+                  </div>
+                )
+              })}
             </div>
             {selected && (
               <div className="editor-properties">

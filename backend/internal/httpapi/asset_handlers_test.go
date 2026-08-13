@@ -40,3 +40,24 @@ func TestAssetCursorRejectsInvalidInput(t *testing.T) {
 		t.Fatal("expected invalid cursor error")
 	}
 }
+
+func TestUniqueAssetIDs(t *testing.T) {
+	first, second := uuid.New(), uuid.New()
+	got, ok := uniqueAssetIDs([]uuid.UUID{first, second, first}, 500)
+	if !ok || len(got) != 2 || got[0] != first || got[1] != second {
+		t.Fatalf("uniqueAssetIDs() = %v, %v", got, ok)
+	}
+	tests := []struct {
+		values  []uuid.UUID
+		maximum int
+	}{
+		{values: nil, maximum: 500},
+		{values: []uuid.UUID{uuid.Nil}, maximum: 500},
+		{values: []uuid.UUID{first, second}, maximum: 1},
+	}
+	for _, test := range tests {
+		if _, valid := uniqueAssetIDs(test.values, test.maximum); valid {
+			t.Fatalf("invalid values accepted: %v", test.values)
+		}
+	}
+}

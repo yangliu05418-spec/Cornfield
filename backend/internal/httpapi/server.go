@@ -109,6 +109,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("PUT /api/v1/uploads/{id}/content", s.requireAuth(s.requireCSRF(http.HandlerFunc(s.uploadContent))))
 	mux.Handle("GET /api/v1/uploads/{id}", s.requireAuth(http.HandlerFunc(s.getUpload)))
 	mux.Handle("GET /api/v1/assets", s.requireAuth(http.HandlerFunc(s.listAssets)))
+	mux.Handle("POST /api/v1/assets/resolve", s.requireAuth(s.requireCSRF(http.HandlerFunc(s.resolveAssets))))
 	mux.Handle("GET /api/v1/asset-folders", s.requireAuth(http.HandlerFunc(s.listAssetFolders)))
 	mux.Handle("POST /api/v1/asset-folders", s.requireAuth(s.requireCSRF(http.HandlerFunc(s.createAssetFolder))))
 	mux.Handle("PATCH /api/v1/asset-folders/{id}", s.requireAuth(s.requireCSRF(http.HandlerFunc(s.updateAssetFolder))))

@@ -312,6 +312,71 @@ func (s *Server) getAsset(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, item)
 }
 
+func (s *Server) resolveAssets(w http.ResponseWriter, r *http.Request) {
+	var input struct {
+		AssetIDs []uuid.UUID `json:"asset_ids"`
+	}
+	if !decodeJSON(w, r, &input) {
+		return
+	}
+	assetIDs, ok := uniqueAssetIDs(input.AssetIDs, 500)
+	if !ok {
+		writeError(w, http.StatusUnprocessableEntity, "INVALID_ASSET_IDS", "资产数量必须在 1 到 500 之间，且不能包含空 ID", false, r)
+		return
+	}
+	rows, err := s.db.Query(r.Context(), `SELECT a.id,a.kind,a.media_type,a.original_filename,a.width,a.height,a.byte_size,a.sha256,a.blur_data_url,a.created_at,o.job_id,o.output_index,j.batch_id,a.folder_id,a.archived_at
+		FROM assets a
+		LEFT JOIN generation_outputs o ON o.asset_id=a.id
+		LEFT JOIN generation_jobs j ON j.id=o.job_id
+		WHERE a.owner_user_id=$1 AND a.id=ANY($2::uuid[]) AND a.purged_at IS NULL AND a.purge_pending=false
+		ORDER BY array_position($2::uuid[],a.id)`, currentSession(r).UserID, assetIDs)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "DATABASE_ERROR", "读取编辑器资源失败", true, r)
+		return
+	}
+	defer rows.Close()
+	items := make([]assetResponse, 0, len(assetIDs))
+	for rows.Next() {
+		var item assetResponse
+		var createdAt time.Time
+		if err = rows.Scan(&item.ID, &item.Kind, &item.MediaType, &item.OriginalFilename, &item.Width, &item.Height, &item.ByteSize, &item.SHA256, &item.BlurDataURL, &createdAt, &item.JobID, &item.OutputIndex, &item.BatchID, &item.FolderID, &item.ArchivedAt); err != nil {
+			writeError(w, http.StatusInternalServerError, "DATABASE_ERROR", "读取编辑器资源失败", true, r)
+			return
+		}
+		item.CreatedAt = createdAt.Format(time.RFC3339Nano)
+		item.setURLs()
+		items = append(items, item)
+	}
+	if err = rows.Err(); err != nil {
+		writeError(w, http.StatusInternalServerError, "DATABASE_ERROR", "读取编辑器资源失败", true, r)
+		return
+	}
+	if len(items) != len(assetIDs) {
+		writeError(w, http.StatusNotFound, "ASSET_NOT_FOUND", "工程包含不存在或无权访问的资源", false, r)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": items})
+}
+
+func uniqueAssetIDs(values []uuid.UUID, maximum int) ([]uuid.UUID, bool) {
+	if len(values) < 1 || len(values) > maximum {
+		return nil, false
+	}
+	result := make([]uuid.UUID, 0, len(values))
+	seen := make(map[uuid.UUID]struct{}, len(values))
+	for _, id := range values {
+		if id == uuid.Nil {
+			return nil, false
+		}
+		if _, exists := seen[id]; exists {
+			continue
+		}
+		seen[id] = struct{}{}
+		result = append(result, id)
+	}
+	return result, true
+}
+
 func (s *Server) assetContent(w http.ResponseWriter, r *http.Request) {
 	id, ok := parseUUIDParam(w, r, "id")
 	if !ok {

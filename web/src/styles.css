@@ -740,6 +740,9 @@
 .editor-layer-drawer .editor-decompose {
   padding: 0 14px;
 }
+.editor-topbar .editor-structured-entry {
+  padding: 0 12px;
+}
 .editor-topbar .editor-decompose,
 .editor-layer-drawer .editor-decompose {
   color: #10130b;
@@ -1556,6 +1559,302 @@
   border: 0;
   border-radius: 8px;
   background: transparent;
+}
+
+/* V2 structured editor: the layer hierarchy is the primary editing surface. */
+.structured-editor-body {
+  display: grid;
+  min-height: 0;
+  grid-template-columns: minmax(0, 1fr) 320px;
+}
+.structured-project-name {
+  max-width: min(280px, 28vw);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+  font-weight: 560;
+}
+.structured-actions button {
+  padding: 0 10px;
+  font-size: 11px;
+}
+.structured-canvas {
+  position: relative;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  background-color: #0f1113;
+  background-image: radial-gradient(
+    circle,
+    color-mix(in srgb, var(--muted) 25%, transparent) 0.8px,
+    transparent 0.9px
+  );
+  background-size: 20px 20px;
+}
+.structured-render-wait {
+  position: absolute;
+  z-index: 4;
+  top: 50%;
+  left: 50%;
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  padding: 10px 12px;
+  color: var(--muted);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--surface) 92%, transparent);
+  box-shadow: 0 16px 48px rgb(0 0 0 / 0.36);
+  font-size: 11px;
+  transform: translate(-50%, -50%);
+  backdrop-filter: blur(12px);
+}
+.structured-layer-panel {
+  display: grid;
+  min-width: 0;
+  min-height: 0;
+  grid-template-rows: 46px minmax(0, 1fr) auto;
+  border-left: 1px solid var(--line);
+  background: var(--surface);
+}
+.structured-layer-panel > header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 0 10px 0 14px;
+  border-bottom: 1px solid var(--line);
+}
+.structured-layer-panel > header > div {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+.structured-layer-panel > header strong {
+  font-size: 12px;
+  font-weight: 560;
+}
+.structured-layer-panel > header span {
+  color: var(--muted);
+  font: 500 9px/1 var(--font-mono);
+}
+.structured-layer-panel > header button {
+  display: grid;
+  width: 30px;
+  height: 30px;
+  place-items: center;
+  color: var(--muted);
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: transparent;
+}
+.structured-layer-panel > header button:hover {
+  color: var(--lime);
+  border-color: var(--line);
+  background: var(--surface-2);
+}
+.structured-layer-tree {
+  min-height: 0;
+  padding: 6px;
+  overflow: auto;
+  scrollbar-width: thin;
+}
+.structured-layer-row {
+  position: relative;
+  display: grid;
+  min-width: 0;
+  min-height: 46px;
+  grid-template-columns: 22px minmax(0, 1fr) auto;
+  align-items: center;
+  margin-left: calc(var(--layer-depth) * 13px);
+  color: var(--muted);
+  border: 1px solid transparent;
+  border-radius: 8px;
+}
+.structured-layer-row::before {
+  position: absolute;
+  top: 5px;
+  bottom: 5px;
+  left: -6px;
+  width: 1px;
+  content: '';
+  background: color-mix(in srgb, var(--line) 78%, transparent);
+  opacity: min(1, var(--layer-depth));
+}
+.structured-layer-row:hover {
+  color: var(--text);
+  background: var(--surface-2);
+}
+.structured-layer-row.active {
+  color: var(--text);
+  border-color: color-mix(in srgb, var(--lime) 26%, var(--line));
+  background: color-mix(in srgb, var(--lime) 5%, var(--surface-2));
+}
+.structured-layer-row.active::after {
+  position: absolute;
+  top: 8px;
+  bottom: 8px;
+  left: -1px;
+  width: 2px;
+  content: '';
+  border-radius: 2px;
+  background: var(--lime);
+}
+.structured-layer-disclosure,
+.structured-layer-main,
+.structured-layer-controls button {
+  color: inherit;
+  border: 0;
+  background: transparent;
+}
+.structured-layer-disclosure {
+  display: grid;
+  width: 22px;
+  height: 34px;
+  padding: 0;
+  place-items: center;
+}
+.structured-layer-disclosure:disabled {
+  opacity: 0;
+}
+.structured-layer-main {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: 34px minmax(0, 1fr);
+  gap: 8px;
+  align-items: center;
+  padding: 4px 0;
+  text-align: left;
+}
+.structured-layer-thumb {
+  display: grid;
+  width: 34px;
+  height: 34px;
+  overflow: hidden;
+  place-items: center;
+  color: var(--muted);
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: #111315;
+}
+.structured-layer-thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.structured-layer-main > span:last-child {
+  display: grid;
+  min-width: 0;
+  gap: 4px;
+}
+.structured-layer-main strong,
+.structured-layer-main small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.structured-layer-main strong {
+  color: inherit;
+  font-size: 11px;
+  font-weight: 530;
+}
+.structured-layer-main small {
+  color: var(--muted);
+  font: 500 9px/1 var(--font-mono);
+}
+.structured-layer-controls {
+  display: flex;
+  padding-right: 4px;
+  opacity: 0.54;
+}
+.structured-layer-row:hover .structured-layer-controls,
+.structured-layer-row.active .structured-layer-controls {
+  opacity: 1;
+}
+.structured-layer-controls button {
+  display: grid;
+  width: 27px;
+  height: 30px;
+  padding: 0;
+  place-items: center;
+  border-radius: 7px;
+}
+.structured-layer-controls button:hover {
+  color: var(--lime);
+  background: var(--surface-3);
+}
+.structured-properties {
+  display: grid;
+  gap: 14px;
+  padding: 14px;
+  border-top: 1px solid var(--line);
+}
+.structured-properties label {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 7px;
+  color: var(--muted);
+  font-size: 10px;
+}
+.structured-properties input[type='text'],
+.structured-properties input:not([type]) {
+  grid-column: 1 / -1;
+  width: 100%;
+  height: 32px;
+  padding: 0 8px;
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  outline: none;
+  background: var(--surface-2);
+}
+.structured-properties input:focus {
+  border-color: color-mix(in srgb, var(--lime) 52%, var(--line));
+}
+.structured-properties input[type='range'] {
+  grid-column: 1 / -1;
+  width: 100%;
+  accent-color: var(--lime);
+}
+.structured-order-controls {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+}
+.structured-order-controls button {
+  display: inline-flex;
+  min-height: 32px;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  color: var(--muted);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-2);
+  font-size: 10px;
+}
+.structured-order-controls button:hover {
+  color: var(--lime);
+  border-color: color-mix(in srgb, var(--lime) 36%, var(--line));
+}
+
+@media (max-width: 860px) {
+  .structured-editor-body {
+    grid-template-columns: minmax(0, 1fr) 272px;
+  }
+  .structured-actions button {
+    width: 34px;
+    padding: 0;
+    overflow: hidden;
+    white-space: nowrap;
+    color: transparent;
+    gap: 0;
+  }
+  .structured-actions button svg {
+    flex: 0 0 auto;
+    color: var(--text);
+  }
 }
 .decomposition-wait {
   position: absolute;

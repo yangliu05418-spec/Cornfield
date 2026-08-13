@@ -106,10 +106,30 @@ describe('editor scene compiler', () => {
     expect(scene.nodes[1]?.opacity).toBeCloseTo(0.56)
   })
 
-  it('rejects unimplemented semantics instead of flattening them', () => {
+  it('carries raster blend modes and effects without flattening them', () => {
     const blend = raster('blend', null, '00000001', identity, 1)
     blend.blend_mode = 'multiply'
-    expect(() => compileEditorRenderScene(v2([blend]))).toThrow(
+    blend.effects = [
+      {
+        type: 'contrast',
+        version: 1,
+        enabled: true,
+        parameters: { amount: 0.2 },
+      },
+    ]
+    const scene = compileEditorRenderScene(v2([blend]))
+    expect(scene.nodes[0]).toMatchObject({
+      blendMode: 'multiply',
+      effects: [expect.objectContaining({ type: 'contrast', enabled: true })],
+    })
+    blend.effects[0].parameters.amount = 0.8
+    expect(scene.nodes[0].effects[0].parameters.amount).toBe(0.2)
+  })
+
+  it('rejects group blend and unsupported mask semantics', () => {
+    const groupNode = group('group', null, '00000001', identity, 1)
+    groupNode.blend_mode = 'multiply'
+    expect(() => compileEditorRenderScene(v2([groupNode]))).toThrow(
       UnsupportedEditorRenderSemanticsError,
     )
 
@@ -124,6 +144,19 @@ describe('editor scene compiler', () => {
 
     mask.mask_id = undefined
     mask.crop = { x: 0, y: 0, width: 0.5, height: 1 }
+    expect(() =>
+      compileEditorRenderScene(v2([secondMask, mask, chained])),
+    ).toThrow(UnsupportedEditorRenderSemanticsError)
+
+    mask.crop = undefined
+    mask.effects = [
+      {
+        type: 'contrast',
+        version: 1,
+        enabled: true,
+        parameters: { amount: 0.2 },
+      },
+    ]
     expect(() =>
       compileEditorRenderScene(v2([secondMask, mask, chained])),
     ).toThrow(UnsupportedEditorRenderSemanticsError)

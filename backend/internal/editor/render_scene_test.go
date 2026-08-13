@@ -63,27 +63,43 @@ func TestCompileV2RenderSceneGroupsAndMasks(t *testing.T) {
 	}
 }
 
-func TestCompileV2RenderSceneRejectsUnsupportedSemantics(t *testing.T) {
+func TestCompileV2RenderSceneCarriesRasterBlendAndEffects(t *testing.T) {
 	asset := uuid.New()
-	base := NodeV2{ID: "content", Type: "raster", OrderKey: "00000001", Transform: [6]float64{1, 0, 0, 1, 0, 0}, Opacity: 1, BlendMode: "normal", Visible: true, AssetID: &asset, Effects: []EffectV2{}}
-	tests := []struct {
-		name   string
-		mutate func(*NodeV2)
-	}{
-		{name: "blend", mutate: func(node *NodeV2) { node.BlendMode = "multiply" }},
-		{name: "effect", mutate: func(node *NodeV2) {
-			node.Effects = []EffectV2{{Type: "contrast", Version: 1, Enabled: true, Parameters: map[string]float64{"amount": .2}}}
-		}},
+	effects := []EffectV2{{Type: "contrast", Version: 1, Enabled: true, Parameters: map[string]float64{"amount": .2}}}
+	node := NodeV2{ID: "content", Type: "raster", OrderKey: "00000001", Transform: [6]float64{1, 0, 0, 1, 0, 0}, Opacity: 1, BlendMode: "multiply", Visible: true, AssetID: &asset, Effects: effects}
+	scene, err := CompileV2RenderScene(DocumentV2{SchemaVersion: 2, RendererSemanticsVersion: 1, Canvas: Canvas{Width: 10, Height: 10}, Nodes: []NodeV2{node}})
+	if err != nil {
+		t.Fatal(err)
 	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			node := base
-			test.mutate(&node)
-			_, err := CompileV2RenderScene(DocumentV2{SchemaVersion: 2, RendererSemanticsVersion: 1, Canvas: Canvas{Width: 10, Height: 10}, Nodes: []NodeV2{node}})
-			if !errors.Is(err, ErrUnsupportedDocumentSemantics) {
-				t.Fatalf("error = %v", err)
-			}
-		})
+	if got := scene.Nodes[0]; got.BlendMode != "multiply" || len(got.Effects) != 1 || got.Effects[0].Type != "contrast" {
+		t.Fatalf("render semantics lost: %#v", got)
+	}
+	effects[0].Parameters["amount"] = .8
+	if scene.Nodes[0].Effects[0].Parameters["amount"] != .2 {
+		t.Fatal("render effects were not cloned")
+	}
+}
+
+func TestCompileV2RenderSceneRejectsGroupBlend(t *testing.T) {
+	group := NodeV2{ID: "group", Type: "group", OrderKey: "00000001", Transform: [6]float64{1, 0, 0, 1, 0, 0}, Opacity: 1, BlendMode: "multiply", Visible: true}
+	_, err := CompileV2RenderScene(DocumentV2{SchemaVersion: 2, RendererSemanticsVersion: 1, Canvas: Canvas{Width: 10, Height: 10}, Nodes: []NodeV2{group}})
+	if !errors.Is(err, ErrUnsupportedDocumentSemantics) {
+		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestCompileV2RenderSceneRejectsMaskEffects(t *testing.T) {
+	maskAsset, contentAsset := uuid.New(), uuid.New()
+	maskID := "mask"
+	document := DocumentV2{
+		SchemaVersion: 2, RendererSemanticsVersion: 1, Canvas: Canvas{Width: 10, Height: 10},
+		Nodes: []NodeV2{
+			{ID: maskID, Type: "raster", OrderKey: "00000001", Transform: [6]float64{1, 0, 0, 1, 0, 0}, Opacity: 1, BlendMode: "normal", Visible: true, AssetID: &maskAsset, Effects: []EffectV2{{Type: "contrast", Version: 1, Enabled: true, Parameters: map[string]float64{"amount": .2}}}},
+			{ID: "content", Type: "raster", OrderKey: "00000002", Transform: [6]float64{1, 0, 0, 1, 0, 0}, Opacity: 1, BlendMode: "normal", Visible: true, AssetID: &contentAsset, MaskID: &maskID},
+		},
+	}
+	if _, err := CompileV2RenderScene(document); !errors.Is(err, ErrUnsupportedDocumentSemantics) {
+		t.Fatalf("error = %v", err)
 	}
 }
 

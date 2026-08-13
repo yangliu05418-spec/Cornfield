@@ -1910,7 +1910,8 @@
   font-size: 10px;
 }
 .structured-properties input[type='text'],
-.structured-properties input:not([type]) {
+.structured-properties input:not([type]),
+.structured-properties select {
   grid-column: 1 / -1;
   width: 100%;
   height: 32px;
@@ -1921,6 +1922,10 @@
   outline: none;
   background: var(--surface-2);
 }
+.structured-properties select {
+  grid-column: 1 / -1;
+  appearance: none;
+}
 .structured-properties input:focus {
   border-color: color-mix(in srgb, var(--lime) 52%, var(--line));
 }
@@ -1928,6 +1933,43 @@
   grid-column: 1 / -1;
   width: 100%;
   accent-color: var(--lime);
+}
+.structured-effects {
+  display: grid;
+  gap: 10px;
+  padding: 11px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--surface-2) 74%, transparent);
+}
+.structured-effects-heading,
+.structured-effect-row > span {
+  display: flex;
+  align-items: center;
+}
+.structured-effects-heading {
+  justify-content: space-between;
+  color: var(--text);
+  font-size: 10px;
+  letter-spacing: 0.04em;
+}
+.structured-effects-heading small {
+  color: var(--muted);
+  font: 8px/1 var(--font-mono);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+.structured-effect-row > span {
+  gap: 6px;
+  color: var(--text);
+}
+.structured-effect-row input[type='checkbox'] {
+  width: 13px;
+  height: 13px;
+  accent-color: var(--lime);
+}
+.structured-effect-row input[type='range']:disabled {
+  opacity: 0.32;
 }
 .structured-order-controls {
   display: grid;

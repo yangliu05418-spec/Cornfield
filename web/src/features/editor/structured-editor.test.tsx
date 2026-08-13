@@ -145,4 +145,61 @@ describe('StructuredEditor', () => {
     fireEvent.click(screen.getByRole('button', { name: '撤销' }))
     expect(screen.queryByText('新建组')).toBeNull()
   })
+
+  it('persists a blend mode and non-destructive adjustment', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    apiMock.mockImplementation((path: string) => {
+      if (path === '/api/v1/assets/resolve')
+        return Promise.resolve({ items: [firstAsset, secondAsset] })
+      if (path === '/api/v1/models')
+        return Promise.resolve({ revision: 'test', models: [] })
+      return Promise.resolve({ revision: 2 })
+    })
+    render(
+      <QueryClientProvider
+        client={
+          new QueryClient({
+            defaultOptions: { queries: { retry: false } },
+          })
+        }
+      >
+        <StructuredEditor
+          project={project()}
+          onBack={vi.fn()}
+          onProjectChange={vi.fn()}
+        />
+      </QueryClientProvider>,
+    )
+
+    const layerNames = await screen.findAllByText('人物')
+    fireEvent.click(layerNames[0])
+    fireEvent.change(screen.getByLabelText('混合模式'), {
+      target: { value: 'multiply' },
+    })
+    fireEvent.click(screen.getByRole('checkbox', { name: '启用曝光' }))
+    fireEvent.change(screen.getByRole('slider', { name: '曝光' }), {
+      target: { value: '1.5' },
+    })
+    await vi.advanceTimersByTimeAsync(1_100)
+
+    await waitFor(() => {
+      const saveCall = apiMock.mock.calls.find(
+        ([path, init]) =>
+          String(path).endsWith('/document') &&
+          (init as RequestInit | undefined)?.method === 'PUT',
+      )
+      expect(saveCall).toBeTruthy()
+      const body = JSON.parse((saveCall?.[1] as RequestInit).body as string)
+      expect(body.document.nodes[0]).toMatchObject({
+        blend_mode: 'multiply',
+        effects: [
+          {
+            type: 'exposure',
+            enabled: true,
+            parameters: { stops: 1.5 },
+          },
+        ],
+      })
+    })
+  })
 })

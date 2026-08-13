@@ -1,0 +1,30 @@
+{
+  "effects": [
+    {
+      "type": "exposure",
+      "version": 1,
+      "enabled": true,
+      "parameters": { "stops": 0.75 }
+    },
+    {
+      "type": "temperature",
+      "version": 1,
+      "enabled": true,
+      "parameters": { "kelvin_delta": -2500 }
+    },
+    {
+      "type": "saturation",
+      "version": 1,
+      "enabled": true,
+      "parameters": { "amount": 0.35 }
+    },
+    {
+      "type": "contrast",
+      "version": 1,
+      "enabled": true,
+      "parameters": { "amount": -0.2 }
+    }
+  ],
+  "input": [0.18, 0.42, 0.73, 0.8],
+  "output": [0.203719472761, 0.685495172083, 1, 0.8]
+}

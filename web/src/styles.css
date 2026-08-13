@@ -1592,6 +1592,45 @@
   );
   background-size: 20px 20px;
 }
+.structured-canvas-interaction {
+  position: absolute;
+  z-index: 2;
+  inset: 0;
+  overflow: hidden;
+  touch-action: none;
+  outline: none;
+  cursor: default;
+}
+.structured-canvas-interaction[data-panning] {
+  cursor: grabbing;
+}
+.structured-canvas-interaction:focus-visible {
+  outline: 1px solid color-mix(in srgb, var(--lime) 52%, transparent);
+  outline-offset: -2px;
+}
+.structured-artboard-outline,
+.structured-selection-world {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 0;
+  height: 0;
+  pointer-events: none;
+  transform-origin: 0 0;
+  will-change: transform;
+}
+.structured-artboard-outline {
+  outline: max(1px, calc(1px / var(--editor-zoom, 1))) solid
+    color-mix(in srgb, var(--text) 42%, transparent);
+  box-shadow: 0 24px 80px rgb(0 0 0 / 0.46);
+}
+.structured-selection-outline {
+  position: absolute;
+  box-sizing: border-box;
+  border: max(1px, calc(1px / var(--editor-zoom, 1))) solid var(--lime);
+  box-shadow: 0 0 0 max(1px, calc(1px / var(--editor-zoom, 1)))
+    rgb(15 17 19 / 0.5);
+}
 .structured-render-wait {
   position: absolute;
   z-index: 4;

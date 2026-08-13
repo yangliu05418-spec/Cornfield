@@ -45,6 +45,7 @@ import {
   reorderEditorNodeRelative,
 } from './domain/layer-panel-model'
 import { PixiSurface } from './renderer/pixi-surface'
+import { StructuredCanvasInteraction } from './structured-canvas-interaction'
 import { useEditorOperations } from './use-editor-operations'
 import type { LayerDecompositionSettings } from './use-editor-operations'
 
@@ -203,6 +204,25 @@ export function StructuredEditor({
     setDocument(next)
     scheduleSave()
     return true
+  }
+
+  function previewDocument(next: EditorDocumentV2) {
+    if (operationsRef.current) return
+    documentRef.current = next
+    setDocument(next)
+  }
+
+  function commitCanvasDocument(
+    initial: EditorDocumentV2,
+    next: EditorDocumentV2,
+    mergeKey?: string,
+  ) {
+    if (operationsRef.current) return
+    documentRef.current = next
+    setDocument(next)
+    if (historyRef.current.commit(initial, next, { mergeKey }))
+      setHistoryRevision((value) => value + 1)
+    scheduleSave()
   }
 
   const operationsRef = useRef(false)
@@ -566,6 +586,21 @@ export function StructuredEditor({
               viewport={view}
               onUnavailable={(reason) => setNotice(`图形渲染不可用：${reason}`)}
               onPresentedChange={setPresented}
+            />
+            <StructuredCanvasInteraction
+              document={document}
+              assets={assets}
+              view={view}
+              selectedIDs={selectedIDs}
+              disabled={operations.running}
+              onViewChange={setView}
+              onSelectionChange={(ids, active) => {
+                setSelectedIDs(new Set(ids))
+                setActiveID(active)
+              }}
+              onPreview={previewDocument}
+              onCommit={commitCanvasDocument}
+              onFit={fitCanvas}
             />
             {assetsQuery.isError ? (
               <div className="structured-render-wait" role="alert">

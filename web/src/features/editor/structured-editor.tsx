@@ -15,6 +15,8 @@ import {
   Lock,
   Maximize,
   Redo2,
+  Save,
+  Sparkles,
   Undo2,
   Unlock,
 } from 'lucide-react'
@@ -22,9 +24,11 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { CSSProperties } from 'react'
 
 import { AppShell } from '#/components/app-shell'
+import { ConfirmDialog } from '#/components/confirm-dialog'
 import { api, APIError } from '#/lib/api'
-import type { Asset, EditorProject } from '#/lib/api'
+import type { Asset, EditorProject, LayerSet } from '#/lib/api'
 import { fitArtboard } from '#/lib/editor-transform'
+import { EditorOperationWaiting } from './editor-operation-waiting'
 import {
   attachEditorMask,
   detachEditorMask,
@@ -41,6 +45,8 @@ import {
   reorderEditorNodeRelative,
 } from './domain/layer-panel-model'
 import { PixiSurface } from './renderer/pixi-surface'
+import { useEditorOperations } from './use-editor-operations'
+import type { LayerDecompositionSettings } from './use-editor-operations'
 
 type SaveState =
   'saved' | 'dirty' | 'saving' | 'offline' | 'conflict' | 'invalid'
@@ -66,6 +72,14 @@ export function StructuredEditor({
   const [notice, setNotice] = useState('')
   const [view, setView] = useState({ zoom: 100, panX: 0, panY: 0 })
   const [presented, setPresented] = useState(false)
+  const [settingsOpen, setSettingsOpen] = useState(false)
+  const [rerunConfirm, setRerunConfirm] = useState(false)
+  const [pendingLayerSet, setPendingLayerSet] = useState<LayerSet>()
+  const [settings, setSettings] = useState<LayerDecompositionSettings>({
+    prompt: '',
+    resolution: 'auto',
+    mode: 'standard',
+  })
   const viewportRef = useRef<HTMLDivElement>(null)
   const documentRef = useRef(document)
   const historyRef = useRef(new EditorHistoryV2(100))
@@ -175,6 +189,7 @@ export function StructuredEditor({
     next: EditorDocumentV2,
     options: { remember?: boolean; mergeKey?: string } = {},
   ) {
+    if (operationsRef.current) return false
     if (JSON.stringify(documentRef.current) === JSON.stringify(next))
       return false
     if (
@@ -189,6 +204,8 @@ export function StructuredEditor({
     scheduleSave()
     return true
   }
+
+  const operationsRef = useRef(false)
 
   function runCommand(command: () => EditorDocumentV2, message: string) {
     try {
@@ -329,6 +346,83 @@ export function StructuredEditor({
     }
   }
 
+  function buildLayerSetDocument(layerSet: LayerSet): EditorDocumentV2 {
+    return {
+      ...documentRef.current,
+      nodes: [
+        {
+          id: `base-${layerSet.id}`,
+          type: 'raster',
+          name: '背景',
+          parent_id: null,
+          order_key: '00000000',
+          transform: [1, 0, 0, 1, 0, 0],
+          opacity: 1,
+          blend_mode: 'normal',
+          visible: true,
+          locked: false,
+          asset_id: layerSet.base_asset.id,
+        },
+        ...layerSet.items.map<EditorNodeV2>((item, index) => {
+          const [left, top, right, bottom] = item.bounding_box_absolute
+          return {
+            id: item.id,
+            type: 'raster',
+            name: item.name || `图层 ${item.z_index}`,
+            parent_id: null,
+            order_key: (index + 1).toString().padStart(8, '0'),
+            transform: [
+              (right - left) / item.asset.width,
+              0,
+              0,
+              (bottom - top) / item.asset.height,
+              left,
+              top,
+            ],
+            opacity: 1,
+            blend_mode: 'normal',
+            visible: true,
+            locked: false,
+            asset_id: item.asset.id,
+          }
+        }),
+      ],
+    }
+  }
+
+  function applyLayerSet(layerSet: LayerSet) {
+    const next = buildLayerSetDocument(layerSet)
+    if (!applyDocument(next)) return
+    const selected = next.nodes.at(-1)?.id ?? ''
+    setActiveID(selected)
+    setSelectedIDs(new Set(selected ? [selected] : []))
+    setPendingLayerSet(undefined)
+    setNotice(`已整理 ${next.nodes.length} 个透明图层`)
+  }
+
+  const operations = useEditorOperations({
+    projectID: project.id,
+    initialOperationID: project.latest_operation_id,
+    activeLayerSet: project.active_layer_set,
+    getRevision: () => revisionRef.current,
+    flushSaves,
+    onLayerSetReady: (layerSet, sourceRevision) => {
+      if (sourceRevision === revisionRef.current && layerSet.applied_to_project)
+        applyLayerSet(layerSet)
+      else if (!layerSet.applied_to_project) setPendingLayerSet(layerSet)
+    },
+    onNotice: setNotice,
+  })
+  operationsRef.current = operations.running
+
+  async function requestDecomposition(confirmed = false) {
+    if (operations.currentLayerSet && !confirmed) {
+      setRerunConfirm(true)
+      return
+    }
+    if (await operations.startDecomposition(settings)) setSettingsOpen(false)
+  }
+
   function downloadDocument() {
     const blob = new Blob([JSON.stringify(documentRef.current, null, 2)], {
       type: 'application/json',
@@ -384,14 +478,16 @@ export function StructuredEditor({
           <div className="editor-topbar-group structured-actions">
             <button
               type="button"
-              disabled={!canGroupEditorNodes(selectedNodes)}
+              disabled={
+                operations.running || !canGroupEditorNodes(selectedNodes)
+              }
               onClick={groupSelection}
             >
               <FolderPlus size={16} /> 成组
             </button>
             <button
               type="button"
-              disabled={activeNode?.type !== 'group'}
+              disabled={operations.running || activeNode?.type !== 'group'}
               onClick={() => {
                 if (!activeNode) return
                 const childIDs = document.nodes
@@ -411,14 +507,17 @@ export function StructuredEditor({
             </button>
             <button
               type="button"
-              disabled={!canAttachEditorMask(selectedNodes, activeNode)}
+              disabled={
+                operations.running ||
+                !canAttachEditorMask(selectedNodes, activeNode)
+              }
               onClick={attachMask}
             >
               <Link size={16} /> 设为蒙版
             </button>
             <button
               type="button"
-              disabled={!activeNode?.mask_id}
+              disabled={operations.running || !activeNode?.mask_id}
               onClick={() => {
                 if (!activeNode) return
                 runCommand(
@@ -428,6 +527,32 @@ export function StructuredEditor({
               }}
             >
               <Link2Off size={16} /> 解除蒙版
+            </button>
+            <button
+              type="button"
+              className="editor-layer-settings"
+              aria-label="智能分层设置"
+              disabled={operations.running}
+              onClick={() => setSettingsOpen((value) => !value)}
+            >
+              <Layers size={16} /> 参数
+            </button>
+            <button
+              type="button"
+              className="editor-decompose"
+              disabled={operations.running || !operations.canDecompose}
+              title={operations.capabilityMessage || '智能分层'}
+              onClick={() => void requestDecomposition()}
+            >
+              <Sparkles size={16} /> 智能分层
+            </button>
+            <button
+              type="button"
+              className="editor-publish"
+              disabled={operations.running}
+              onClick={() => void operations.publish()}
+            >
+              <Save size={16} /> 保存为新图片
             </button>
           </div>
         </header>
@@ -451,6 +576,22 @@ export function StructuredEditor({
                 <span className="spinner" /> 正在准备专业画布
               </div>
             ) : null}
+            {operations.running && (
+              <EditorOperationWaiting
+                status={operations.operation?.status}
+                message={operations.operation?.message}
+                elapsed={operations.elapsed}
+              />
+            )}
+            {pendingLayerSet && (
+              <button
+                className="editor-pending-result"
+                type="button"
+                onClick={() => applyLayerSet(pendingLayerSet)}
+              >
+                工程已在其他标签页更新 · 应用这次分层结果
+              </button>
+            )}
           </div>
 
           <aside className="structured-layer-panel">
@@ -529,6 +670,7 @@ export function StructuredEditor({
                     <div className="structured-layer-controls">
                       <button
                         type="button"
+                        disabled={operations.running}
                         aria-label={node.visible ? '隐藏图层' : '显示图层'}
                         onClick={() =>
                           updateNode(node.id, (value) => ({
@@ -545,6 +687,7 @@ export function StructuredEditor({
                       </button>
                       <button
                         type="button"
+                        disabled={operations.running}
                         aria-label={node.locked ? '解锁图层' : '锁定图层'}
                         onClick={() =>
                           updateNode(node.id, (value) => ({
@@ -572,6 +715,7 @@ export function StructuredEditor({
                   <input
                     value={activeNode.name ?? ''}
                     maxLength={64}
+                    disabled={operations.running}
                     onChange={(event) =>
                       updateNode(
                         activeNode.id,
@@ -593,6 +737,7 @@ export function StructuredEditor({
                     max="1"
                     step="0.01"
                     value={activeNode.opacity}
+                    disabled={operations.running}
                     onChange={(event) =>
                       updateNode(
                         activeNode.id,
@@ -608,6 +753,7 @@ export function StructuredEditor({
                 <div className="structured-order-controls">
                   <button
                     type="button"
+                    disabled={operations.running}
                     onClick={() =>
                       runCommand(
                         () =>
@@ -624,6 +770,7 @@ export function StructuredEditor({
                   </button>
                   <button
                     type="button"
+                    disabled={operations.running}
                     onClick={() =>
                       runCommand(
                         () =>
@@ -639,6 +786,36 @@ export function StructuredEditor({
                     <ArrowDown size={14} /> 下移
                   </button>
                 </div>
+                {operations.currentLayerSet?.items.some(
+                  (item) => item.id === activeNode.id,
+                ) && (
+                  <button
+                    className="editor-package-layers"
+                    type="button"
+                    onClick={() => {
+                      const layer = operations.currentLayerSet?.items.find(
+                        (item) => item.id === activeNode.id,
+                      )
+                      if (layer && operations.currentLayerSet)
+                        void operations.publishLayer(
+                          operations.currentLayerSet.id,
+                          layer.id,
+                        )
+                    }}
+                  >
+                    保存当前图层为图片
+                  </button>
+                )}
+                {operations.currentLayerSet && (
+                  <button
+                    className="editor-package-layers"
+                    type="button"
+                    disabled={operations.packageRunning}
+                    onClick={() => void operations.packageLayers()}
+                  >
+                    {operations.packageRunning ? '正在打包' : '下载全部图层'}
+                  </button>
+                )}
               </section>
             )}
           </aside>
@@ -683,6 +860,83 @@ export function StructuredEditor({
             </div>
           </section>
         )}
+        {settingsOpen && (
+          <aside className="editor-layer-drawer" aria-label="智能分层设置">
+            <button
+              type="button"
+              className="drawer-close"
+              aria-label="关闭设置"
+              onClick={() => setSettingsOpen(false)}
+            >
+              ×
+            </button>
+            <p className="eyebrow">LAYER DECOMPOSITION</p>
+            <h2>智能分层</h2>
+            <label>
+              指定元素（可选）
+              <textarea
+                value={settings.prompt}
+                onChange={(event) =>
+                  setSettings((current) => ({
+                    ...current,
+                    prompt: event.target.value,
+                  }))
+                }
+              />
+            </label>
+            <label>
+              输出尺寸
+              <select
+                value={settings.resolution}
+                onChange={(event) =>
+                  setSettings((current) => ({
+                    ...current,
+                    resolution: event.target
+                      .value as LayerDecompositionSettings['resolution'],
+                  }))
+                }
+              >
+                {['auto', '1K', '1.5K', '2K'].map((value) => (
+                  <option key={value}>{value}</option>
+                ))}
+              </select>
+            </label>
+            <label>
+              提示词优化
+              <select
+                value={settings.mode}
+                onChange={(event) =>
+                  setSettings((current) => ({
+                    ...current,
+                    mode: event.target
+                      .value as LayerDecompositionSettings['mode'],
+                  }))
+                }
+              >
+                <option value="standard">标准</option>
+                <option value="fast">快速</option>
+              </select>
+            </label>
+            <button
+              className="editor-decompose"
+              type="button"
+              onClick={() => void requestDecomposition()}
+            >
+              <Sparkles size={16} /> 开始分层
+            </button>
+          </aside>
+        )}
+        <ConfirmDialog
+          open={rerunConfirm}
+          title="重新智能分层"
+          description="会产生一次新的付费请求；旧图层在新结果成功前仍会保留。"
+          confirmLabel="继续分层"
+          onCancel={() => setRerunConfirm(false)}
+          onConfirm={() => {
+            setRerunConfirm(false)
+            void requestDecomposition(true)
+          }}
+        />
       </main>
     </AppShell>
   )

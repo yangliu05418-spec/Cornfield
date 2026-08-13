@@ -629,6 +629,17 @@ test('image editor restores a source project and autosaves keyboard edits', asyn
     .poll(() => backend.editorState().document.objects[1].name)
     .toBe('前景人物')
 
+  await page.getByRole('button', { name: '隐藏图层 前景人物' }).click()
+  await expect
+    .poll(() => backend.editorState().document.objects[1].visible)
+    .toBe(false)
+  await page.getByRole('button', { name: '显示图层 前景人物' }).click()
+  await page.getByRole('button', { name: '锁定图层 前景人物' }).click()
+  await expect
+    .poll(() => backend.editorState().document.objects[1].locked)
+    .toBe(true)
+  await page.getByRole('button', { name: '解锁图层 前景人物' }).click()
+
   const centerX = page.locator('.editor-geometry-grid input').nth(0)
   const centerY = page.locator('.editor-geometry-grid input').nth(1)
   await centerX.fill('600')

@@ -1020,46 +1020,74 @@
   gap: 4px;
   padding: 8px;
 }
-.editor-layer-list > button {
+.editor-layer-row {
   display: grid;
-  grid-template-columns: 38px minmax(0, 1fr) 18px;
-  gap: 9px;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 4px;
   align-items: center;
   min-height: 46px;
-  padding: 4px 8px 4px 4px;
+  padding: 3px;
   color: var(--muted);
-  text-align: left;
   border: 1px solid transparent;
   border-radius: 9px;
   background: transparent;
 }
-.editor-layer-list > button[draggable='true'] {
+.editor-layer-row[draggable='true'] {
   cursor: grab;
 }
-.editor-layer-list > button[draggable='true']:active {
+.editor-layer-row[draggable='true']:active {
   cursor: grabbing;
 }
-.editor-layer-list > button:hover,
-.editor-layer-list > button.active {
+.editor-layer-row:hover,
+.editor-layer-row.active {
   color: var(--text);
   border-color: var(--line);
   background: var(--surface-2);
 }
-.editor-layer-list img {
+.editor-layer-select {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: 38px minmax(0, 1fr);
+  gap: 9px;
+  align-items: center;
+  padding: 0;
+  color: inherit;
+  text-align: left;
+  border: 0;
+  background: transparent;
+}
+.editor-layer-select img {
   width: 38px;
   height: 38px;
   object-fit: cover;
   border-radius: 7px;
   background: #111315;
 }
-.editor-layer-list span {
+.editor-layer-select span {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   font-size: 12px;
 }
-.editor-layer-list i {
+.editor-layer-quick-actions {
+  display: flex;
+  gap: 1px;
+}
+.editor-layer-quick-actions button {
+  display: grid;
+  width: 26px;
+  height: 30px;
+  padding: 0;
+  place-items: center;
   color: var(--muted);
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+}
+.editor-layer-quick-actions button:hover,
+.editor-layer-quick-actions button:focus-visible {
+  color: var(--text);
+  background: var(--surface-3);
 }
 .editor-properties {
   display: grid;

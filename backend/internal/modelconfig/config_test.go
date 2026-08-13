@@ -289,8 +289,11 @@ func TestBytePlusSeedreamCatalog(t *testing.T) {
 	if strings.Join(model.Capabilities.PromptOptimizationModes, ",") != "standard,fast" || len(model.SizeOverrides) != 3 {
 		t.Fatalf("unexpected BytePlus capabilities: %+v", model.Capabilities)
 	}
-	if model.Capabilities.LayerDecomposition || strings.Join(model.Capabilities.LayerDecompositionSizes, ",") != "auto,1K,1.5K,2K" || model.Capabilities.MaxDecompositionLayers != 16 {
+	if !model.Capabilities.LayerDecomposition || strings.Join(model.Capabilities.LayerDecompositionSizes, ",") != "auto,1K,1.5K,2K" || model.Capabilities.MaxDecompositionLayers != 16 {
 		t.Fatalf("unexpected layer decomposition rollout contract: %+v", model.Capabilities)
+	}
+	if strings.Join(model.Policy.AllowedOutputHosts, ",") != "tos-ap-southeast-1.volces.com" {
+		t.Fatalf("unexpected layer output allowlist: %v", model.Policy.AllowedOutputHosts)
 	}
 	if model.Policy.LayerDecompositionTimeoutSeconds != 600 || catalog.MaxOperationTimeout() != 600*time.Second {
 		t.Fatalf("operation timeout = %v, policy = %d", catalog.MaxOperationTimeout(), model.Policy.LayerDecompositionTimeoutSeconds)

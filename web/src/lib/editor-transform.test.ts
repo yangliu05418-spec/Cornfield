@@ -24,7 +24,7 @@ import {
   unionBounds,
   zoomAtScreenPoint,
 } from './editor-transform'
-import type { EditorObject } from './api'
+import type { EditorObject } from '#/features/editor/domain/document'
 
 const object: EditorObject = {
   id: 'image',

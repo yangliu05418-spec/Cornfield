@@ -38,6 +38,7 @@ import type { CSSProperties, PointerEvent as ReactPointerEvent } from 'react'
 
 import { AppShell } from '#/components/app-shell'
 import { ConfirmDialog } from '#/components/confirm-dialog'
+import { EditorHistory } from '#/features/editor/domain/history'
 import { api, APIError } from '#/lib/api'
 import { mergeAssetIntoCaches } from '#/lib/asset-cache'
 import {
@@ -114,6 +115,7 @@ function ImageEditorPage() {
   const [documentState, setDocumentState] = useState<EditorDocument | null>(
     null,
   )
+  const [, setHistoryRevision] = useState(0)
   const [selectedID, setSelectedID] = useState('')
   const [selectedIDs, setSelectedIDs] = useState<Set<string>>(new Set())
   const [cropSession, setCropSession] = useState<{
@@ -153,8 +155,7 @@ function ImageEditorPage() {
   const saveTimerRef = useRef<number | undefined>(undefined)
   const savePromiseRef = useRef<Promise<void> | null>(null)
   const documentRef = useRef<EditorDocument | null>(null)
-  const historyRef = useRef<EditorDocument[]>([])
-  const futureRef = useRef<EditorDocument[]>([])
+  const historyRef = useRef(new EditorHistory(100))
   const appliedLayerSetRef = useRef<string | undefined>(undefined)
   const continuousHistoryRef = useRef<EditorDocument | null>(null)
   const viewportRef = useRef<HTMLDivElement>(null)
@@ -363,11 +364,8 @@ function ImageEditorPage() {
 
   function applyDocument(next: EditorDocument, remember = true) {
     if (!documentRef.current || operationRunning) return
-    if (remember) {
-      historyRef.current.push(structuredClone(documentRef.current))
-      if (historyRef.current.length > 100) historyRef.current.shift()
-      futureRef.current = []
-    }
+    if (remember && historyRef.current.commit(documentRef.current, next))
+      setHistoryRevision((value) => value + 1)
     documentRef.current = next
     setDocumentState(next)
     scheduleSave()
@@ -409,7 +407,7 @@ function ImageEditorPage() {
 
   function beginContinuousEdit() {
     if (!continuousHistoryRef.current && documentRef.current)
-      continuousHistoryRef.current = structuredClone(documentRef.current)
+      continuousHistoryRef.current = documentRef.current
   }
 
   function finishContinuousEdit() {
@@ -420,9 +418,8 @@ function ImageEditorPage() {
       JSON.stringify(previous) === JSON.stringify(documentRef.current)
     )
       return
-    historyRef.current.push(previous)
-    if (historyRef.current.length > 100) historyRef.current.shift()
-    futureRef.current = []
+    if (historyRef.current.commit(previous, documentRef.current!))
+      setHistoryRevision((value) => value + 1)
   }
 
   function moveLayerTo(sourceID: string, targetID: string) {
@@ -442,22 +439,22 @@ function ImageEditorPage() {
   }
 
   function undo() {
-    if (!documentRef.current || !historyRef.current.length || operationRunning)
+    if (!documentRef.current || !historyRef.current.canUndo || operationRunning)
       return
-    futureRef.current.push(structuredClone(documentRef.current))
-    const previous = historyRef.current.pop()!
+    const previous = historyRef.current.undo(documentRef.current)
     documentRef.current = previous
     setDocumentState(previous)
+    setHistoryRevision((value) => value + 1)
     scheduleSave()
   }
 
   function redo() {
-    if (!documentRef.current || !futureRef.current.length || operationRunning)
+    if (!documentRef.current || !historyRef.current.canRedo || operationRunning)
       return
-    historyRef.current.push(structuredClone(documentRef.current))
-    const next = futureRef.current.pop()!
+    const next = historyRef.current.redo(documentRef.current)
     documentRef.current = next
     setDocumentState(next)
+    setHistoryRevision((value) => value + 1)
     scheduleSave()
   }
 
@@ -512,7 +509,7 @@ function ImageEditorPage() {
     event.currentTarget.setPointerCapture(event.pointerId)
     const startX = event.clientX
     const startY = event.clientY
-    const initialDocument = structuredClone(documentRef.current)
+    const initialDocument = documentRef.current
     const movableIDs = new Set(
       initialDocument.objects
         .filter((item) => dragIDs.has(item.id) && !item.locked)
@@ -596,9 +593,8 @@ function ImageEditorPage() {
         setSnapGuides([])
         return
       }
-      historyRef.current.push(initialDocument)
-      if (historyRef.current.length > 100) historyRef.current.shift()
-      futureRef.current = []
+      historyRef.current.commit(initialDocument, documentRef.current!)
+      setHistoryRevision((value) => value + 1)
       setSnapGuides([])
       scheduleSave()
     }
@@ -703,8 +699,8 @@ function ImageEditorPage() {
     event.stopPropagation()
     const viewport = viewportRef.current
     if (!viewport) return
-    const initialDocument = structuredClone(documentRef.current)
-    const initialObject = structuredClone(object)
+    const initialDocument = documentRef.current
+    const initialObject = object
     const center = transformPoint(
       initialObject.transform,
       asset.width / 2,
@@ -771,9 +767,8 @@ function ImageEditorPage() {
     const up = () => {
       window.removeEventListener('pointermove', move)
       window.removeEventListener('pointerup', up)
-      historyRef.current.push(initialDocument)
-      if (historyRef.current.length > 100) historyRef.current.shift()
-      futureRef.current = []
+      historyRef.current.commit(initialDocument, documentRef.current!)
+      setHistoryRevision((value) => value + 1)
       scheduleSave()
     }
     window.addEventListener('pointermove', move)
@@ -892,7 +887,7 @@ function ImageEditorPage() {
     viewport.focus({ preventScroll: true })
     event.preventDefault()
     event.stopPropagation()
-    const initialDocument = structuredClone(current)
+    const initialDocument = current
     const initialTransforms = new Map(
       transformable.map((item) => [item.id, item.transform]),
     )
@@ -965,9 +960,8 @@ function ImageEditorPage() {
       window.removeEventListener('pointermove', move)
       window.removeEventListener('pointerup', up)
       if (!changed) return
-      historyRef.current.push(initialDocument)
-      if (historyRef.current.length > 100) historyRef.current.shift()
-      futureRef.current = []
+      historyRef.current.commit(initialDocument, documentRef.current!)
+      setHistoryRevision((value) => value + 1)
       scheduleSave()
     }
     window.addEventListener('pointermove', move)
@@ -1698,7 +1692,7 @@ function ImageEditorPage() {
               type="button"
               aria-label="撤销"
               disabled={
-                !historyRef.current.length ||
+                !historyRef.current.canUndo ||
                 operationRunning ||
                 Boolean(cropSession)
               }
@@ -1710,7 +1704,7 @@ function ImageEditorPage() {
               type="button"
               aria-label="重做"
               disabled={
-                !futureRef.current.length ||
+                !historyRef.current.canRedo ||
                 operationRunning ||
                 Boolean(cropSession)
               }

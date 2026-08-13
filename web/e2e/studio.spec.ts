@@ -903,11 +903,13 @@ test('image editor keeps DOM as the default renderer and mounts Pixi only when r
     )
     .toEqual({ ready: true })
   await expect(page.locator('.editor-canvas > img')).toHaveCount(0)
+  await expect(page.getByTestId('editor-pixi-artboard-underlay')).toBeVisible()
   await expect(page.locator('.editor-object-hit')).toHaveCount(1)
   await expect(page.locator('.editor-selection-box')).toBeVisible()
 
   await page.getByTestId('editor-crop-tool').click()
   await expect(surface).toHaveCount(0)
+  await expect(page.getByTestId('editor-pixi-artboard-underlay')).toHaveCount(0)
   await expect(page.locator('.editor-canvas > img')).toHaveCSS('opacity', '1')
 })
 

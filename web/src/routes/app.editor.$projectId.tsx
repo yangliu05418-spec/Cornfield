@@ -2097,6 +2097,21 @@ function ImageEditorPage() {
               )
             }}
           >
+            {rendererMode === 'pixi' && !cropSession && pixiPresented && (
+              <div
+                className="editor-pixi-artboard-underlay editor-artboard"
+                data-testid="editor-pixi-artboard-underlay"
+                style={
+                  {
+                    width: documentState.canvas.width,
+                    height: documentState.canvas.height,
+                    transform: `translate(${view.panX}px, ${view.panY}px) scale(${zoom / 100})`,
+                    '--editor-zoom': zoom / 100,
+                  } as CSSProperties
+                }
+                aria-hidden="true"
+              />
+            )}
             <PixiSurface
               enabled={rendererMode === 'pixi' && !cropSession}
               document={documentState}

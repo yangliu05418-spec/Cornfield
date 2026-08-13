@@ -747,9 +747,14 @@
   background: var(--lime);
 }
 .editor-body {
+  position: relative;
   display: grid;
   min-height: 0;
   grid-template-columns: 48px minmax(0, 1fr) 272px;
+}
+.editor-body[data-cropping] .editor-inspector {
+  pointer-events: none;
+  opacity: 0.56;
 }
 .editor-tools {
   display: flex;
@@ -963,6 +968,177 @@
 }
 .editor-rotate-handle.is-group::after {
   display: none;
+}
+.editor-crop-overlay {
+  position: absolute;
+  z-index: 1200;
+  inset: 0 auto auto 0;
+  transform-origin: 0 0;
+  overflow: hidden;
+  pointer-events: none;
+}
+.editor-crop-frame {
+  position: absolute;
+  box-sizing: border-box;
+  border: max(1px, calc(1px / var(--editor-zoom, 1))) solid var(--lime);
+  box-shadow:
+    0 0 0 max(1px, calc(1px / var(--editor-zoom, 1))) rgb(15 17 19 / 0.56),
+    0 0 0 100000px rgb(4 5 6 / 0.54);
+  pointer-events: none;
+}
+.editor-crop-move {
+  position: absolute;
+  z-index: 1;
+  inset: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  cursor: move;
+  pointer-events: auto;
+}
+.editor-crop-grid {
+  position: absolute;
+  z-index: 2;
+  display: block;
+  background: rgb(247 247 248 / 0.32);
+  pointer-events: none;
+}
+.editor-crop-grid.is-x-one,
+.editor-crop-grid.is-x-two {
+  top: 0;
+  bottom: 0;
+  width: max(1px, calc(1px / var(--editor-zoom, 1)));
+}
+.editor-crop-grid.is-x-one {
+  left: 33.333%;
+}
+.editor-crop-grid.is-x-two {
+  left: 66.666%;
+}
+.editor-crop-grid.is-y-one,
+.editor-crop-grid.is-y-two {
+  right: 0;
+  left: 0;
+  height: max(1px, calc(1px / var(--editor-zoom, 1)));
+}
+.editor-crop-grid.is-y-one {
+  top: 33.333%;
+}
+.editor-crop-grid.is-y-two {
+  top: 66.666%;
+}
+.editor-crop-handle {
+  position: absolute;
+  z-index: 3;
+  width: var(--editor-handle-size, 12px);
+  height: var(--editor-handle-size, 12px);
+  padding: 0;
+  border: 2px solid #111315;
+  border-radius: 2px;
+  background: var(--lime);
+  box-shadow: 0 0 0 1px var(--lime);
+  pointer-events: auto;
+}
+.editor-crop-handle.is-n,
+.editor-crop-handle.is-s {
+  left: calc(50% - var(--editor-handle-size, 12px) / 2);
+  cursor: ns-resize;
+}
+.editor-crop-handle.is-e,
+.editor-crop-handle.is-w {
+  top: calc(50% - var(--editor-handle-size, 12px) / 2);
+  cursor: ew-resize;
+}
+.editor-crop-handle.is-n,
+.editor-crop-handle.is-ne,
+.editor-crop-handle.is-nw {
+  top: calc(var(--editor-handle-size, 12px) / -2);
+}
+.editor-crop-handle.is-s,
+.editor-crop-handle.is-se,
+.editor-crop-handle.is-sw {
+  bottom: calc(var(--editor-handle-size, 12px) / -2);
+}
+.editor-crop-handle.is-e,
+.editor-crop-handle.is-ne,
+.editor-crop-handle.is-se {
+  right: calc(var(--editor-handle-size, 12px) / -2);
+}
+.editor-crop-handle.is-w,
+.editor-crop-handle.is-nw,
+.editor-crop-handle.is-sw {
+  left: calc(var(--editor-handle-size, 12px) / -2);
+}
+.editor-crop-handle.is-ne,
+.editor-crop-handle.is-sw {
+  cursor: nesw-resize;
+}
+.editor-crop-handle.is-nw,
+.editor-crop-handle.is-se {
+  cursor: nwse-resize;
+}
+.editor-crop-actions {
+  position: absolute;
+  z-index: 1500;
+  bottom: 22px;
+  left: 50%;
+  display: flex;
+  min-height: 42px;
+  align-items: center;
+  gap: 6px;
+  padding: 5px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--surface) 92%, transparent);
+  box-shadow: 0 16px 46px rgb(0 0 0 / 0.38);
+  backdrop-filter: blur(12px);
+  transform: translateX(-50%);
+}
+.editor-crop-actions > span {
+  padding: 0 9px;
+  color: var(--muted);
+  font: 500 10px/1 var(--font-mono);
+  letter-spacing: 0.05em;
+}
+.editor-crop-actions button {
+  display: inline-flex;
+  min-height: 32px;
+  align-items: center;
+  gap: 6px;
+  padding: 0 10px;
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #1c1e20;
+}
+.editor-crop-actions button.primary {
+  color: #10130b;
+  border-color: var(--lime);
+  background: var(--lime);
+}
+.editor-crop-summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 9px 10px;
+  color: var(--muted);
+  font-size: 11px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+}
+.editor-crop-summary strong {
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-weight: 500;
+}
+.editor-crop-summary button {
+  min-height: 28px;
+  padding: 0 8px;
+  color: var(--muted);
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: transparent;
 }
 .editor-remove-layer {
   display: inline-flex;

@@ -789,6 +789,91 @@ test('image editor restores a source project and autosaves keyboard edits', asyn
   await expect(page.getByText('已保存')).toBeVisible()
 })
 
+test('image editor crops a rotated layer with explicit apply and cancel', async ({
+  page,
+}) => {
+  const backend = await installStudioMocks(page)
+  await page.goto('/app/editor/editor-project-1')
+  const canvas = page.getByRole('region', { name: '图片编辑画布' })
+  await expect(canvas).toBeVisible()
+
+  await page.getByTitle('旋转 90°').click()
+  await expect.poll(() => backend.editorState().revision).toBe(1)
+  const transformBeforeCrop = structuredClone(
+    backend.editorState().document.objects[0].transform,
+  )
+
+  await page.getByRole('button', { name: '裁切图层' }).click()
+  await expect(page.getByRole('toolbar', { name: '裁切操作' })).toBeVisible()
+  await expect(
+    page.getByRole('button', { name: '智能分层', exact: true }),
+  ).toBeDisabled()
+  const eastHandle = page.getByRole('button', { name: '调整裁切区域 e' })
+  const eastBox = await eastHandle.boundingBox()
+  expect(eastBox).not.toBeNull()
+  await page.mouse.move(
+    eastBox!.x + eastBox!.width / 2,
+    eastBox!.y + eastBox!.height / 2,
+  )
+  await page.mouse.down()
+  await page.mouse.move(
+    eastBox!.x + eastBox!.width / 2,
+    eastBox!.y + eastBox!.height / 2 - 90,
+    { steps: 8 },
+  )
+  await page.mouse.up()
+  const draftWidth = await page
+    .locator('.editor-crop-frame')
+    .evaluate((element) =>
+      Number.parseFloat((element as HTMLElement).style.width),
+    )
+  expect(draftWidth).toBeLessThan(1024)
+  expect(backend.editorState().document.objects[0].crop).toBeUndefined()
+
+  await canvas.focus()
+  await page.keyboard.press('Escape')
+  await expect(page.getByRole('toolbar', { name: '裁切操作' })).toBeHidden()
+  expect(backend.editorState().document.objects[0].crop).toBeUndefined()
+  expect(backend.editorState().document.objects[0].transform).toEqual(
+    transformBeforeCrop,
+  )
+  expect(backend.editorState().revision).toBe(1)
+
+  await page.getByRole('button', { name: '裁切图层' }).click()
+  const secondEastBox = await page
+    .getByRole('button', { name: '调整裁切区域 e' })
+    .boundingBox()
+  expect(secondEastBox).not.toBeNull()
+  await page.mouse.move(
+    secondEastBox!.x + secondEastBox!.width / 2,
+    secondEastBox!.y + secondEastBox!.height / 2,
+  )
+  await page.mouse.down()
+  await page.mouse.move(
+    secondEastBox!.x + secondEastBox!.width / 2,
+    secondEastBox!.y + secondEastBox!.height / 2 - 120,
+    { steps: 8 },
+  )
+  await page.mouse.up()
+  await canvas.focus()
+  await page.keyboard.press('Enter')
+  await expect.poll(() => backend.editorState().revision).toBe(2)
+  expect(backend.editorState().document.objects[0].crop?.width).toBeLessThan(1)
+  await expect(page.getByText('裁切区域')).toBeVisible()
+
+  await canvas.focus()
+  await page.keyboard.press('Control+z')
+  await expect.poll(() => backend.editorState().revision).toBe(3)
+  expect(backend.editorState().document.objects[0].crop).toBeUndefined()
+  await page.keyboard.press('Control+Shift+z')
+  await expect.poll(() => backend.editorState().revision).toBe(4)
+  expect(backend.editorState().document.objects[0].crop?.width).toBeLessThan(1)
+
+  await page.reload()
+  await expect(page.getByText('裁切区域')).toBeVisible()
+  expect(backend.editorState().document.objects[0].crop?.width).toBeLessThan(1)
+})
+
 test.describe('mobile studio', () => {
   test.use({ viewport: { width: 390, height: 844 }, hasTouch: true })
 
@@ -872,7 +957,21 @@ async function installStudioMocks(
   const postKeys: string[] = []
   let editorRevision = 0
   let editorUploadReady = false
-  let editorDocument = {
+  let editorDocument: {
+    schema_version: 1
+    canvas: { width: number; height: number }
+    objects: Array<{
+      id: string
+      name: string
+      asset_id: string
+      transform: number[]
+      opacity: number
+      visible: boolean
+      locked: boolean
+      z_index: number
+      crop?: { x: number; y: number; width: number; height: number }
+    }>
+  } = {
     schema_version: 1 as const,
     canvas: { width: 1024, height: 1024 },
     objects: [

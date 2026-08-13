@@ -1,6 +1,9 @@
 import type { EditorObject } from './api'
 
 export type Affine = EditorObject['transform']
+export type CropRect = NonNullable<EditorObject['crop']>
+export type CropHandle =
+  'move' | 'n' | 'ne' | 'e' | 'se' | 's' | 'sw' | 'w' | 'nw'
 
 export function multiplyAffine(left: Affine, right: Affine): Affine {
   const [a, b, c, d, e, f] = left
@@ -173,6 +176,57 @@ export function transformPoint(transform: Affine, x: number, y: number) {
     x: transform[0] * x + transform[2] * y + transform[4],
     y: transform[1] * x + transform[3] * y + transform[5],
   }
+}
+
+export function invertAffine(transform: Affine): Affine | undefined {
+  const [a, b, c, d, e, f] = transform
+  const determinant = a * d - b * c
+  if (!Number.isFinite(determinant) || Math.abs(determinant) < 1e-10)
+    return undefined
+  return [
+    d / determinant,
+    -b / determinant,
+    -c / determinant,
+    a / determinant,
+    (c * f - d * e) / determinant,
+    (b * e - a * f) / determinant,
+  ]
+}
+
+export function moveCrop(crop: CropRect, dx: number, dy: number): CropRect {
+  return {
+    ...crop,
+    x: clamp(crop.x + dx, 0, 1 - crop.width),
+    y: clamp(crop.y + dy, 0, 1 - crop.height),
+  }
+}
+
+export function resizeCrop(
+  crop: CropRect,
+  handle: Exclude<CropHandle, 'move'>,
+  dx: number,
+  dy: number,
+  minWidth: number,
+  minHeight: number,
+): CropRect {
+  let left = crop.x
+  let top = crop.y
+  let right = crop.x + crop.width
+  let bottom = crop.y + crop.height
+  if (handle.includes('w')) left = clamp(left + dx, 0, right - minWidth)
+  if (handle.includes('e')) right = clamp(right + dx, left + minWidth, 1)
+  if (handle.includes('n')) top = clamp(top + dy, 0, bottom - minHeight)
+  if (handle.includes('s')) bottom = clamp(bottom + dy, top + minHeight, 1)
+  return {
+    x: left,
+    y: top,
+    width: right - left,
+    height: bottom - top,
+  }
+}
+
+function clamp(value: number, minimum: number, maximum: number) {
+  return Math.min(maximum, Math.max(minimum, value))
 }
 
 export type ObjectBounds = {

@@ -237,7 +237,7 @@ func main() {
 }
 
 func run() error {
-	var baseURL, username, passwordFile, promptFile, providerKeyFile, artifactDir, releaseSHA, configPath, reportPath, profile string
+	var baseURL, username, passwordFile, promptFile, providerKeyFile, artifactDir, releaseSHA, configPath, reportPath, profile, layerCases string
 	var allowHTTP bool
 	var archiveOutput bool
 	flag.StringVar(&baseURL, "base-url", "https://corn.kumadrama.com", "Cornfield HTTPS origin")
@@ -250,6 +250,7 @@ func run() error {
 	flag.StringVar(&configPath, "model-config", "./config/models.yaml", "deployed model catalog")
 	flag.StringVar(&reportPath, "report", "", "resumable JSON report path")
 	flag.StringVar(&profile, "profile", "matrix", "canary profile: matrix, launch, byteplus, layer-protocol, or layer-e2e")
+	flag.StringVar(&layerCases, "layer-cases", "", "comma-separated layer-e2e case names; empty runs the full profile")
 	flag.BoolVar(&archiveOutput, "archive-output", true, "archive generated canary assets")
 	flag.BoolVar(&allowHTTP, "allow-http", false, "allow HTTP for isolated tests only")
 	flag.Parse()
@@ -303,7 +304,7 @@ func run() error {
 		if reportPath == "" {
 			reportPath = "layer-e2e-" + shortSHA(releaseSHA) + ".json"
 		}
-		return runLayerE2E(ctx, client, reportPath, releaseSHA, catalog.Hash, username)
+		return runLayerE2E(ctx, client, reportPath, releaseSHA, catalog.Hash, username, layerCases)
 	}
 
 	folderID, err := client.ensureFolder(ctx, "Canary "+shortSHA(releaseSHA))
@@ -1041,7 +1042,7 @@ type layerE2EReport struct {
 	Results            []layerE2EResult `json:"results"`
 }
 
-func runLayerE2E(ctx context.Context, client *apiClient, reportPath, release, revision, username string) error {
+func runLayerE2E(ctx context.Context, client *apiClient, reportPath, release, revision, username, selected string) error {
 	report := layerE2EReport{ReleaseSHA: release, CapabilityRevision: revision, Username: username, StartedAt: time.Now().UTC()}
 	folderID, err := client.ensureFolder(ctx, "Canary Layers "+shortSHA(release))
 	if err != nil {
@@ -1054,6 +1055,26 @@ func runLayerE2E(ctx context.Context, client *apiClient, reportPath, release, re
 		{Name: "2k-standard", Size: "2K", Mode: "standard"},
 		{Name: "elements-1k", Size: "1K", Mode: "standard", Prompt: "Separate the central figure, title, lime circle, blue rectangle, and background into independent layers."},
 		{Name: "transformed-bbox-2k", Size: "2K", Mode: "fast", Transform: true, Prompt: "Separate the central figure inside <bbox>350 160 650 880</bbox>, the title, both geometric shapes, and the background."},
+	}
+	if selected != "" {
+		wanted := make(map[string]bool)
+		for _, name := range strings.Split(selected, ",") {
+			name = strings.TrimSpace(name)
+			if name != "" {
+				wanted[name] = true
+			}
+		}
+		filtered := cases[:0]
+		for _, item := range cases {
+			if wanted[item.Name] {
+				filtered = append(filtered, item)
+				delete(wanted, item.Name)
+			}
+		}
+		if len(wanted) > 0 || len(filtered) == 0 {
+			return errors.New("--layer-cases contains an unknown or empty case selection")
+		}
+		cases = filtered
 	}
 	for _, item := range cases {
 		result := client.runLayerE2ECase(ctx, folderID, item)
@@ -1264,7 +1285,9 @@ func (c *apiClient) waitForOperationEvent(ctx context.Context, operationID uuid.
 	if err != nil {
 		return 0, err
 	}
-	res, err := c.http.Do(req)
+	streamingClient := *c.http
+	streamingClient.Timeout = 0
+	res, err := streamingClient.Do(req)
 	if err != nil {
 		return 0, err
 	}
@@ -1281,7 +1304,7 @@ func (c *apiClient) waitForOperationEvent(ctx context.Context, operationID uuid.
 		}
 		var envelope struct {
 			CreatedAt time.Time `json:"created_at"`
-			Payload struct {
+			Payload   struct {
 				ID     uuid.UUID `json:"id"`
 				Status string    `json:"status"`
 			} `json:"payload"`

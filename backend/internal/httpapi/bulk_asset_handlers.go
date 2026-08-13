@@ -140,10 +140,16 @@ func (s *Server) deleteAssetsBulk(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var editorReferences int
-	err = tx.QueryRow(r.Context(), `SELECT count(DISTINCT target.id)
-		FROM unnest($1::uuid[]) AS target(id)
+	err = tx.QueryRow(r.Context(), `SELECT count(DISTINCT ref.asset_id) FROM (
+		SELECT target.id AS asset_id FROM unnest($1::uuid[]) AS target(id)
 		JOIN image_editor_projects p ON p.owner_user_id=$2 AND p.source_asset_id<>target.id AND NOT (p.source_asset_id=ANY($1))
-		WHERE p.document @> jsonb_build_object('objects',jsonb_build_array(jsonb_build_object('asset_id',target.id::text)))`, assetIDs, sess.UserID).Scan(&editorReferences)
+		WHERE p.document @> jsonb_build_object('objects',jsonb_build_array(jsonb_build_object('asset_id',target.id::text)))
+		UNION ALL
+		SELECT target.id FROM unnest($1::uuid[]) AS target(id)
+		JOIN image_editor_projects p ON p.owner_user_id=$2 AND p.source_asset_id<>target.id AND NOT (p.source_asset_id=ANY($1))
+		JOIN asset_operations o ON o.editor_project_id=p.id AND o.status NOT IN ('succeeded','failed','cancelled','submission_uncertain')
+		WHERE o.source_document @> jsonb_build_object('objects',jsonb_build_array(jsonb_build_object('asset_id',target.id::text)))
+	) ref`, assetIDs, sess.UserID).Scan(&editorReferences)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "ASSET_DELETE_FAILED", "删除资产失败", true, r)
 		return

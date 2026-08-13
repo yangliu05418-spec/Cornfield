@@ -18,6 +18,7 @@ type SpikeResult = {
   longTasks: number
   pixelMeanAbsoluteError: number
   pixelMismatchRatio: number
+  resolutionTransitionBytes: number[]
   contextLossSupported: boolean
   contextLostObserved: boolean
   contextRestoredObserved: boolean
@@ -41,6 +42,7 @@ void run().catch((error: unknown) => {
     longTasks: 0,
     pixelMeanAbsoluteError: Number.POSITIVE_INFINITY,
     pixelMismatchRatio: 1,
+    resolutionTransitionBytes: [],
     contextLossSupported: false,
     contextLostObserved: false,
     contextRestoredObserved: false,
@@ -54,6 +56,7 @@ void run().catch((error: unknown) => {
 
 async function run() {
   const pixelComparison = await runPixelCorrectnessFixture(correctnessCanvas)
+  const resolutionTransitionBytes = await runResolutionTransitionFixture()
   const assets = await buildAssets(50)
   const document = buildDocument(assets)
   let contextLostObserved = false
@@ -132,6 +135,7 @@ async function run() {
     longTasks: longTasks.length,
     pixelMeanAbsoluteError: pixelComparison.meanAbsoluteError,
     pixelMismatchRatio: pixelComparison.mismatchRatio,
+    resolutionTransitionBytes,
     contextLossSupported,
     contextLostObserved,
     contextRestoredObserved,
@@ -140,6 +144,74 @@ async function run() {
   }
   window.__EDITOR_SPIKE__ = result
   output.value = JSON.stringify(result, null, 2)
+}
+
+async function runResolutionTransitionFixture() {
+  const preview = document.createElement('canvas')
+  preview.width = 640
+  preview.height = 640
+  preview.getContext('2d')!.fillRect(0, 0, 640, 640)
+  const original = document.createElement('canvas')
+  original.width = 2048
+  original.height = 2048
+  original.getContext('2d')!.fillRect(0, 0, 2048, 2048)
+  const urls = [
+    URL.createObjectURL(await canvasToBlob(preview)),
+    URL.createObjectURL(await canvasToBlob(original)),
+  ]
+  const assets = new Map<string, EditorRenderAsset>([
+    [
+      'resolution',
+      {
+        id: 'resolution',
+        width: 2048,
+        height: 2048,
+        variants: [
+          { url: urls[0], width: 640, height: 640 },
+          { url: urls[1], width: 2048, height: 2048 },
+        ],
+      },
+    ],
+  ])
+  const fixture: EditorDocument = {
+    schema_version: 1,
+    canvas: { width: 2048, height: 2048 },
+    objects: [
+      {
+        id: 'resolution-layer',
+        asset_id: 'resolution',
+        transform: [1, 0, 0, 1, 0, 0],
+        opacity: 1,
+        visible: true,
+        locked: false,
+        z_index: 0,
+      },
+    ],
+  }
+  const target = document.createElement('canvas')
+  const renderer = new PixiEditorRenderer()
+  try {
+    await renderer.init(target, {
+      width: 256,
+      height: 256,
+      resolution: 1,
+      textureBudgetBytes: 20 << 20,
+      resolutionUpgradeDelayMs: 1,
+    })
+    renderer.setViewport({ zoom: 10, panX: 0, panY: 0 })
+    await renderer.sync(fixture, assets)
+    const low = renderer.stats().activeTextureBytes
+    renderer.setViewport({ zoom: 100, panX: 0, panY: 0 })
+    await renderer.settleResources()
+    const high = renderer.stats().activeTextureBytes
+    renderer.setViewport({ zoom: 10, panX: 0, panY: 0 })
+    await renderer.settleResources()
+    const lowAgain = renderer.stats().activeTextureBytes
+    return [low, high, lowAgain]
+  } finally {
+    renderer.destroy()
+    for (const url of urls) URL.revokeObjectURL(url)
+  }
 }
 
 async function runPixelCorrectnessFixture(targetCanvas: HTMLCanvasElement) {
@@ -405,5 +477,13 @@ function delay(ms: number) {
 }
 
 function emptyStats() {
-  return { nodes: 0, textures: 0, estimatedTextureBytes: 0, contextLost: false }
+  return {
+    nodes: 0,
+    textures: 0,
+    estimatedTextureBytes: 0,
+    activeTextureBytes: 0,
+    textureBudgetBytes: 256 << 20,
+    textureBudgetExceeded: false,
+    contextLost: false,
+  }
 }

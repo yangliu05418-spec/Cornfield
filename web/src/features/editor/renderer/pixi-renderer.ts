@@ -8,7 +8,8 @@ import {
   Texture,
 } from 'pixi.js'
 
-import { selectEditorAssetVariant } from './types'
+import { ReferenceCountedResourceCache } from '../resources/resource-cache'
+import { planEditorAssetVariants } from '../resources/variant-plan'
 import type { EditorDocument, EditorObject } from '../domain/document'
 import type {
   EditorRenderAsset,
@@ -26,23 +27,32 @@ type SceneNode = {
   variantURL: string
 }
 
-type TextureRecord = {
+type TextureResource = {
   texture: Texture
   bitmap: ImageBitmap
-  refs: number
-  bytes: number
 }
 
 export class PixiEditorRenderer implements EditorRenderer {
   #app?: Application
   #world = new Container()
   #nodes = new Map<string, SceneNode>()
-  #textures = new Map<string, TextureRecord>()
-  #pendingTextures = new Map<string, Promise<TextureRecord>>()
+  #textures = new ReferenceCountedResourceCache<TextureResource>((resource) => {
+    resource.texture.destroy(true)
+    resource.bitmap.close()
+  })
   #viewport: EditorViewport = { zoom: 100, panX: 0, panY: 0 }
   #resolution = 1
+  #textureBudgetBytes = 256 << 20
+  #textureBudgetExceeded = false
+  #resolutionUpgradeDelayMs = 150
+  #resourceTimer?: number
+  #latestDocument?: EditorDocument
+  #latestAssets?: ReadonlyMap<string, EditorRenderAsset>
+  #syncTail: Promise<void> = Promise.resolve()
+  #destroyed = false
   #contextLost = false
   #onContextChange?: (lost: boolean) => void
+  #onError?: (error: unknown) => void
   #canvas?: HTMLCanvasElement
   #lostHandler = (event: Event) => {
     event.preventDefault()
@@ -52,14 +62,22 @@ export class PixiEditorRenderer implements EditorRenderer {
   #restoredHandler = () => {
     this.#contextLost = false
     this.#onContextChange?.(false)
-    this.render()
+    if (this.#latestDocument && this.#latestAssets) {
+      void this.sync(this.#latestDocument, this.#latestAssets).catch(
+        this.#onError,
+      )
+    } else this.render()
   }
 
   async init(canvas: HTMLCanvasElement, options: EditorRendererOptions) {
+    if (this.#destroyed) throw new Error('renderer is destroyed')
     if (this.#app) throw new Error('renderer is already initialized')
     this.#canvas = canvas
     this.#resolution = options.resolution ?? 1
+    this.#textureBudgetBytes = options.textureBudgetBytes ?? 256 << 20
+    this.#resolutionUpgradeDelayMs = options.resolutionUpgradeDelayMs ?? 150
     this.#onContextChange = options.onContextChange
+    this.#onError = options.onError
     canvas.addEventListener('webglcontextlost', this.#lostHandler)
     canvas.addEventListener('webglcontextrestored', this.#restoredHandler)
     const app = new Application()
@@ -87,6 +105,26 @@ export class PixiEditorRenderer implements EditorRenderer {
     assets: ReadonlyMap<string, EditorRenderAsset>,
   ) {
     this.#assertReady()
+    this.#latestDocument = document
+    this.#latestAssets = assets
+    const task = this.#syncTail.then(() => this.#syncScene(document, assets))
+    this.#syncTail = task.catch(() => undefined)
+    return task
+  }
+
+  async #syncScene(
+    document: EditorDocument,
+    assets: ReadonlyMap<string, EditorRenderAsset>,
+  ) {
+    if (this.#destroyed) return
+    const plan = planEditorAssetVariants(
+      document,
+      assets,
+      this.#viewport,
+      this.#resolution,
+      this.#textureBudgetBytes,
+    )
+    this.#textureBudgetExceeded = plan.budgetExceeded
     const live = new Set(document.objects.map((object) => object.id))
     for (const [id, node] of this.#nodes) {
       if (live.has(id)) continue
@@ -94,16 +132,28 @@ export class PixiEditorRenderer implements EditorRenderer {
     }
     await mapWithConcurrency(document.objects, 6, async (object) => {
       const asset = assets.get(object.asset_id)
-      if (asset) await this.#syncObject(object, asset)
+      const variant = plan.variants.get(object.id)
+      if (asset && variant) await this.#syncObject(object, asset, variant)
+      else {
+        const node = this.#nodes.get(object.id)
+        if (node) this.#removeNode(object.id, node)
+      }
     })
-    this.setViewport(this.#viewport)
+    this.#textures.prune(this.#textureBudgetBytes)
+    this.#applyViewport()
     this.render()
   }
 
   setViewport(viewport: EditorViewport) {
+    const zoomChanged = viewport.zoom !== this.#viewport.zoom
     this.#viewport = viewport
-    const scale = viewport.zoom / 100
-    this.#world.position.set(viewport.panX, viewport.panY)
+    this.#applyViewport()
+    if (zoomChanged) this.#scheduleResourceReconcile()
+  }
+
+  #applyViewport() {
+    const scale = this.#viewport.zoom / 100
+    this.#world.position.set(this.#viewport.panX, this.#viewport.panY)
     this.#world.scale.set(scale)
   }
 
@@ -113,25 +163,23 @@ export class PixiEditorRenderer implements EditorRenderer {
   }
 
   stats(): EditorRendererStats {
+    const resources = this.#textures.stats()
     return {
       nodes: this.#nodes.size,
-      textures: this.#textures.size,
-      estimatedTextureBytes: [...this.#textures.values()].reduce(
-        (total, record) => total + record.bytes,
-        0,
-      ),
+      textures: resources.entries,
+      estimatedTextureBytes: resources.bytes,
+      activeTextureBytes: resources.activeBytes,
+      textureBudgetBytes: this.#textureBudgetBytes,
+      textureBudgetExceeded: this.#textureBudgetExceeded,
       contextLost: this.#contextLost,
     }
   }
 
   destroy() {
+    this.#destroyed = true
+    window.clearTimeout(this.#resourceTimer)
     for (const [id, node] of this.#nodes) this.#removeNode(id, node)
-    for (const record of this.#textures.values()) {
-      record.texture.destroy(true)
-      record.bitmap.close()
-    }
     this.#textures.clear()
-    this.#pendingTextures.clear()
     if (this.#canvas) {
       this.#canvas.removeEventListener('webglcontextlost', this.#lostHandler)
       this.#canvas.removeEventListener(
@@ -142,24 +190,39 @@ export class PixiEditorRenderer implements EditorRenderer {
     this.#app?.destroy(false, { children: true })
     this.#app = undefined
     this.#canvas = undefined
+    this.#latestDocument = undefined
+    this.#latestAssets = undefined
+    this.#textureBudgetExceeded = false
   }
 
-  async #syncObject(object: EditorObject, asset: EditorRenderAsset) {
-    const requiredPixels = this.#requiredPixels(object, asset)
-    const variant = selectEditorAssetVariant(asset, requiredPixels)
-    if (!variant) return
+  async settleResources() {
+    window.clearTimeout(this.#resourceTimer)
+    if (!this.#latestDocument || !this.#latestAssets || this.#destroyed) return
+    await this.sync(this.#latestDocument, this.#latestAssets)
+  }
+
+  async #syncObject(
+    object: EditorObject,
+    asset: EditorRenderAsset,
+    variant: EditorRenderAsset['variants'][number],
+  ) {
     let node = this.#nodes.get(object.id)
     if (
       !node ||
       node.assetID !== object.asset_id ||
       node.variantURL !== variant.url
     ) {
-      if (node) this.#removeNode(object.id, node)
-      const texture = await this.#retainTexture(
+      const resource = await this.#textures.retain(
         variant.url,
-        variant.width,
-        variant.height,
+        variant.width * variant.height * 4,
+        () => this.#loadTexture(variant.url),
       )
+      if (this.#destroyed) {
+        this.#textures.release(variant.url)
+        return
+      }
+      if (node) this.#removeNode(object.id, node)
+      const texture = resource.texture
       const container = new Container()
       const sprite = new Sprite(texture)
       sprite.width = asset.width
@@ -199,39 +262,7 @@ export class PixiEditorRenderer implements EditorRenderer {
     node.mask = mask
   }
 
-  #requiredPixels(object: EditorObject, asset: EditorRenderAsset) {
-    const scaleX = Math.hypot(object.transform[0], object.transform[1])
-    const scaleY = Math.hypot(object.transform[2], object.transform[3])
-    const viewportScale = (this.#viewport.zoom / 100) * this.#resolution
-    return Math.ceil(
-      Math.max(asset.width * scaleX, asset.height * scaleY) * viewportScale,
-    )
-  }
-
-  async #retainTexture(url: string, width: number, height: number) {
-    const existing = this.#textures.get(url)
-    if (existing) {
-      existing.refs += 1
-      return existing.texture
-    }
-    const pending = this.#pendingTextures.get(url)
-    if (pending) {
-      const record = await pending
-      record.refs += 1
-      return record.texture
-    }
-    const task = this.#loadTexture(url, width, height)
-    this.#pendingTextures.set(url, task)
-    try {
-      const record = await task
-      this.#textures.set(url, record)
-      return record.texture
-    } finally {
-      this.#pendingTextures.delete(url)
-    }
-  }
-
-  async #loadTexture(url: string, width: number, height: number) {
+  async #loadTexture(url: string) {
     const response = await fetch(url, {
       credentials: 'same-origin',
       cache: 'force-cache',
@@ -252,8 +283,6 @@ export class PixiEditorRenderer implements EditorRenderer {
         label: url,
       }),
       bitmap,
-      refs: 1,
-      bytes: width * height * 4,
     }
   }
 
@@ -261,13 +290,19 @@ export class PixiEditorRenderer implements EditorRenderer {
     this.#nodes.delete(id)
     node.container.removeFromParent()
     node.container.destroy({ children: true })
-    const record = this.#textures.get(node.variantURL)
-    if (!record) return
-    record.refs -= 1
-    if (record.refs > 0) return
-    record.texture.destroy(true)
-    record.bitmap.close()
-    this.#textures.delete(node.variantURL)
+    this.#textures.release(node.variantURL)
+  }
+
+  #scheduleResourceReconcile() {
+    window.clearTimeout(this.#resourceTimer)
+    if (!this.#latestDocument || !this.#latestAssets || this.#destroyed) return
+    this.#resourceTimer = window.setTimeout(() => {
+      if (!this.#latestDocument || !this.#latestAssets || this.#destroyed)
+        return
+      void this.sync(this.#latestDocument, this.#latestAssets).catch(
+        this.#onError,
+      )
+    }, this.#resolutionUpgradeDelayMs)
   }
 
   #assertReady() {

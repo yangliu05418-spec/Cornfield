@@ -34,6 +34,11 @@ test('Pixi renderer meets the Stage A correctness and resource gate', async ({
   }
   expect(result.pixelMeanAbsoluteError).toBeLessThan(1)
   expect(result.pixelMismatchRatio).toBeLessThan(0.01)
+  expect(result.resolutionTransitionBytes).toEqual([
+    640 * 640 * 4,
+    2048 * 2048 * 4,
+    640 * 640 * 4,
+  ])
   expect(result.contextLossSupported).toBe(true)
   expect(result.contextLostObserved).toBe(true)
   expect(result.contextRestoredObserved).toBe(true)
@@ -41,6 +46,9 @@ test('Pixi renderer meets the Stage A correctness and resource gate', async ({
     nodes: 0,
     textures: 0,
     estimatedTextureBytes: 0,
+    activeTextureBytes: 0,
+    textureBudgetBytes: 256 << 20,
+    textureBudgetExceeded: false,
     contextLost: false,
   })
 })
@@ -57,6 +65,7 @@ declare global {
       longTasks: number
       pixelMeanAbsoluteError: number
       pixelMismatchRatio: number
+      resolutionTransitionBytes: number[]
       contextLossSupported: boolean
       contextLostObserved: boolean
       contextRestoredObserved: boolean
@@ -64,12 +73,18 @@ declare global {
         nodes: number
         textures: number
         estimatedTextureBytes: number
+        activeTextureBytes: number
+        textureBudgetBytes: number
+        textureBudgetExceeded: boolean
         contextLost: boolean
       }
       statsAfterDestroy: {
         nodes: number
         textures: number
         estimatedTextureBytes: number
+        activeTextureBytes: number
+        textureBudgetBytes: number
+        textureBudgetExceeded: boolean
         contextLost: boolean
       }
       error?: string

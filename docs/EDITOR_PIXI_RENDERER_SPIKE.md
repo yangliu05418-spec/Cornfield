@@ -16,6 +16,8 @@ The browser fixture exercises the current V1 semantics on a 6000×6000 (36 MP) d
 - bounded six-way decode concurrency;
 - forced WebGL context loss and restoration;
 - explicit node, texture and `ImageBitmap` cleanup;
+- a reference-counted LRU texture cache with a 256 MiB default budget;
+- deterministic asset-level variant planning and 150 ms settled-zoom upgrades;
 - pixel comparison against an independent Canvas2D reference for crop, rotation, flip, opacity and layer order.
 
 The test runs in real Chromium and writes its machine-readable report to `web/output/playwright/editor-renderer-spike-report.json`.
@@ -29,6 +31,7 @@ The test runs in real Chromium and writes its machine-readable report to `web/ou
 | Significant pixel mismatch       |                                  < 1% |
 | Mean absolute channel error      |                                   < 1 |
 | Texture budget at spike zoom     |           <= 50 × 640 × 640 × 4 bytes |
+| Settled zoom variant transition  |      640 → required high-res → 640 |
 | Forced context loss/restore      |                         Both observed |
 | Resources after destroy          | 0 nodes, textures and estimated bytes |
 
@@ -44,6 +47,7 @@ On the development Chromium run that established the gate:
 - 50-layer synchronization: 114.9 ms;
 - render-call p50/p95: 0.3/0.3 ms;
 - estimated texture memory: 81,920,000 bytes;
+- zoom transition active bytes: 1,638,400 → 16,777,216 → 1,638,400;
 - mean absolute pixel error: 0.063;
 - significant pixel mismatch: 0;
 - long tasks after warm-up: 0;
@@ -56,11 +60,11 @@ CI artifacts, rather than these local numbers, are the ongoing source of truth.
 
 This spike does not switch the product route to Pixi and does not claim Photoshop-class coverage. Before becoming the default renderer, the next increment must add:
 
-1. debounced resolution upgrades after zoom settles and a bounded LRU texture budget;
-2. a scene compiler for the V2 node tree, groups, masks and blend modes;
-3. a shared browser/Pixi/pure-Go golden fixture and tolerances;
-4. overlay hit testing, selection handles and tool integration;
-5. explicit safe recovery UI for unsupported WebGL and restoration failure;
-6. low/medium/high device profiles and repeated open/close memory tests.
+1. a scene compiler for the V2 node tree, groups, masks and blend modes;
+2. a shared browser/Pixi/pure-Go golden fixture and tolerances;
+3. overlay hit testing, selection handles and tool integration;
+4. explicit safe recovery UI for unsupported WebGL and restoration failure;
+5. low/medium/high device profiles and repeated open/close memory tests;
+6. tile-pyramid loading before raising the current 36 MP production boundary.
 
 The spike is kept as a permanent CI regression test so dependency or browser upgrades cannot silently change transform semantics or resource behavior.

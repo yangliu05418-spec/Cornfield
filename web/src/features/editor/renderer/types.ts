@@ -23,6 +23,9 @@ export type EditorRendererStats = {
   nodes: number
   textures: number
   estimatedTextureBytes: number
+  activeTextureBytes: number
+  textureBudgetBytes: number
+  textureBudgetExceeded: boolean
   contextLost: boolean
 }
 
@@ -30,8 +33,11 @@ export type EditorRendererOptions = {
   width: number
   height: number
   resolution?: number
+  textureBudgetBytes?: number
+  resolutionUpgradeDelayMs?: number
   preserveDrawingBuffer?: boolean
   onContextChange?: (lost: boolean) => void
+  onError?: (error: unknown) => void
 }
 
 export interface EditorRenderer {
@@ -46,6 +52,7 @@ export interface EditorRenderer {
   setViewport: (viewport: EditorViewport) => void
   render: () => void
   stats: () => EditorRendererStats
+  settleResources: () => Promise<void>
   destroy: () => void
 }
 

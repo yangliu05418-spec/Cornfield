@@ -1,9 +1,14 @@
 import {
   Application,
+  ColorMatrixFilter,
   Container,
+  DarkenBlend,
+  extensions,
   Graphics,
   ImageSource,
+  LightenBlend,
   Matrix,
+  OverlayBlend,
   Sprite,
   Texture,
 } from 'pixi.js'
@@ -11,6 +16,7 @@ import {
 import { ReferenceCountedResourceCache } from '../resources/resource-cache'
 import { planEditorSceneAssetVariants } from '../resources/variant-plan'
 import { compileEditorRenderScene } from './scene-compiler'
+import { compileEditorColorMatrixV1 } from './color-effects'
 import type {
   EditorRenderDocument,
   EditorSceneRasterNode,
@@ -29,12 +35,15 @@ type SceneNode = {
   mask?: Graphics
   assetID: string
   variantURL: string
+  colorFilter?: ColorMatrixFilter
 }
 
 type TextureResource = {
   texture: Texture
   bitmap: ImageBitmap
 }
+
+extensions.add(DarkenBlend, LightenBlend, OverlayBlend)
 
 export class PixiEditorRenderer implements EditorRenderer {
   #app?: Application
@@ -260,10 +269,27 @@ export class PixiEditorRenderer implements EditorRenderer {
     }
     node.container.setFromMatrix(new Matrix(...object.transform))
     node.container.alpha = object.role === 'mask' ? 1 : object.opacity
+    node.container.blendMode =
+      object.role === 'mask' ? 'normal' : object.blendMode
     node.sprite.alpha = 1
     node.container.visible = object.visible
     node.container.zIndex = object.order
     this.#syncCrop(node, object, asset)
+    this.#syncEffects(node, object)
+  }
+
+  #syncEffects(node: SceneNode, object: EditorSceneRasterNode) {
+    const effects = object.effects.filter((effect) => effect.enabled)
+    if (effects.length === 0) {
+      node.sprite.filters = null
+      node.colorFilter?.destroy()
+      node.colorFilter = undefined
+      return
+    }
+    const filter = node.colorFilter ?? new ColorMatrixFilter()
+    filter.matrix = compileEditorColorMatrixV1(effects)
+    node.colorFilter = filter
+    node.sprite.filters = [filter]
   }
 
   #syncCrop(
@@ -333,6 +359,8 @@ export class PixiEditorRenderer implements EditorRenderer {
 
   #removeNode(id: string, node: SceneNode) {
     this.#nodes.delete(id)
+    node.colorFilter?.destroy()
+    node.colorFilter = undefined
     node.container.removeFromParent()
     node.container.destroy({ children: true })
     this.#textures.release(node.variantURL)

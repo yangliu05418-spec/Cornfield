@@ -37,6 +37,14 @@ import {
   ungroupEditorNode,
 } from './domain/authoring-v2'
 import type { EditorDocumentV2, EditorNodeV2 } from './domain/document-v2'
+import {
+  editorBlendModesV2,
+  editorEffectDefinitionsV2,
+  editorLayerSupportsEffects,
+  setEditorLayerBlendMode,
+  setEditorLayerEffectEnabled,
+  setEditorLayerEffectValue,
+} from './domain/layer-effects-v2'
 import { EditorHistoryV2 } from './domain/history-v2'
 import {
   buildVisibleEditorLayerRows,
@@ -865,6 +873,95 @@ export function StructuredEditor({
                     }
                   />
                 </label>
+                {editorLayerSupportsEffects(document, activeNode.id) && (
+                  <>
+                    <label>
+                      混合模式
+                      <select
+                        value={activeNode.blend_mode}
+                        disabled={operations.running}
+                        onChange={(event) =>
+                          applyDocument(
+                            setEditorLayerBlendMode(
+                              documentRef.current,
+                              activeNode.id,
+                              event.target.value as EditorNodeV2['blend_mode'],
+                            ),
+                          )
+                        }
+                      >
+                        {editorBlendModesV2.map((mode) => (
+                          <option key={mode.value} value={mode.value}>
+                            {mode.label}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    <div className="structured-effects" aria-label="非破坏调整">
+                      <div className="structured-effects-heading">
+                        <span>调整</span>
+                        <small>非破坏</small>
+                      </div>
+                      {editorEffectDefinitionsV2.map((definition) => {
+                        const effect = activeNode.effects?.find(
+                          (candidate) => candidate.type === definition.type,
+                        )
+                        const value =
+                          effect?.parameters[definition.parameter] ??
+                          definition.defaultValue
+                        return (
+                          <label
+                            className="structured-effect-row"
+                            key={definition.type}
+                          >
+                            <span>
+                              <input
+                                type="checkbox"
+                                aria-label={`启用${definition.label}`}
+                                checked={effect?.enabled ?? false}
+                                disabled={operations.running}
+                                onChange={(event) =>
+                                  applyDocument(
+                                    setEditorLayerEffectEnabled(
+                                      documentRef.current,
+                                      activeNode.id,
+                                      definition.type,
+                                      event.target.checked,
+                                    ),
+                                  )
+                                }
+                              />
+                              {definition.label}
+                            </span>
+                            <output>{definition.format(value)}</output>
+                            <input
+                              type="range"
+                              aria-label={definition.label}
+                              min={definition.minimum}
+                              max={definition.maximum}
+                              step={definition.step}
+                              value={value}
+                              disabled={operations.running || !effect?.enabled}
+                              onChange={(event) =>
+                                applyDocument(
+                                  setEditorLayerEffectValue(
+                                    documentRef.current,
+                                    activeNode.id,
+                                    definition.type,
+                                    Number(event.target.value),
+                                  ),
+                                  {
+                                    mergeKey: `effect:${activeNode.id}:${definition.type}`,
+                                  },
+                                )
+                              }
+                            />
+                          </label>
+                        )
+                      })}
+                    </div>
+                  </>
+                )}
                 <div className="structured-order-controls">
                   <button
                     type="button"

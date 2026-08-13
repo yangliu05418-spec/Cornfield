@@ -3,7 +3,11 @@ import type {
   EditorDocumentV1,
   EditorTransform,
 } from '../domain/document'
-import type { EditorDocumentV2, EditorNodeV2 } from '../domain/document-v2'
+import type {
+  EditorDocumentV2,
+  EditorEffectV2,
+  EditorNodeV2,
+} from '../domain/document-v2'
 import { validateEditorDocumentV2 } from '../domain/document-v2'
 
 export type EditorRenderDocument = EditorDocumentV1 | EditorDocumentV2
@@ -18,6 +22,8 @@ export type EditorSceneRasterNode = {
   crop?: EditorCrop
   role: 'content' | 'mask'
   maskNodeID?: string
+  blendMode: EditorNodeV2['blend_mode']
+  effects: EditorEffectV2[]
 }
 
 export type EditorRenderScene = {
@@ -53,6 +59,8 @@ function compileV1(document: EditorDocumentV1): EditorRenderScene {
         order,
         crop: object.crop ? { ...object.crop } : undefined,
         role: 'content',
+        blendMode: 'normal',
+        effects: [],
       })),
   }
 }
@@ -61,13 +69,9 @@ function compileV2(document: EditorDocumentV2): EditorRenderScene {
   if (validateEditorDocumentV2(document).length > 0)
     throw new TypeError('Invalid editor document V2')
   for (const node of document.nodes) {
-    if (node.blend_mode !== 'normal')
+    if (node.type === 'group' && node.blend_mode !== 'normal')
       throw new UnsupportedEditorRenderSemanticsError(
-        `Blend mode ${node.blend_mode} is not renderable yet`,
-      )
-    if ((node.effects ?? []).some((effect) => effect.enabled))
-      throw new UnsupportedEditorRenderSemanticsError(
-        'Enabled effects are not renderable yet',
+        `Group blend mode ${node.blend_mode} is not renderable yet`,
       )
     if (node.type === 'group' && node.mask_id !== undefined)
       throw new UnsupportedEditorRenderSemanticsError(
@@ -89,7 +93,12 @@ function compileV2(document: EditorDocumentV2): EditorRenderScene {
   )
   for (const maskID of maskIDs) {
     const mask = byID.get(maskID)!
-    if (mask.mask_id !== undefined || mask.crop !== undefined)
+    if (
+      mask.mask_id !== undefined ||
+      mask.crop !== undefined ||
+      mask.blend_mode !== 'normal' ||
+      (mask.effects ?? []).some((effect) => effect.enabled)
+    )
       throw new UnsupportedEditorRenderSemanticsError(
         'Chained or cropped masks are not renderable yet',
       )
@@ -121,6 +130,11 @@ function compileV2(document: EditorDocumentV2): EditorRenderScene {
         crop: node.crop ? { ...node.crop } : undefined,
         role: maskIDs.has(node.id) ? 'mask' : 'content',
         maskNodeID: node.mask_id,
+        blendMode: node.blend_mode,
+        effects: (node.effects ?? []).map((effect) => ({
+          ...effect,
+          parameters: { ...effect.parameters },
+        })),
       })
       order += 1
     }

@@ -27,6 +27,8 @@ type RenderNode struct {
 	Crop       *Crop
 	Role       string
 	MaskNodeID *string
+	BlendMode  string
+	Effects    []EffectV2
 }
 
 func DecodeRenderScene(raw []byte) (RenderScene, error) {
@@ -65,7 +67,7 @@ func CompileV1RenderScene(document Document) (RenderScene, error) {
 		nodes[index] = RenderNode{
 			ID: object.ID, AssetID: object.AssetID, Transform: object.Transform,
 			Opacity: object.Opacity, Visible: object.Visible, Order: index,
-			Crop: cloneCrop(object.Crop), Role: RenderRoleContent,
+			Crop: cloneCrop(object.Crop), Role: RenderRoleContent, BlendMode: "normal",
 		}
 	}
 	return RenderScene{Canvas: document.Canvas, Nodes: nodes}, nil
@@ -79,7 +81,7 @@ func CompileV2RenderScene(document DocumentV2) (RenderScene, error) {
 	children := make(map[string][]NodeV2, len(document.Nodes))
 	maskIDs := make(map[string]struct{})
 	for _, node := range document.Nodes {
-		if node.BlendMode != "normal" || hasEnabledEffects(node.Effects) {
+		if node.Type == "group" && node.BlendMode != "normal" {
 			return RenderScene{}, ErrUnsupportedDocumentSemantics
 		}
 		if node.Type == "group" && node.MaskID != nil {
@@ -101,7 +103,7 @@ func CompileV2RenderScene(document DocumentV2) (RenderScene, error) {
 	}
 	for maskID := range maskIDs {
 		mask := byID[maskID]
-		if mask.MaskID != nil || mask.Crop != nil {
+		if mask.MaskID != nil || mask.Crop != nil || mask.BlendMode != "normal" || hasEnabledEffects(mask.Effects) {
 			return RenderScene{}, ErrUnsupportedDocumentSemantics
 		}
 	}
@@ -125,6 +127,7 @@ func CompileV2RenderScene(document DocumentV2) (RenderScene, error) {
 				ID: node.ID, AssetID: *node.AssetID, Transform: transform,
 				Opacity: opacity, Visible: visible, Order: len(nodes),
 				Crop: cloneCrop(node.Crop), Role: role, MaskNodeID: cloneString(node.MaskID),
+				BlendMode: node.BlendMode, Effects: cloneEffects(node.Effects),
 			})
 		}
 	}
@@ -150,7 +153,7 @@ func (s RenderScene) Validate() error {
 	nodesByID := make(map[string]RenderNode, len(s.Nodes))
 	for index, node := range s.Nodes {
 		if !validNodeID(node.ID) || node.AssetID == uuid.Nil || !validTransform(node.Transform) ||
-			!validOpacity(node.Opacity) || node.Order != index || !validCrop(node.Crop) ||
+			!validOpacity(node.Opacity) || node.Order != index || !validCrop(node.Crop) || !validBlendMode(node.BlendMode) || !validEffects(node.Effects) ||
 			(node.Role != RenderRoleContent && node.Role != RenderRoleMask) {
 			return ErrInvalidDocument
 		}
@@ -204,4 +207,19 @@ func cloneString(value *string) *string {
 	}
 	copy := *value
 	return &copy
+}
+
+func cloneEffects(value []EffectV2) []EffectV2 {
+	if len(value) == 0 {
+		return nil
+	}
+	result := make([]EffectV2, len(value))
+	for index, effect := range value {
+		result[index] = effect
+		result[index].Parameters = make(map[string]float64, len(effect.Parameters))
+		for key, parameter := range effect.Parameters {
+			result[index].Parameters[key] = parameter
+		}
+	}
+	return result
 }

@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"image"
 	"image/color"
-	stddraw "image/draw"
 	"image/jpeg"
 	"image/png"
 	"io"
@@ -479,18 +478,23 @@ func compositeEditorScene(ctx context.Context, scene studioEditor.RenderScene, l
 		if crop.Empty() {
 			continue
 		}
-		if node.MaskNodeID == nil {
+		if node.MaskNodeID == nil && node.BlendMode == "normal" && !hasEnabledEditorEffects(node.Effects) {
 			drawEditorNode(canvas, node, source, crop)
 		} else {
-			maskNode, exists := nodesByID[*node.MaskNodeID]
-			if !exists || !maskNode.Visible || maskNode.Opacity == 0 {
-				continue
+			var maskNode *studioEditor.RenderNode
+			var maskSource image.Image
+			if node.MaskNodeID != nil {
+				value, exists := nodesByID[*node.MaskNodeID]
+				if !exists || !value.Visible || value.Opacity == 0 {
+					continue
+				}
+				maskNode = &value
+				maskSource, err = load(value.AssetID)
+				if err != nil {
+					return nil, err
+				}
 			}
-			maskSource, loadErr := load(maskNode.AssetID)
-			if loadErr != nil {
-				return nil, loadErr
-			}
-			if renderErr := drawMaskedEditorNode(canvas, canvasBounds, node, source, crop, maskNode, maskSource); renderErr != nil {
+			if renderErr := drawProcessedEditorNode(ctx, canvas, canvasBounds, node, source, crop, maskNode, maskSource); renderErr != nil {
 				return nil, renderErr
 			}
 			maskSource = nil
@@ -512,27 +516,124 @@ func drawEditorNode(destination *image.RGBA, node studioEditor.RenderNode, sourc
 	draw.BiLinear.Transform(destination, matrix, source, sourceBounds, draw.Over, options)
 }
 
-func drawMaskedEditorNode(destination *image.RGBA, canvasBounds image.Rectangle, node studioEditor.RenderNode, source image.Image, sourceBounds image.Rectangle, maskNode studioEditor.RenderNode, maskSource image.Image) error {
+func drawProcessedEditorNode(ctx context.Context, destination *image.RGBA, canvasBounds image.Rectangle, node studioEditor.RenderNode, source image.Image, sourceBounds image.Rectangle, maskNode *studioEditor.RenderNode, maskSource image.Image) error {
 	bounds := transformedBounds(node.Transform, sourceBounds).Intersect(canvasBounds)
 	if bounds.Empty() {
 		return nil
 	}
-	layer := image.NewRGBA(image.Rect(0, 0, bounds.Dx(), bounds.Dy()))
-	draw.BiLinear.Transform(layer, affineMatrix(node.Transform, bounds.Min.X, bounds.Min.Y), source, sourceBounds, draw.Src, nil)
-	mask := image.NewAlpha(layer.Bounds())
-	draw.BiLinear.Transform(mask, affineMatrix(maskNode.Transform, bounds.Min.X, bounds.Min.Y), maskSource, maskSource.Bounds(), draw.Src, nil)
-	opacity := node.Opacity * maskNode.Opacity
-	for y := 0; y < layer.Bounds().Dy(); y++ {
-		for x := 0; x < layer.Bounds().Dx(); x++ {
-			pixelOffset := layer.PixOffset(x, y)
-			maskAlpha := float64(mask.AlphaAt(x, y).A) / 255 * opacity
-			for channel := 0; channel < 4; channel++ {
-				layer.Pix[pixelOffset+channel] = uint8(math.Round(float64(layer.Pix[pixelOffset+channel]) * maskAlpha))
+	matrix := studioEditor.CompileColorMatrixV1(node.Effects)
+	const tileSize = 512
+	for top := bounds.Min.Y; top < bounds.Max.Y; top += tileSize {
+		for left := bounds.Min.X; left < bounds.Max.X; left += tileSize {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			tileBounds := image.Rect(left, top, min(left+tileSize, bounds.Max.X), min(top+tileSize, bounds.Max.Y))
+			layer := image.NewRGBA(image.Rect(0, 0, tileBounds.Dx(), tileBounds.Dy()))
+			draw.BiLinear.Transform(layer, affineMatrix(node.Transform, tileBounds.Min.X, tileBounds.Min.Y), source, sourceBounds, draw.Src, nil)
+			var mask *image.Alpha
+			opacity := node.Opacity
+			if maskNode != nil {
+				mask = image.NewAlpha(layer.Bounds())
+				draw.BiLinear.Transform(mask, affineMatrix(maskNode.Transform, tileBounds.Min.X, tileBounds.Min.Y), maskSource, maskSource.Bounds(), draw.Src, nil)
+				opacity *= maskNode.Opacity
+			}
+			applyEditorLayerEffects(layer, mask, opacity, matrix)
+			if err := compositeEditorLayer(ctx, destination, tileBounds, layer, node.BlendMode); err != nil {
+				return err
 			}
 		}
 	}
-	stddraw.Draw(destination, bounds, layer, image.Point{}, stddraw.Over)
 	return nil
+}
+
+func applyEditorLayerEffects(layer *image.RGBA, mask *image.Alpha, opacity float64, matrix studioEditor.ColorMatrixV1) {
+	for y := 0; y < layer.Bounds().Dy(); y++ {
+		for x := 0; x < layer.Bounds().Dx(); x++ {
+			pixelOffset := layer.PixOffset(x, y)
+			sourceAlpha := float64(layer.Pix[pixelOffset+3]) / 255
+			if sourceAlpha == 0 {
+				continue
+			}
+			red := float64(layer.Pix[pixelOffset]) / 255 / sourceAlpha
+			green := float64(layer.Pix[pixelOffset+1]) / 255 / sourceAlpha
+			blue := float64(layer.Pix[pixelOffset+2]) / 255 / sourceAlpha
+			red, green, blue, sourceAlpha = studioEditor.ApplyColorMatrixV1(matrix, red, green, blue, sourceAlpha)
+			if mask != nil {
+				sourceAlpha *= float64(mask.AlphaAt(x, y).A) / 255
+			}
+			sourceAlpha *= opacity
+			layer.Pix[pixelOffset] = channelByte(red * sourceAlpha)
+			layer.Pix[pixelOffset+1] = channelByte(green * sourceAlpha)
+			layer.Pix[pixelOffset+2] = channelByte(blue * sourceAlpha)
+			layer.Pix[pixelOffset+3] = channelByte(sourceAlpha)
+		}
+	}
+}
+
+func compositeEditorLayer(ctx context.Context, destination *image.RGBA, bounds image.Rectangle, source *image.RGBA, blendMode string) error {
+	for y := 0; y < bounds.Dy(); y++ {
+		if y%64 == 0 {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+		}
+		for x := 0; x < bounds.Dx(); x++ {
+			sourceOffset := source.PixOffset(x, y)
+			sourceAlpha := float64(source.Pix[sourceOffset+3]) / 255
+			if sourceAlpha == 0 {
+				continue
+			}
+			destinationOffset := destination.PixOffset(bounds.Min.X+x, bounds.Min.Y+y)
+			destinationAlpha := float64(destination.Pix[destinationOffset+3]) / 255
+			outputAlpha := sourceAlpha + destinationAlpha*(1-sourceAlpha)
+			for channel := 0; channel < 3; channel++ {
+				sourceColor := float64(source.Pix[sourceOffset+channel]) / 255 / sourceAlpha
+				destinationColor := 0.0
+				if destinationAlpha > 0 {
+					destinationColor = float64(destination.Pix[destinationOffset+channel]) / 255 / destinationAlpha
+				}
+				blended := blendEditorChannel(blendMode, destinationColor, sourceColor)
+				premultiplied := sourceAlpha*(1-destinationAlpha)*sourceColor + sourceAlpha*destinationAlpha*blended + destinationAlpha*(1-sourceAlpha)*destinationColor
+				destination.Pix[destinationOffset+channel] = channelByte(premultiplied)
+			}
+			destination.Pix[destinationOffset+3] = channelByte(outputAlpha)
+		}
+	}
+	return nil
+}
+
+func blendEditorChannel(mode string, backdrop, source float64) float64 {
+	switch mode {
+	case "multiply":
+		return backdrop * source
+	case "screen":
+		return backdrop + source - backdrop*source
+	case "overlay":
+		if backdrop < .5 {
+			return 2 * backdrop * source
+		}
+		return 1 - 2*(1-backdrop)*(1-source)
+	case "darken":
+		return math.Min(backdrop, source)
+	case "lighten":
+		return math.Max(backdrop, source)
+	default:
+		return source
+	}
+}
+
+func hasEnabledEditorEffects(effects []studioEditor.EffectV2) bool {
+	for _, effect := range effects {
+		if effect.Enabled {
+			return true
+		}
+	}
+	return false
+}
+
+func channelByte(value float64) uint8 {
+	return uint8(math.Round(math.Max(0, math.Min(1, value)) * 255))
 }
 
 func affineMatrix(transform [6]float64, offsetX, offsetY int) f64.Aff3 {

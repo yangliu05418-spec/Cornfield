@@ -232,8 +232,8 @@ func TestCompositeEditorSceneAppliesIndependentAlphaMask(t *testing.T) {
 	scene := studioEditor.RenderScene{
 		Canvas: studioEditor.Canvas{Width: 8, Height: 8},
 		Nodes: []studioEditor.RenderNode{
-			{ID: maskNodeID, AssetID: maskID, Transform: [6]float64{1, 0, 0, 1, 1, 1}, Opacity: .5, Visible: true, Order: 0, Role: studioEditor.RenderRoleMask},
-			{ID: "content", AssetID: contentID, Transform: [6]float64{1, 0, 0, 1, 1, 1}, Opacity: 1, Visible: true, Order: 1, Role: studioEditor.RenderRoleContent, MaskNodeID: &maskNodeID},
+			{ID: maskNodeID, AssetID: maskID, Transform: [6]float64{1, 0, 0, 1, 1, 1}, Opacity: .5, Visible: true, Order: 0, Role: studioEditor.RenderRoleMask, BlendMode: "normal"},
+			{ID: "content", AssetID: contentID, Transform: [6]float64{1, 0, 0, 1, 1, 1}, Opacity: 1, Visible: true, Order: 1, Role: studioEditor.RenderRoleContent, MaskNodeID: &maskNodeID, BlendMode: "normal"},
 		},
 	}
 	canvas, err := compositeEditorScene(context.Background(), scene, func(id uuid.UUID) (image.Image, error) {
@@ -259,8 +259,8 @@ func TestCompositeEditorSceneDoesNotRevealContentWhenMaskIsMissingOrHidden(t *te
 	base := studioEditor.RenderScene{
 		Canvas: studioEditor.Canvas{Width: 4, Height: 4},
 		Nodes: []studioEditor.RenderNode{
-			{ID: maskNodeID, AssetID: maskAssetID, Transform: [6]float64{1, 0, 0, 1, 0, 0}, Opacity: 1, Visible: false, Order: 0, Role: studioEditor.RenderRoleMask},
-			{ID: "content", AssetID: contentID, Transform: [6]float64{1, 0, 0, 1, 0, 0}, Opacity: 1, Visible: true, Order: 1, Role: studioEditor.RenderRoleContent, MaskNodeID: &maskNodeID},
+			{ID: maskNodeID, AssetID: maskAssetID, Transform: [6]float64{1, 0, 0, 1, 0, 0}, Opacity: 1, Visible: false, Order: 0, Role: studioEditor.RenderRoleMask, BlendMode: "normal"},
+			{ID: "content", AssetID: contentID, Transform: [6]float64{1, 0, 0, 1, 0, 0}, Opacity: 1, Visible: true, Order: 1, Role: studioEditor.RenderRoleContent, MaskNodeID: &maskNodeID, BlendMode: "normal"},
 		},
 	}
 	for _, test := range []struct {
@@ -287,6 +287,69 @@ func TestCompositeEditorSceneDoesNotRevealContentWhenMaskIsMissingOrHidden(t *te
 				t.Fatalf("content leaked through hidden mask: %#v", canvas.At(1, 1))
 			}
 		})
+	}
+}
+
+func TestCompositeEditorSceneAppliesEffectsBeforeBlend(t *testing.T) {
+	backgroundID, foregroundID := uuid.New(), uuid.New()
+	scene := studioEditor.RenderScene{
+		Canvas: studioEditor.Canvas{Width: 1, Height: 1},
+		Nodes: []studioEditor.RenderNode{
+			{ID: "background", AssetID: backgroundID, Transform: [6]float64{1, 0, 0, 1, 0, 0}, Opacity: 1, Visible: true, Order: 0, Role: studioEditor.RenderRoleContent, BlendMode: "normal"},
+			{ID: "foreground", AssetID: foregroundID, Transform: [6]float64{1, 0, 0, 1, 0, 0}, Opacity: .5, Visible: true, Order: 1, Role: studioEditor.RenderRoleContent, BlendMode: "multiply", Effects: []studioEditor.EffectV2{{Type: "exposure", Version: 1, Enabled: true, Parameters: map[string]float64{"stops": 1}}}},
+		},
+	}
+	canvas, err := compositeEditorScene(context.Background(), scene, func(id uuid.UUID) (image.Image, error) {
+		if id == backgroundID {
+			return solidNRGBA(1, 1, color.NRGBA{R: 128, G: 128, B: 128, A: 255}), nil
+		}
+		return solidNRGBA(1, 1, color.NRGBA{R: 64, G: 32, B: 16, A: 255}), nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := color.NRGBAModel.Convert(canvas.At(0, 0)).(color.NRGBA)
+	// Exposure doubles the foreground to (128,64,32), multiply yields
+	// approximately (64,32,16), then 50% opacity mixes with the backdrop.
+	if got.R < 94 || got.R > 98 || got.G < 78 || got.G > 82 || got.B < 70 || got.B > 74 || got.A != 255 {
+		t.Fatalf("pixel = %#v", got)
+	}
+}
+
+func TestBlendEditorChannelModes(t *testing.T) {
+	tests := map[string]float64{
+		"normal": .25, "multiply": .1875, "screen": .8125,
+		"overlay": .625, "darken": .25, "lighten": .75,
+	}
+	for mode, want := range tests {
+		if got := blendEditorChannel(mode, .75, .25); math.Abs(got-want) > .000001 {
+			t.Fatalf("%s = %f, want %f", mode, got, want)
+		}
+	}
+}
+
+func TestCompositeEditorSceneTilesProcessedLayersWithoutSeams(t *testing.T) {
+	assetID := uuid.New()
+	scene := studioEditor.RenderScene{
+		Canvas: studioEditor.Canvas{Width: 520, Height: 2},
+		Nodes: []studioEditor.RenderNode{{
+			ID: "content", AssetID: assetID,
+			Transform: [6]float64{1, 0, 0, 1, 0, 0}, Opacity: 1,
+			Visible: true, Order: 0, Role: studioEditor.RenderRoleContent,
+			BlendMode: "screen", Effects: []studioEditor.EffectV2{{Type: "exposure", Version: 1, Enabled: true, Parameters: map[string]float64{"stops": 1}}},
+		}},
+	}
+	canvas, err := compositeEditorScene(context.Background(), scene, func(uuid.UUID) (image.Image, error) {
+		return solidNRGBA(520, 2, color.NRGBA{R: 64, G: 32, B: 16, A: 255}), nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, x := range []int{510, 511, 512, 513} {
+		got := color.NRGBAModel.Convert(canvas.At(x, 0)).(color.NRGBA)
+		if got.R < 127 || got.R > 129 || got.G < 63 || got.G > 65 || got.B < 31 || got.B > 33 || got.A != 255 {
+			t.Fatalf("pixel %d = %#v", x, got)
+		}
 	}
 }
 

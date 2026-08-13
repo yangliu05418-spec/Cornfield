@@ -23,6 +23,7 @@ const (
 	defaultThumbnailScanLimit   = 2000
 	defaultThumbnailRepairLimit = 25
 	maxMaintainedOriginalBytes  = 50 << 20
+	maxMaintainedPackageBytes   = 512 << 20
 	// PutImmutable refreshes the original file timestamp before recording a
 	// deduplicated database reference. Expiry deletion must honor that lease so
 	// it cannot remove content between the filesystem commit and DB commit.
@@ -206,7 +207,7 @@ func inspectContentDirectory(directory, digest string, cutoff time.Time) (orphan
 		fullPath := filepath.Join(directory, name)
 		byteSize += entryInfo.Size()
 		if isOriginalFilename(name) {
-			if entryInfo.Size() > maxMaintainedOriginalBytes {
+			if entryInfo.Size() > maxMaintainedBytes(name) {
 				return orphanCandidate{}, false, nil
 			}
 			if originalPath != "" {
@@ -424,11 +425,18 @@ func isLowerHex(value string) bool {
 
 func isOriginalFilename(name string) bool {
 	switch name {
-	case "original.jpg", "original.png", "original.webp":
+	case "original.jpg", "original.png", "original.webp", "original.zip":
 		return true
 	default:
 		return false
 	}
+}
+
+func maxMaintainedBytes(name string) int64 {
+	if name == "original.zip" {
+		return maxMaintainedPackageBytes
+	}
+	return maxMaintainedOriginalBytes
 }
 
 func isThumbnailFilename(name string) bool {

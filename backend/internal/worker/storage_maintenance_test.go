@@ -281,3 +281,15 @@ func digestFor(content []byte) string {
 	digest := sha256.Sum256(content)
 	return hex.EncodeToString(digest[:])
 }
+
+func TestLayerPackageIsAValidMaintainedOriginal(t *testing.T) {
+	if !isOriginalFilename("original.zip") {
+		t.Fatal("layer packages must participate in reference and orphan maintenance")
+	}
+	if got := maxMaintainedBytes("original.zip"); got != maxMaintainedPackageBytes {
+		t.Fatalf("package limit = %d, want %d", got, maxMaintainedPackageBytes)
+	}
+	if got := maxMaintainedBytes("original.png"); got != maxMaintainedOriginalBytes {
+		t.Fatalf("image limit = %d, want %d", got, maxMaintainedOriginalBytes)
+	}
+}

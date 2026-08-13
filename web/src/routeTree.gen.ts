@@ -16,6 +16,7 @@ import { Route as AppDirectorRouteImport } from './routes/app.director'
 import { Route as AppCreateRouteImport } from './routes/app.create'
 import { Route as AppChangePasswordRouteImport } from './routes/app.change-password'
 import { Route as AppAssetsRouteImport } from './routes/app.assets'
+import { Route as AppEditorProjectIdRouteImport } from './routes/app.editor.$projectId'
 import { Route as AppDirectorHelpRouteImport } from './routes/app.director.help'
 import { Route as AppDirectorProjectIdRouteImport } from './routes/app.director.$projectId'
 import { Route as AppAdminUsersRouteImport } from './routes/app.admin.users'
@@ -57,6 +58,11 @@ const AppAssetsRoute = AppAssetsRouteImport.update({
   path: '/assets',
   getParentRoute: () => AppRoute,
 } as any)
+const AppEditorProjectIdRoute = AppEditorProjectIdRouteImport.update({
+  id: '/editor/$projectId',
+  path: '/editor/$projectId',
+  getParentRoute: () => AppRoute,
+} as any)
 const AppDirectorHelpRoute = AppDirectorHelpRouteImport.update({
   id: '/help',
   path: '/help',
@@ -96,6 +102,7 @@ export interface FileRoutesByFullPath {
   '/app/admin/users': typeof AppAdminUsersRoute
   '/app/director/$projectId': typeof AppDirectorProjectIdRoute
   '/app/director/help': typeof AppDirectorHelpRoute
+  '/app/editor/$projectId': typeof AppEditorProjectIdRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
@@ -110,6 +117,7 @@ export interface FileRoutesByTo {
   '/app/admin/users': typeof AppAdminUsersRoute
   '/app/director/$projectId': typeof AppDirectorProjectIdRoute
   '/app/director/help': typeof AppDirectorHelpRoute
+  '/app/editor/$projectId': typeof AppEditorProjectIdRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -125,6 +133,7 @@ export interface FileRoutesById {
   '/app/admin/users': typeof AppAdminUsersRoute
   '/app/director/$projectId': typeof AppDirectorProjectIdRoute
   '/app/director/help': typeof AppDirectorHelpRoute
+  '/app/editor/$projectId': typeof AppEditorProjectIdRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -141,6 +150,7 @@ export interface FileRouteTypes {
     | '/app/admin/users'
     | '/app/director/$projectId'
     | '/app/director/help'
+    | '/app/editor/$projectId'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
@@ -155,6 +165,7 @@ export interface FileRouteTypes {
     | '/app/admin/users'
     | '/app/director/$projectId'
     | '/app/director/help'
+    | '/app/editor/$projectId'
   id:
     | '__root__'
     | '/'
@@ -169,6 +180,7 @@ export interface FileRouteTypes {
     | '/app/admin/users'
     | '/app/director/$projectId'
     | '/app/director/help'
+    | '/app/editor/$projectId'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -225,6 +237,13 @@ declare module '@tanstack/react-router' {
       path: '/assets'
       fullPath: '/app/assets'
       preLoaderRoute: typeof AppAssetsRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/app/editor/$projectId': {
+      id: '/app/editor/$projectId'
+      path: '/editor/$projectId'
+      fullPath: '/app/editor/$projectId'
+      preLoaderRoute: typeof AppEditorProjectIdRouteImport
       parentRoute: typeof AppRoute
     }
     '/app/director/help': {
@@ -288,6 +307,7 @@ interface AppRouteChildren {
   AppAdminModelsRoute: typeof AppAdminModelsRoute
   AppAdminProvidersRoute: typeof AppAdminProvidersRoute
   AppAdminUsersRoute: typeof AppAdminUsersRoute
+  AppEditorProjectIdRoute: typeof AppEditorProjectIdRoute
 }
 
 const AppRouteChildren: AppRouteChildren = {
@@ -299,6 +319,7 @@ const AppRouteChildren: AppRouteChildren = {
   AppAdminModelsRoute: AppAdminModelsRoute,
   AppAdminProvidersRoute: AppAdminProvidersRoute,
   AppAdminUsersRoute: AppAdminUsersRoute,
+  AppEditorProjectIdRoute: AppEditorProjectIdRoute,
 }
 
 const AppRouteWithChildren = AppRoute._addFileChildren(AppRouteChildren)

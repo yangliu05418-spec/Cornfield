@@ -89,5 +89,46 @@ func failUnavailableProviderJobsInTx(ctx context.Context, tx pgx.Tx, providerID 
 			return err
 		}
 	}
+	for {
+		type failedOperation struct {
+			id, projectID, ownerID uuid.UUID
+		}
+		rows, err := tx.Query(ctx, `WITH candidates AS (
+			SELECT id FROM asset_operations
+			WHERE provider_id=$1 AND status IN ('queued','dispatched')
+			ORDER BY created_at,id LIMIT $2 FOR UPDATE SKIP LOCKED
+		)
+		UPDATE asset_operations o SET status='failed',dispatch_state='finished',error_code='PROVIDER_UNAVAILABLE',
+			error_message='智能分层服务暂不可用，请稍后重新发起',completed_at=now(),updated_at=now()
+		FROM candidates WHERE o.id=candidates.id RETURNING o.id,o.editor_project_id,o.owner_user_id`, providerID, unavailableProviderJobBatchSize)
+		if err != nil {
+			return err
+		}
+		failed := make([]failedOperation, 0, unavailableProviderJobBatchSize)
+		for rows.Next() {
+			var operation failedOperation
+			if err = rows.Scan(&operation.id, &operation.projectID, &operation.ownerID); err != nil {
+				rows.Close()
+				return err
+			}
+			failed = append(failed, operation)
+		}
+		err = rows.Err()
+		rows.Close()
+		if err != nil {
+			return err
+		}
+		for _, operation := range failed {
+			if _, err = tx.Exec(ctx, `INSERT INTO job_events(owner_user_id,asset_operation_id,editor_project_id,event_type,payload)
+				VALUES($1,$2,$3,'asset_operation.failed',jsonb_build_object('id',$2::uuid,'status','failed','editor_project_id',$3::uuid,
+				'error_code','PROVIDER_UNAVAILABLE','error_message','智能分层服务暂不可用，请稍后重新发起'))`,
+				operation.ownerID, operation.id, operation.projectID); err != nil {
+				return err
+			}
+		}
+		if len(failed) < unavailableProviderJobBatchSize {
+			break
+		}
+	}
 	return nil
 }

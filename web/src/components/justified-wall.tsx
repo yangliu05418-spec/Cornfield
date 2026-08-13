@@ -4,6 +4,7 @@ import {
   Download,
   ImagePlus,
   Maximize2,
+  Pencil,
   RotateCcw,
   Trash2,
   X,
@@ -64,6 +65,7 @@ type JustifiedWallProps = {
   onReference: (asset: Asset) => void
   onCancel: (batchID: string, jobID: string) => void
   onDelete: (asset: Asset) => void
+  onEdit: (asset: Asset) => void
   onDismiss: (batchID: string, jobID: string) => void
   onRetry: (batchID: string, jobID: string) => void
   onNotice?: (message: string) => void
@@ -218,6 +220,7 @@ export const JustifiedWall = forwardRef<
     onReference,
     onCancel,
     onDelete,
+    onEdit,
     onDismiss,
     onRetry,
     onNotice,
@@ -436,6 +439,7 @@ export const JustifiedWall = forwardRef<
                     onReference={onReference}
                     onCancel={onCancel}
                     onDelete={onDelete}
+                    onEdit={onEdit}
                     onDismiss={onDismiss}
                     onRetry={onRetry}
                     onPreview={setPreview}
@@ -463,6 +467,7 @@ export const JustifiedWall = forwardRef<
           onClose={() => setPreview(null)}
           onReference={onReference}
           onDelete={onDelete}
+          onEdit={onEdit}
         />
       )}
     </>
@@ -475,6 +480,7 @@ function WallCard({
   onReference,
   onCancel,
   onDelete,
+  onEdit,
   onDismiss,
   onRetry,
   onPreview,
@@ -485,6 +491,7 @@ function WallCard({
   onReference: (asset: Asset) => void
   onCancel: (batchID: string, jobID: string) => void
   onDelete: (asset: Asset) => void
+  onEdit: (asset: Asset) => void
   onDismiss: (batchID: string, jobID: string) => void
   onRetry: (batchID: string, jobID: string) => void
   onPreview: (asset: Asset) => void
@@ -607,6 +614,13 @@ function WallCard({
         <div>
           <button
             type="button"
+            aria-label="编辑图片"
+            onClick={() => onEdit(asset)}
+          >
+            <Pencil size={14} />
+          </button>
+          <button
+            type="button"
             aria-label="放大"
             onClick={() => onPreview(asset)}
           >
@@ -658,11 +672,13 @@ function PreviewDialog({
   onClose,
   onReference,
   onDelete,
+  onEdit,
 }: {
   asset: Asset
   onClose: () => void
   onReference: (asset: Asset) => void
   onDelete: (asset: Asset) => void
+  onEdit: (asset: Asset) => void
 }) {
   const panelRef = useRef<HTMLDivElement>(null)
   const closeRef = useRef<HTMLButtonElement>(null)
@@ -744,6 +760,16 @@ function PreviewDialog({
           <button type="button" onClick={() => onDelete(asset)}>
             <Trash2 size={15} />
             永久删除
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              onEdit(asset)
+              onClose()
+            }}
+          >
+            <Pencil size={15} />
+            编辑图片
           </button>
         </div>
       </div>

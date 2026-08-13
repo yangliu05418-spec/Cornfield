@@ -88,6 +88,43 @@ type Image struct {
 	MediaType string
 }
 
+type LayerDecompositionRequest struct {
+	Model                  string
+	Image                  string
+	Prompt                 string
+	Size                   string
+	PromptOptimizationMode string
+}
+
+type LayerBoundingBox struct {
+	Absolute   [4]int     `json:"absolute"`
+	Normalized [4]float64 `json:"normalized"`
+}
+
+type LayerDecompositionItem struct {
+	Bytes       []byte            `json:"-"`
+	URL         string            `json:"url"`
+	MediaType   string            `json:"media_type"`
+	Size        string            `json:"size"`
+	ZIndex      int               `json:"z_index"`
+	BoundingBox *LayerBoundingBox `json:"bounding_box,omitempty"`
+	Name        string            `json:"name,omitempty"`
+	Description string            `json:"description,omitempty"`
+}
+
+type LayerDecompositionResult struct {
+	Items     []LayerDecompositionItem `json:"items"`
+	Usage     map[string]any           `json:"usage"`
+	Telemetry Telemetry                `json:"telemetry"`
+}
+
+// LayerDecomposer is intentionally separate from Adapter: layer decomposition
+// has one input, a multi-image URL response, and different timeout/cost
+// semantics from normal image generation.
+type LayerDecomposer interface {
+	DecomposeLayers(context.Context, LayerDecompositionRequest) (LayerDecompositionResult, error)
+}
+
 type CancelResult struct {
 	Accepted  bool
 	Mode      string

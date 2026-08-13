@@ -19,6 +19,9 @@ export type Model = {
     resolutions: string[]
     qualities?: string[]
     prompt_optimization_modes?: ('standard' | 'fast')[]
+    layer_decomposition?: boolean
+    layer_decomposition_sizes?: ('auto' | '1K' | '1.5K' | '2K')[]
+    max_decomposition_layers?: number
     midjourney_versions?: string[]
     max_reference_images: number
     max_reference_bytes: number
@@ -33,7 +36,7 @@ export type Model = {
 
 export type Asset = {
   id: string
-  kind: 'upload' | 'generation'
+  kind: 'upload' | 'generation' | 'derived' | 'editor'
   media_type: string
   original_filename?: string
   width: number
@@ -51,6 +54,74 @@ export type Asset = {
   created_at: string
   folder_id?: string
   archived_at?: string
+}
+
+export type EditorObject = {
+  id: string
+  asset_id: string
+  transform: [number, number, number, number, number, number]
+  opacity: number
+  visible: boolean
+  locked: boolean
+  z_index: number
+  crop?: { x: number; y: number; width: number; height: number }
+}
+
+export type EditorDocument = {
+  schema_version: 1
+  canvas: { width: number; height: number }
+  objects: EditorObject[]
+}
+
+export type EditorProject = {
+  id: string
+  source_asset_id: string
+  name: string
+  document: EditorDocument
+  revision: number
+  active_layer_set_id?: string
+  active_layer_set?: LayerSet
+  latest_operation_id?: string
+  created_at: string
+  updated_at: string
+}
+
+export type LayerSetItem = {
+  id: string
+  z_index: number
+  name: string
+  description?: string
+  bounding_box_absolute: [number, number, number, number]
+  bounding_box_normalized: [number, number, number, number]
+  asset: Asset
+}
+
+export type LayerSet = {
+  id: string
+  source_revision: number
+  base_asset: Asset
+  items: LayerSetItem[]
+  package_ready: boolean
+  applied_to_project: boolean
+}
+
+export type AssetOperation = {
+  id: string
+  editor_project_id: string
+  operation_type: 'layer_decomposition' | 'editor_publish' | 'layer_package'
+  status: string
+  source_revision: number
+  resolution?: string
+  prompt_optimization_mode?: string
+  error_code?: string
+  error_message?: string
+  message?: string
+  submission_uncertain: boolean
+  result_asset_id?: string
+  layer_set?: LayerSet
+  started_at?: string
+  created_at: string
+  updated_at: string
 }
 
 export type AssetFolder = {

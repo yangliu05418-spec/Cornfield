@@ -265,18 +265,23 @@ func (s *Server) adminModels(w http.ResponseWriter, _ *http.Request) {
 func (s *Server) providers(w http.ResponseWriter, r *http.Request) {
 	rows, err := s.db.Query(r.Context(), `SELECT p.id,p.display_name,p.enabled,p.state,p.breaker_open_until,p.last_probe_at,
 		p.last_probe_state,p.last_probe_error_code,p.last_error_code,p.last_error_at,
-		(SELECT count(*) FROM generation_jobs j
+		((SELECT count(*) FROM generation_jobs j
 		 JOIN generation_batches b ON b.id=j.batch_id
 		 JOIN model_capability_versions v ON v.model_id=b.model_id AND v.revision=b.capability_revision
 		 WHERE v.config->>'provider'=p.id
-			   AND (j.status IN ('dispatched','submitting','provider_pending','ingesting','cancelling') OR j.upstream_active_until>now())) active_jobs,
+			   AND (j.status IN ('dispatched','submitting','provider_pending','ingesting','cancelling') OR j.upstream_active_until>now()))+
+		 (SELECT count(*) FROM asset_operations o WHERE o.provider_id=p.id
+			   AND o.status NOT IN ('succeeded','failed','cancelled','submission_uncertain'))) active_jobs,
 		COALESCE(stats.terminal_successes,0),COALESCE(stats.availability_failures,0)
 		FROM providers p
 		LEFT JOIN LATERAL (
 			SELECT
-				count(*) FILTER (WHERE j.status='succeeded') terminal_successes,
+				count(*) FILTER (WHERE j.status='succeeded')+
+					(SELECT count(*) FROM asset_operations o WHERE o.provider_id=p.id AND o.status='succeeded' AND o.updated_at>=now()-interval '1 hour') terminal_successes,
 				count(*) FILTER (WHERE j.status='failed' AND (
 					j.error_code='PROVIDER_HTTP_429' OR j.error_code='LEGNEXT_TASK_FAILED' OR j.error_code ~ '^PROVIDER_HTTP_5[0-9][0-9]$'
+				))+(SELECT count(*) FROM asset_operations o WHERE o.provider_id=p.id AND o.status='failed' AND o.updated_at>=now()-interval '1 hour' AND (
+					o.error_code='PROVIDER_HTTP_429' OR o.error_code ~ '^PROVIDER_HTTP_5[0-9][0-9]$'
 				)) availability_failures
 			FROM generation_jobs j
 			JOIN generation_batches b ON b.id=j.batch_id

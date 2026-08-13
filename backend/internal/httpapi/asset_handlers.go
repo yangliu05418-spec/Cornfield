@@ -259,7 +259,7 @@ func (s *Server) listAssets(w http.ResponseWriter, r *http.Request) {
 		LEFT JOIN generation_outputs o ON o.asset_id=a.id
 		LEFT JOIN generation_jobs j ON j.id=o.job_id
 		LEFT JOIN generation_batches b ON b.id=j.batch_id
-		WHERE a.owner_user_id=$1 AND a.purged_at IS NULL AND a.purge_pending=false
+		WHERE a.owner_user_id=$1 AND a.purged_at IS NULL AND a.purge_pending=false AND a.kind<>'derived'
 		  AND ($2::timestamptz IS NULL OR (a.created_at,a.id)<($2,$3::uuid))
 		  AND ($4='all' OR ($4='active' AND a.archived_at IS NULL) OR ($4='archived' AND a.archived_at IS NOT NULL))
 		  AND ($5::uuid IS NULL OR a.folder_id=$5)
@@ -381,7 +381,8 @@ func (s *Server) loadAsset(r *http.Request, id uuid.UUID) (assetResponse, string
 	var createdAt time.Time
 	err := s.db.QueryRow(r.Context(), `SELECT a.id,a.kind,a.media_type,a.original_filename,a.width,a.height,a.byte_size,a.sha256,a.blur_data_url,a.storage_key,a.created_at,o.job_id,o.output_index,j.batch_id,a.folder_id,a.archived_at
 		FROM assets a LEFT JOIN generation_outputs o ON o.asset_id=a.id LEFT JOIN generation_jobs j ON j.id=o.job_id
-		WHERE a.id=$1 AND a.purged_at IS NULL AND a.purge_pending=false AND (a.owner_user_id=$2 OR $3='admin')`, id, sess.UserID, sess.Role).Scan(&item.ID, &item.Kind, &item.MediaType, &item.OriginalFilename, &item.Width, &item.Height, &item.ByteSize, &item.SHA256, &item.BlurDataURL, &key, &createdAt, &item.JobID, &item.OutputIndex, &item.BatchID, &item.FolderID, &item.ArchivedAt)
+		WHERE a.id=$1 AND a.purged_at IS NULL AND a.purge_pending=false
+		  AND (a.owner_user_id=$2 OR ($3='admin' AND a.kind<>'derived'))`, id, sess.UserID, sess.Role).Scan(&item.ID, &item.Kind, &item.MediaType, &item.OriginalFilename, &item.Width, &item.Height, &item.ByteSize, &item.SHA256, &item.BlurDataURL, &key, &createdAt, &item.JobID, &item.OutputIndex, &item.BatchID, &item.FolderID, &item.ArchivedAt)
 	item.CreatedAt = createdAt.Format(time.RFC3339Nano)
 	item.setURLs()
 	return item, key, err

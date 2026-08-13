@@ -46,7 +46,8 @@ func main() {
 		logger.Error("model config has no enabled submit timeout")
 		os.Exit(1)
 	}
-	riverJobTimeout := maxSubmitTimeout + 30*time.Second
+	maxOperationTimeout := catalog.MaxOperationTimeout()
+	riverJobTimeout := maxOperationTimeout + 30*time.Second
 	providerLimits, err := catalog.ProviderConcurrency()
 	if err != nil {
 		logger.Error("provider concurrency invalid", "error", err)
@@ -77,16 +78,21 @@ func main() {
 	defer db.Close()
 
 	adapters := map[string]provider.Adapter{}
+	decomposers := map[string]provider.LayerDecomposer{}
 	if cfg.ProviderMode == "mock" {
-		adapters["legnext"] = provider.Mock{}
-		adapters["openrouter"] = provider.Mock{}
-		adapters["bfl"] = provider.Mock{}
-		adapters["byteplus"] = provider.Mock{}
+		mock := provider.Mock{}
+		adapters["legnext"] = mock
+		adapters["openrouter"] = mock
+		adapters["bfl"] = mock
+		adapters["byteplus"] = mock
+		decomposers["byteplus"] = mock
 	} else {
 		adapters["legnext"] = provider.NewLegnext(cfg.LegnextAPIKey)
 		adapters["openrouter"] = provider.NewOpenRouterWithSubmitTimeout(cfg.OpenRouterAPIKey, cfg.PublicURL, maxSubmitTimeout)
 		adapters["bfl"] = provider.NewBFL(cfg.BFLAPIKey)
-		adapters["byteplus"] = provider.NewBytePlusWithSubmitTimeout(cfg.BytePlusAPIKey, maxSubmitTimeout)
+		bytePlus := provider.NewBytePlusWithSubmitTimeout(cfg.BytePlusAPIKey, maxSubmitTimeout)
+		adapters["byteplus"] = bytePlus
+		decomposers["byteplus"] = bytePlus
 	}
 	downloadClient := safehttp.NewDownloadClient(90 * time.Second)
 	generateWorker := &studioWorker.GenerateWorker{
@@ -97,8 +103,14 @@ func main() {
 	}
 	workers := river.NewWorkers()
 	river.AddWorker(workers, generateWorker)
+	operationWorker := &studioWorker.AssetOperationWorker{
+		DB: db, Config: cfg, Catalog: catalog, Blobs: store, Decomposers: decomposers, ProviderSem: providerSem,
+		RenderSem: make(chan struct{}, 1), HTTPClient: downloadClient, Generator: generateWorker, Log: logger,
+	}
+	river.AddWorker(workers, operationWorker)
+	go operationWorker.RunSubmissionRecovery(ctx)
 	riverClient, err := river.NewClient(riverpgxv5.New(db), &river.Config{
-		Queues: map[string]river.QueueConfig{"generation": {MaxWorkers: 6}}, Workers: workers,
+		Queues: map[string]river.QueueConfig{"generation": {MaxWorkers: 6}, "asset_operations": {MaxWorkers: 2}}, Workers: workers,
 		JobTimeout: riverJobTimeout,
 		// REINDEX requires object ownership and is an operational migration task,
 		// not a privilege the runtime Worker should inherit from studio_owner.
@@ -131,7 +143,7 @@ func main() {
 		os.Exit(1)
 	}
 	go (&studioWorker.Heartbeat{DB: db, Log: logger, ServiceName: studioWorker.WorkerServiceName, InstanceID: instanceID}).Run(ctx)
-	logger.Info("worker started", "provider_mode", cfg.ProviderMode, "river_job_timeout", riverJobTimeout, "max_submit_timeout", maxSubmitTimeout)
+	logger.Info("worker started", "provider_mode", cfg.ProviderMode, "river_job_timeout", riverJobTimeout, "max_submit_timeout", maxSubmitTimeout, "max_operation_timeout", maxOperationTimeout)
 	<-ctx.Done()
 	stopCtx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 	defer cancel()

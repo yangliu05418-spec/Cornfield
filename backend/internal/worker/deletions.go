@@ -134,13 +134,18 @@ func (p *DeletionProcessor) claim(ctx context.Context) (deletionRequest, bool, e
 }
 
 func (p *DeletionProcessor) deleteAsset(ctx context.Context, assetID uuid.UUID) error {
-	var key, digest string
+	var key, digest, kind string
 	var purged *time.Time
-	if err := p.DB.QueryRow(ctx, `SELECT storage_key,sha256,purged_at FROM assets WHERE id=$1`, assetID).Scan(&key, &digest, &purged); err != nil {
+	if err := p.DB.QueryRow(ctx, `SELECT storage_key,sha256,kind,purged_at FROM assets WHERE id=$1`, assetID).Scan(&key, &digest, &kind, &purged); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil
 		}
 		return err
+	}
+	if kind != "derived" {
+		if err := p.detachEditorProjects(ctx, assetID); err != nil {
+			return err
+		}
 	}
 	lease := p.Blobs.AcquireContentLease()
 	defer lease.Release()
@@ -156,12 +161,69 @@ func (p *DeletionProcessor) deleteAsset(ctx context.Context, assetID uuid.UUID) 
 	return err
 }
 
+func (p *DeletionProcessor) detachEditorProjects(ctx context.Context, sourceAssetID uuid.UUID) error {
+	tx, err := p.DB.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	var active int
+	if err = tx.QueryRow(ctx, `SELECT count(*) FROM asset_operations o JOIN image_editor_projects p ON p.id=o.editor_project_id
+		WHERE p.source_asset_id=$1 AND o.status NOT IN ('succeeded','failed','cancelled','submission_uncertain')`, sourceAssetID).Scan(&active); err != nil {
+		return err
+	}
+	if active > 0 {
+		return errAssetInUse
+	}
+	rows, err := tx.Query(ctx, `SELECT DISTINCT asset_id FROM (
+		SELECT o.snapshot_asset_id AS asset_id FROM asset_operations o JOIN image_editor_projects p ON p.id=o.editor_project_id WHERE p.source_asset_id=$1
+		UNION ALL SELECT s.base_asset_id FROM layer_sets s JOIN image_editor_projects p ON p.id=s.editor_project_id WHERE p.source_asset_id=$1
+		UNION ALL SELECT s.package_asset_id FROM layer_sets s JOIN image_editor_projects p ON p.id=s.editor_project_id WHERE p.source_asset_id=$1
+		UNION ALL SELECT i.asset_id FROM layer_set_items i JOIN layer_sets s ON s.id=i.layer_set_id JOIN image_editor_projects p ON p.id=s.editor_project_id WHERE p.source_asset_id=$1
+	) refs WHERE asset_id IS NOT NULL`, sourceAssetID)
+	if err != nil {
+		return err
+	}
+	derived := make([]uuid.UUID, 0)
+	for rows.Next() {
+		var id uuid.UUID
+		if err = rows.Scan(&id); err != nil {
+			rows.Close()
+			return err
+		}
+		derived = append(derived, id)
+	}
+	if err = rows.Err(); err != nil {
+		rows.Close()
+		return err
+	}
+	rows.Close()
+	var ownerID uuid.UUID
+	if err = tx.QueryRow(ctx, `SELECT owner_user_id FROM assets WHERE id=$1`, sourceAssetID).Scan(&ownerID); err != nil {
+		return err
+	}
+	for _, id := range derived {
+		if _, err = tx.Exec(ctx, `UPDATE assets SET purge_pending=true WHERE id=$1 AND kind='derived' AND purged_at IS NULL`, id); err != nil {
+			return err
+		}
+		if _, err = tx.Exec(ctx, `INSERT INTO deletion_requests(kind,owner_user_id,asset_id,requested_by)
+			SELECT 'asset',$2,$1,$2 WHERE NOT EXISTS(SELECT 1 FROM deletion_requests WHERE asset_id=$1 AND status IN ('pending','running'))`, id, ownerID); err != nil {
+			return err
+		}
+	}
+	if _, err = tx.Exec(ctx, `DELETE FROM image_editor_projects WHERE source_asset_id=$1`, sourceAssetID); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
 var errUserDeletionWaiting = errors.New("user deletion is waiting for active generations")
 
 func (p *DeletionProcessor) deleteUser(ctx context.Context, userID uuid.UUID) error {
 	var active int
-	if err := p.DB.QueryRow(ctx, `SELECT count(*) FROM generation_jobs WHERE owner_user_id=$1
-		AND (status NOT IN ('succeeded','failed','cancelled') OR upstream_active_until>now())`, userID).Scan(&active); err != nil {
+	if err := p.DB.QueryRow(ctx, `SELECT
+		(SELECT count(*) FROM generation_jobs WHERE owner_user_id=$1 AND (status NOT IN ('succeeded','failed','cancelled') OR upstream_active_until>now()))+
+		(SELECT count(*) FROM asset_operations WHERE owner_user_id=$1 AND status NOT IN ('succeeded','failed','cancelled','submission_uncertain'))`, userID).Scan(&active); err != nil {
 		return err
 	}
 	if active > 0 {
@@ -218,6 +280,13 @@ func (p *DeletionProcessor) deleteUser(ctx context.Context, userID uuid.UUID) er
 	if active > 0 {
 		return errUserDeletionWaiting
 	}
+	if err = tx.QueryRow(ctx, `SELECT count(*) FROM asset_operations WHERE owner_user_id=$1
+		AND status NOT IN ('succeeded','failed','cancelled','submission_uncertain')`, userID).Scan(&active); err != nil {
+		return err
+	}
+	if active > 0 {
+		return errUserDeletionWaiting
+	}
 	var unpurged bool
 	if err = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM assets WHERE owner_user_id=$1 AND purged_at IS NULL)`, userID).Scan(&unpurged); err != nil {
 		return err
@@ -226,6 +295,7 @@ func (p *DeletionProcessor) deleteUser(ctx context.Context, userID uuid.UUID) er
 		return errors.New("user assets are not fully purged")
 	}
 	for _, statement := range []string{
+		`DELETE FROM image_editor_projects WHERE owner_user_id=$1`,
 		`DELETE FROM director_projects WHERE owner_user_id=$1`,
 		`DELETE FROM upload_sessions WHERE owner_user_id=$1`,
 		`DELETE FROM generation_batches WHERE owner_user_id=$1`,

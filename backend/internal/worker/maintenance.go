@@ -100,7 +100,7 @@ func (m *Maintenance) cleanup(ctx context.Context) {
 	}
 	rows, err := m.DB.Query(ctx, `WITH candidates AS (
 		SELECT a.id FROM assets a
-		WHERE a.expires_at<=now() AND a.purged_at IS NULL
+		WHERE a.expires_at<=now() AND a.purged_at IS NULL AND a.kind<>'derived'
 		  AND NOT EXISTS (
 			SELECT 1 FROM generation_input_assets input
 			JOIN generation_jobs job ON job.batch_id=input.batch_id
@@ -111,20 +111,19 @@ func (m *Maintenance) cleanup(ctx context.Context) {
 		ORDER BY a.expires_at,a.id LIMIT 500 FOR UPDATE SKIP LOCKED
 	)
 	UPDATE assets a SET purge_pending=true FROM candidates c WHERE a.id=c.id
-	RETURNING a.id,a.storage_key,a.sha256`)
+	RETURNING a.id,a.owner_user_id`)
 	if err != nil {
 		m.Log.Warn("asset expiry scan failed", "error", err)
 		return
 	}
 	type expired struct {
-		id     uuid.UUID
-		key    string
-		digest string
+		id      uuid.UUID
+		ownerID uuid.UUID
 	}
 	items := make([]expired, 0)
 	for rows.Next() {
 		var item expired
-		if err := rows.Scan(&item.id, &item.key, &item.digest); err != nil {
+		if err := rows.Scan(&item.id, &item.ownerID); err != nil {
 			rows.Close()
 			m.Log.Warn("asset expiry result scan failed", "error", err)
 			return
@@ -138,15 +137,10 @@ func (m *Maintenance) cleanup(ctx context.Context) {
 	}
 	rows.Close()
 	for _, item := range items {
-		if m.Blobs == nil {
-			m.Log.Error("asset expiry skipped because content lease manager is unavailable", "asset_id", item.id)
-			continue
-		}
-		lease := m.Blobs.AcquireContentLease()
-		purgeErr := m.purgeExpiredAsset(ctx, item.id, item.key, item.digest)
-		lease.Release()
-		if purgeErr != nil {
-			m.Log.Warn("expired asset purge failed", "asset_id", item.id, "error", purgeErr)
+		_, queueErr := m.DB.Exec(ctx, `INSERT INTO deletion_requests(kind,owner_user_id,asset_id,requested_by)
+			SELECT 'asset',$2,$1,$2 WHERE NOT EXISTS(SELECT 1 FROM deletion_requests WHERE asset_id=$1 AND status IN ('pending','running'))`, item.id, item.ownerID)
+		if queueErr != nil {
+			m.Log.Warn("expired asset deletion queue failed", "asset_id", item.id, "error", queueErr)
 		}
 	}
 	retentionStatements := []struct {
@@ -182,11 +176,7 @@ func (m *Maintenance) cleanup(ctx context.Context) {
 	)
 }
 
-var errAssetInUse = errors.New("asset is still used by an active generation")
-
-func (m *Maintenance) purgeExpiredAsset(ctx context.Context, assetID uuid.UUID, storageKey, digest string) error {
-	return m.purgeAsset(ctx, assetID, storageKey, digest, true)
-}
+var errAssetInUse = errors.New("asset is still used by an active task")
 
 func (m *Maintenance) purgeAsset(ctx context.Context, assetID uuid.UUID, storageKey, digest string, resetIfBusy bool) error {
 	tx, err := m.DB.Begin(ctx)
@@ -223,6 +213,9 @@ func (m *Maintenance) purgeAsset(ctx context.Context, assetID uuid.UUID, storage
 	if err = tx.QueryRow(ctx, `SELECT EXISTS(
 		SELECT 1 FROM assets WHERE sha256=$1 AND id<>$2 AND purged_at IS NULL
 		UNION ALL SELECT 1 FROM generation_staged_outputs WHERE sha256=$1
+		UNION ALL SELECT 1 FROM asset_operations o
+			CROSS JOIN LATERAL jsonb_array_elements(COALESCE(o.staged_manifest->'items','[]'::jsonb)) item
+			WHERE item->>'sha256'=$1 AND o.status NOT IN ('succeeded','failed','cancelled','submission_uncertain')
 	)`, digest, assetID).Scan(&contentReferenced); err != nil {
 		return err
 	}
@@ -327,13 +320,19 @@ func (m *Maintenance) storageDigestReferenced(ctx context.Context, digest string
 	err := m.DB.QueryRow(ctx, `SELECT EXISTS(
 		SELECT 1 FROM assets WHERE sha256=$1 AND purged_at IS NULL
 		UNION ALL SELECT 1 FROM generation_staged_outputs WHERE sha256=$1
+		UNION ALL SELECT 1 FROM asset_operations o
+			CROSS JOIN LATERAL jsonb_array_elements(COALESCE(o.staged_manifest->'items','[]'::jsonb)) item
+			WHERE item->>'sha256'=$1 AND o.status NOT IN ('succeeded','failed','cancelled','submission_uncertain')
 	)`, digest).Scan(&referenced)
 	return referenced, err
 }
 
 func (m *Maintenance) loadStorageReferences(ctx context.Context) (map[string]storageReference, error) {
 	rows, err := m.DB.Query(ctx, `SELECT storage_key,sha256,true FROM assets WHERE purged_at IS NULL
-		UNION ALL SELECT storage_key,sha256,false FROM generation_staged_outputs`)
+		UNION ALL SELECT storage_key,sha256,false FROM generation_staged_outputs
+		UNION ALL SELECT item->>'storage_key',item->>'sha256',false FROM asset_operations o
+			CROSS JOIN LATERAL jsonb_array_elements(COALESCE(o.staged_manifest->'items','[]'::jsonb)) item
+			WHERE item->>'storage_key'<>'' AND item->>'sha256'<>'' AND o.status NOT IN ('succeeded','failed','cancelled','submission_uncertain')`)
 	if err != nil {
 		return nil, err
 	}

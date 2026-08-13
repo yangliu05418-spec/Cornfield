@@ -560,6 +560,31 @@ test('asset workspace creates folders, moves assets, and archives without deleti
   ).toBeVisible()
 })
 
+test('image editor restores a source project and autosaves keyboard edits', async ({
+  page,
+}) => {
+  const backend = await installStudioMocks(page)
+  await page.goto('/app/create')
+
+  const card = page.getByRole('article', { name: '打开生成图片预览' }).first()
+  await card.hover()
+  await card.getByRole('button', { name: '编辑图片' }).click()
+  await expect(page).toHaveURL(/\/app\/editor\/editor-project-1$/)
+  await expect(page.locator('.app-nav')).toHaveCount(0)
+
+  const canvas = page.getByRole('region', { name: '图片编辑画布' })
+  await canvas.focus()
+  await page.keyboard.press('ArrowRight')
+  await expect.poll(() => backend.editorState().revision).toBe(1)
+  expect(backend.editorState().document.objects[0].transform[4]).toBe(1)
+
+  await page.reload()
+  await expect(page.getByRole('textbox', { name: '工程名称' })).toHaveValue(
+    'Asset 0',
+  )
+  await expect(page.getByText('已保存')).toBeVisible()
+})
+
 test.describe('mobile studio', () => {
   test.use({ viewport: { width: 390, height: 844 }, hasTouch: true })
 
@@ -641,6 +666,22 @@ async function installStudioMocks(
   let postAttempts = 0
   let refineAttempts = 0
   const postKeys: string[] = []
+  let editorRevision = 0
+  let editorDocument = {
+    schema_version: 1 as const,
+    canvas: { width: 1024, height: 1024 },
+    objects: [
+      {
+        id: 'source',
+        asset_id: 'asset-0',
+        transform: [1, 0, 0, 1, 0, 0],
+        opacity: 1,
+        visible: true,
+        locked: false,
+        z_index: 0,
+      },
+    ],
+  }
 
   await page.route('**/mock-image.svg*', (route) =>
     route.fulfill({
@@ -745,6 +786,69 @@ async function installStudioMocks(
         return inView && (!folderID || organized.folder_id === folderID)
       })
       return json(route, { items: visible, next_cursor: '' })
+    }
+    const assetMatch = pathname.match(/^\/api\/v1\/assets\/([^/]+)$/)
+    if (assetMatch && request.method() === 'GET') {
+      const asset = assets.find((item) => item.id === assetMatch[1])
+      return asset
+        ? json(route, asset)
+        : json(route, { error: { code: 'ASSET_NOT_FOUND' } }, 404)
+    }
+    if (
+      pathname === '/api/v1/assets/asset-0/editor-project' &&
+      request.method() === 'POST'
+    ) {
+      return json(
+        route,
+        {
+          id: 'editor-project-1',
+          source_asset_id: 'asset-0',
+          name: 'Asset 0',
+          document: editorDocument,
+          revision: editorRevision,
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        },
+        201,
+      )
+    }
+    if (
+      pathname === '/api/v1/editor-projects/editor-project-1' &&
+      request.method() === 'GET'
+    ) {
+      return json(route, {
+        id: 'editor-project-1',
+        source_asset_id: 'asset-0',
+        name: 'Asset 0',
+        document: editorDocument,
+        revision: editorRevision,
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      })
+    }
+    if (
+      pathname === '/api/v1/editor-projects/editor-project-1/document' &&
+      request.method() === 'PUT'
+    ) {
+      const input = request.postDataJSON() as {
+        expected_revision: number
+        document: typeof editorDocument
+      }
+      if (input.expected_revision !== editorRevision)
+        return json(
+          route,
+          { error: { code: 'EDITOR_PROJECT_CONFLICT', message: 'conflict' } },
+          409,
+        )
+      editorDocument = input.document
+      editorRevision++
+      return json(route, { revision: editorRevision })
+    }
+    if (
+      pathname === '/api/v1/editor-projects/editor-project-1' &&
+      request.method() === 'PATCH'
+    ) {
+      return route.fulfill({ status: 204 })
     }
     if (pathname === '/api/v1/asset-folders' && request.method() === 'GET') {
       return json(route, { items: folders })
@@ -875,6 +979,7 @@ async function installStudioMocks(
     postAttempts: () => postAttempts,
     postKeys: () => [...postKeys],
     refineAttempts: () => refineAttempts,
+    editorState: () => ({ revision: editorRevision, document: editorDocument }),
   }
 }
 

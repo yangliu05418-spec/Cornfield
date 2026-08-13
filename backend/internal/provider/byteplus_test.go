@@ -180,3 +180,67 @@ func TestBytePlusProbeUsesMissingPromptAndCaches(t *testing.T) {
 		t.Fatalf("cached probe = %+v, calls=%d", health, calls.Load())
 	}
 }
+
+func TestBytePlusLayerDecompositionUsesOfficialContract(t *testing.T) {
+	var received map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&received); err != nil {
+			t.Fatal(err)
+		}
+		w.Header().Set("X-Request-Id", "layer-request-1")
+		_, _ = w.Write([]byte(`{
+			"data":[
+				{"url":"https://ark-doc.tos-ap-southeast-1.bytepluses.com/base.png","size":"2048x2048","output_format":"png","z_index":0},
+				{"url":"https://ark-doc.tos-ap-southeast-1.bytepluses.com/layer.png","size":"600x800","output_format":"png","z_index":1,
+				 "bounding_box":{"absolute":[100,200,700,1000],"normalized":[49,98,342,488]},"name":"subject","description":"foreground subject"}
+			],
+			"usage":{"input_images":1,"generated_images":2}
+		}`))
+	}))
+	defer server.Close()
+
+	adapter := NewBytePlus("test-key")
+	adapter.BaseURL, adapter.LayerClient = server.URL, server.Client()
+	result, err := adapter.DecomposeLayers(context.Background(), LayerDecompositionRequest{
+		Model: bytePlusProbeModel, Image: "data:image/png;base64,cG5n", Size: "1.5K", PromptOptimizationMode: "fast",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Items) != 2 || result.Items[0].ZIndex != 0 || result.Items[1].BoundingBox == nil || result.Items[1].Name != "subject" {
+		t.Fatalf("unexpected result: %#v", result)
+	}
+	if received["layer_decomposition"] != true || received["response_format"] != "url" || received["output_format"] != "png" || received["watermark"] != false || received["size"] != "1.5K" {
+		t.Fatalf("unexpected layer request: %#v", received)
+	}
+	if received["image"] != "data:image/png;base64,cG5n" {
+		t.Fatalf("unexpected image: %#v", received["image"])
+	}
+	if received["optimize_prompt_options"].(map[string]any)["mode"] != "fast" {
+		t.Fatalf("unexpected prompt optimization: %#v", received)
+	}
+	for _, forbidden := range []string{"stream", "sequential_image_generation", "sequential_image_generation_options", "tools"} {
+		if _, exists := received[forbidden]; exists {
+			t.Fatalf("forbidden field %q was sent", forbidden)
+		}
+	}
+}
+
+func TestBytePlusLayerDecompositionRejectsInvalidMetadata(t *testing.T) {
+	tests := []string{
+		`{"data":[{"url":"https://example.test/base.png","z_index":0},{"url":"https://example.test/layer.png","z_index":1,"name":"layer","bounding_box":{"absolute":[10,10,5,20],"normalized":[10,10,20,30]}}]}`,
+		`{"data":[{"url":"https://example.test/base.png","z_index":0},{"url":"https://example.test/layer.png","z_index":1,"name":"layer","bounding_box":{"absolute":[10,10,20,30],"normalized":[10,10,1001,30]}}]}`,
+		`{"data":[{"url":"https://example.test/base.png","z_index":0},{"url":"https://example.test/layer.png","z_index":0,"name":"layer","bounding_box":{"absolute":[10,10,20,30],"normalized":[10,10,20,30]}}]}`,
+	}
+	for _, body := range tests {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte(body)) }))
+		adapter := NewBytePlus("test-key")
+		adapter.BaseURL, adapter.LayerClient = server.URL, server.Client()
+		_, err := adapter.DecomposeLayers(context.Background(), LayerDecompositionRequest{Model: bytePlusProbeModel, Image: "data:image/png;base64,cG5n"})
+		server.Close()
+		providerErr, ok := err.(*Error)
+		if !ok || providerErr.Code != "PROVIDER_RESPONSE_INVALID" {
+			t.Fatalf("error = %#v", err)
+		}
+	}
+}

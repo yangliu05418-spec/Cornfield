@@ -20,7 +20,13 @@ import type { ReactNode } from 'react'
 
 import { api, authExpiredEvent, getMe } from '#/lib/api'
 
-export function AppShell({ children }: { children: ReactNode }) {
+export function AppShell({
+  children,
+  immersive = false,
+}: {
+  children: ReactNode
+  immersive?: boolean
+}) {
   const navigate = useNavigate()
   const location = useLocation()
   const queryClient = useQueryClient()
@@ -64,6 +70,7 @@ export function AppShell({ children }: { children: ReactNode }) {
     return <Navigate to="/app/change-password" replace />
   if (location.pathname.startsWith('/app/admin') && user.role !== 'admin')
     return <Navigate to="/app/create" replace />
+  if (immersive) return <div className="app-frame immersive">{children}</div>
   return (
     <div className="app-frame">
       <header className="app-nav">

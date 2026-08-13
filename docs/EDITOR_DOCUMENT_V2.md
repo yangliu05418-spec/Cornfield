@@ -4,16 +4,17 @@ Cornfield V2 is a renderer-independent document protocol for the professional im
 
 ## Compatibility boundary
 
-| Capability | Save | Current preview/export |
-|---|---:|---:|
-| Flat raster nodes | Yes | Yes, losslessly compiled to V1 |
-| Stable sibling order keys | Yes | Yes |
-| Groups | Yes | Not yet |
-| Masks | Yes | Not yet |
-| Blend modes beyond `normal` | Yes | Not yet |
-| Versioned effects | Yes | Not yet |
+| Capability                      | Save |         Current preview/export |
+| ------------------------------- | ---: | -----------------------------: |
+| Flat raster nodes               |  Yes | Yes, losslessly compiled to V1 |
+| Stable sibling order keys       |  Yes |                            Yes |
+| Groups                          |  Yes |   Pixi preview; export not yet |
+| Raster alpha masks              |  Yes |   Pixi preview; export not yet |
+| Group, chained or cropped masks |  Yes |                        Not yet |
+| Blend modes beyond `normal`     |  Yes |                        Not yet |
+| Versioned effects               |  Yes |                        Not yet |
 
-Unsupported rendering semantics return `EDITOR_DOCUMENT_SEMANTICS_UNSUPPORTED`. They are never silently flattened or baked into a misleading result.
+Unsupported publishing semantics return `EDITOR_DOCUMENT_SEMANTICS_UNSUPPORTED`. The Pixi scene compiler independently supports nested group transforms, inherited visibility/opacity and one raster alpha mask per raster content node. Unsupported group, chained or cropped masks, blend modes and enabled effects are rejected before presentation; they are never silently flattened or baked into a misleading result.
 
 ## Limits
 
@@ -36,4 +37,4 @@ The Go and TypeScript implementations share `testdata/editor/v1-flat.json` and `
 - Workers repeat the renderability check as a durable safety boundary.
 - Single and bulk asset deletion detect references in both V1 `objects` and V2 `nodes`.
 
-This protocol is the persistence foundation for the Pixi scene compiler. Switching the live editor to V2 is a separate, reversible release step.
+The renderer-neutral scene compiler traverses sibling `order_key` values deterministically, accumulates CSS-compatible affine transforms and group state, and reserves mask nodes from ordinary content drawing. The current V2 path remains test-only until the editor store and server export compiler adopt the same scene contract. Switching the live editor to V2 is a separate, reversible release step.

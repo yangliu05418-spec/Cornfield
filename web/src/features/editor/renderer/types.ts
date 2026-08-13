@@ -1,4 +1,4 @@
-import type { EditorDocument } from '../domain/document'
+import type { EditorRenderDocument } from './scene-compiler'
 
 export type EditorViewport = {
   zoom: number
@@ -46,7 +46,7 @@ export interface EditorRenderer {
     options: EditorRendererOptions,
   ) => Promise<void>
   sync: (
-    document: EditorDocument,
+    document: EditorRenderDocument,
     assets: ReadonlyMap<string, EditorRenderAsset>,
   ) => Promise<void>
   resize: (width: number, height: number) => void

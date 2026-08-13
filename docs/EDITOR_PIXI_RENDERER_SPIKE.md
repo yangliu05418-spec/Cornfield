@@ -19,6 +19,7 @@ The browser fixture exercises the current V1 semantics on a 6000×6000 (36 MP) d
 - a reference-counted LRU texture cache with a 256 MiB default budget;
 - deterministic asset-level variant planning and 150 ms settled-zoom upgrades;
 - pixel comparison against an independent Canvas2D reference for crop, rotation, flip, opacity and layer order.
+- a second V2 pixel golden covering nested group transforms, inherited opacity and an independently transformed raster alpha mask.
 
 The test runs in real Chromium and writes its machine-readable report to `web/output/playwright/editor-renderer-spike-report.json`.
 

@@ -874,6 +874,93 @@ test('image editor crops a rotated layer with explicit apply and cancel', async 
   expect(backend.editorState().document.objects[0].crop?.width).toBeLessThan(1)
 })
 
+test('image editor aligns and distributes multiple layers as one undoable edit', async ({
+  page,
+}) => {
+  const backend = await installStudioMocks(page)
+  await page.goto('/app/editor/editor-project-1')
+  const canvas = page.getByRole('region', { name: '图片编辑画布' })
+  await expect(canvas).toBeVisible()
+
+  await canvas.focus()
+  await page.keyboard.press('Control+d')
+  await expect.poll(() => backend.editorState().document.objects.length).toBe(2)
+  await page.keyboard.press('Control+d')
+  await expect.poll(() => backend.editorState().document.objects.length).toBe(3)
+
+  const setCenterX = async (layerName: string, value: number) => {
+    await page
+      .getByRole('button', { name: `选择图层 ${layerName}`, exact: true })
+      .click()
+    const input = page.locator('.editor-geometry-grid input').nth(0)
+    await input.fill(String(value))
+    await input.blur()
+    await expect
+      .poll(() => {
+        const object = backend
+          .editorState()
+          .document.objects.find((item) => item.name === layerName)!
+        return (
+          object.transform[0] * 512 +
+          object.transform[2] * 512 +
+          object.transform[4]
+        )
+      })
+      .toBeCloseTo(value, 4)
+  }
+  const centers = () =>
+    backend
+      .editorState()
+      .document.objects.map(
+        (object) =>
+          object.transform[0] * 512 +
+          object.transform[2] * 512 +
+          object.transform[4],
+      )
+      .sort((a, b) => a - b)
+
+  await setCenterX('源图', 100)
+  await setCenterX('源图 副本', 240)
+  await setCenterX('源图 副本 副本', 900)
+  await canvas.focus()
+  await page.keyboard.press('Control+a')
+  await expect(page.getByText('已选 3')).toBeVisible()
+
+  await page.getByRole('button', { name: '水平等距分布所选图层' }).click()
+  await expect.poll(centers).toEqual([100, 500, 900])
+  await canvas.focus()
+  await page.keyboard.press('Control+z')
+  await expect.poll(centers).toEqual([100, 240, 900])
+
+  await page.getByRole('button', { name: '左对齐所选图层' }).click()
+  await expect
+    .poll(() => {
+      const lefts = backend
+        .editorState()
+        .document.objects.map((object) => object.transform[4])
+      return Math.max(...lefts) - Math.min(...lefts)
+    })
+    .toBeLessThan(1e-4)
+  await canvas.focus()
+  await page.keyboard.press('Control+z')
+  await expect.poll(centers).toEqual([100, 240, 900])
+
+  await page.getByRole('button', { name: '选择图层 源图', exact: true }).click()
+  await page.getByRole('button', { name: '锁定图层 源图', exact: true }).click()
+  const lockedTransform = structuredClone(
+    backend.editorState().document.objects[0].transform,
+  )
+  await canvas.focus()
+  await page.keyboard.press('Control+a')
+  await page.getByRole('button', { name: '右对齐所选图层' }).click()
+  await expect
+    .poll(() => backend.editorState().document.objects[1].transform[4])
+    .toBeCloseTo(lockedTransform[4], 4)
+  expect(backend.editorState().document.objects[0].transform).toEqual(
+    lockedTransform,
+  )
+})
+
 test.describe('mobile studio', () => {
   test.use({ viewport: { width: 390, height: 844 }, hasTouch: true })
 

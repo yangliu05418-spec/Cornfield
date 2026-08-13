@@ -1,9 +1,11 @@
 import { describe, expect, it } from 'vitest'
 
 import {
+  alignmentOffset,
   fitArtboard,
   flipAroundCenter,
   boundsIntersect,
+  distributionOffsets,
   invertAffine,
   moveCrop,
   moveObjectCenter,
@@ -225,5 +227,39 @@ describe('editor affine transforms', () => {
         { axis: 'y', position: 200 },
       ],
     })
+  })
+
+  it('aligns object edges and centers to a shared target', () => {
+    const bounds = objectBounds([1, 0, 0, 1, 20, 30], 100, 50)
+    const target = objectBounds([1, 0, 0, 1, 0, 0], 400, 300)
+    expect(alignmentOffset(bounds, target, 'left')).toEqual({ dx: -20, dy: 0 })
+    expect(alignmentOffset(bounds, target, 'horizontal-center')).toEqual({
+      dx: 130,
+      dy: 0,
+    })
+    expect(alignmentOffset(bounds, target, 'right')).toEqual({ dx: 280, dy: 0 })
+    expect(alignmentOffset(bounds, target, 'top')).toEqual({ dx: 0, dy: -30 })
+    expect(alignmentOffset(bounds, target, 'vertical-center')).toEqual({
+      dx: 0,
+      dy: 95,
+    })
+    expect(alignmentOffset(bounds, target, 'bottom')).toEqual({
+      dx: 0,
+      dy: 220,
+    })
+  })
+
+  it('distributes centers while preserving the first and last objects', () => {
+    const items = [
+      { id: 'right', bounds: objectBounds([1, 0, 0, 1, 280, 0], 40, 40) },
+      { id: 'left', bounds: objectBounds([1, 0, 0, 1, 0, 0], 40, 40) },
+      { id: 'middle', bounds: objectBounds([1, 0, 0, 1, 60, 0], 40, 40) },
+    ]
+    expect(Object.fromEntries(distributionOffsets(items, 'x'))).toEqual({
+      left: 0,
+      middle: 80,
+      right: 0,
+    })
+    expect(distributionOffsets(items.slice(0, 2), 'x').size).toBe(0)
   })
 })

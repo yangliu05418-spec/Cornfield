@@ -46,3 +46,27 @@ func TestDocumentRejectsOversizedCanvasAllocation(t *testing.T) {
 		t.Fatalf("36 megapixel boundary rejected: %v", err)
 	}
 }
+
+func TestDocumentObjectLimitIsIndependentFromProviderLayerLimit(t *testing.T) {
+	document := New(uuid.New(), 1024, 1024)
+	base := document.Objects[0]
+	for index := 1; index < MaxObjects; index++ {
+		object := base
+		object.ID = uuid.NewString()
+		object.ZIndex = index
+		document.Objects = append(document.Objects, object)
+	}
+	if err := document.Validate(); err != nil {
+		t.Fatalf("%d editor objects rejected: %v", MaxObjects, err)
+	}
+	extra := base
+	extra.ID = uuid.NewString()
+	extra.ZIndex = MaxObjects
+	document.Objects = append(document.Objects, extra)
+	if err := document.Validate(); !errors.Is(err, ErrInvalidDocument) {
+		t.Fatalf("%d editor objects error = %v, want ErrInvalidDocument", MaxObjects+1, err)
+	}
+	if MaxProviderLayers >= MaxObjects {
+		t.Fatalf("provider layer limit %d must remain below editor object limit %d", MaxProviderLayers, MaxObjects)
+	}
+}

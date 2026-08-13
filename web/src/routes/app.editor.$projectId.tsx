@@ -39,6 +39,7 @@ import type { CSSProperties, PointerEvent as ReactPointerEvent } from 'react'
 import { AppShell } from '#/components/app-shell'
 import { ConfirmDialog } from '#/components/confirm-dialog'
 import { EditorHistory } from '#/features/editor/domain/history'
+import { PixiSurface } from '#/features/editor/renderer/pixi-surface'
 import { api, APIError } from '#/lib/api'
 import { mergeAssetIntoCaches } from '#/lib/asset-cache'
 import {
@@ -130,6 +131,8 @@ function ImageEditorPage() {
     bottom: number
   }>()
   const [view, setView] = useState({ zoom: 100, panX: 0, panY: 0 })
+  const [rendererMode, setRendererMode] = useState<'dom' | 'pixi'>('dom')
+  const [pixiPresented, setPixiPresented] = useState(false)
   const [spacePressed, setSpacePressed] = useState(false)
   const [uploading, setUploading] = useState(false)
   const [dragOver, setDragOver] = useState(false)
@@ -165,6 +168,11 @@ function ImageEditorPage() {
   >(() => undefined)
   const fittedRef = useRef(false)
   const zoom = view.zoom
+
+  useEffect(() => {
+    if (new URLSearchParams(window.location.search).get('renderer') === 'pixi')
+      setRendererMode('pixi')
+  }, [])
 
   useEffect(() => {
     if (!projectQuery.data || documentRef.current) return
@@ -609,7 +617,9 @@ function ImageEditorPage() {
       if (event.button !== 0 || operationRunning) return
       if (
         event.target instanceof Element &&
-        event.target.closest('.editor-canvas > img, .editor-selection-box')
+        event.target.closest(
+          '.editor-canvas > img, .editor-object-hit, .editor-selection-box',
+        )
       )
         return
       event.preventDefault()
@@ -1863,6 +1873,7 @@ function ImageEditorPage() {
               type="button"
               title="裁切图层"
               aria-label="裁切图层"
+              data-testid="editor-crop-tool"
               className={cropSession ? 'active' : ''}
               disabled={
                 !selected ||
@@ -2086,8 +2097,25 @@ function ImageEditorPage() {
               )
             }}
           >
+            <PixiSurface
+              enabled={rendererMode === 'pixi' && !cropSession}
+              document={documentState}
+              assets={objectAssets}
+              viewport={view}
+              onUnavailable={() => {
+                setRendererMode('dom')
+                setPixiPresented(false)
+                setNotice('图形渲染暂不可用，已安全切回兼容模式')
+              }}
+              onPresentedChange={setPixiPresented}
+            />
             <div
               className="editor-world"
+              data-renderer={
+                rendererMode === 'pixi' && !cropSession && pixiPresented
+                  ? 'pixi'
+                  : 'dom'
+              }
               style={{
                 transform: `translate(${view.panX}px, ${view.panY}px) scale(${zoom / 100})`,
               }}
@@ -2097,7 +2125,7 @@ function ImageEditorPage() {
                 {documentState.canvas.height}
               </span>
               <div
-                className="editor-canvas editor-artboard"
+                className={`editor-canvas editor-artboard${rendererMode === 'pixi' && !cropSession && pixiPresented ? ' is-pixi-hit-layer' : ''}`}
                 style={
                   {
                     width: documentState.canvas.width,
@@ -2113,6 +2141,52 @@ function ImageEditorPage() {
                     cropSession?.objectID === object.id
                       ? undefined
                       : object.crop
+                  const pixiHitLayer =
+                    rendererMode === 'pixi' && !cropSession && pixiPresented
+                  const objectStyle = {
+                    opacity: pixiHitLayer ? 0 : object.opacity,
+                    zIndex: object.z_index,
+                    transform: `matrix(${object.transform.join(',')})`,
+                    clipPath: visibleCrop
+                      ? `inset(${visibleCrop.y * 100}% ${(1 - visibleCrop.x - visibleCrop.width) * 100}% ${(1 - visibleCrop.y - visibleCrop.height) * 100}% ${visibleCrop.x * 100}%)`
+                      : undefined,
+                  }
+                  const pointerDown = (event: ReactPointerEvent) => {
+                    if (cropSession) return
+                    viewportRef.current?.focus({ preventScroll: true })
+                    const nextSelection =
+                      event.shiftKey || selectedIDs.has(object.id)
+                        ? new Set(selectedIDs)
+                        : new Set([object.id])
+                    if (event.shiftKey) {
+                      if (nextSelection.has(object.id))
+                        nextSelection.delete(object.id)
+                      else nextSelection.add(object.id)
+                    }
+                    if (!nextSelection.has(object.id)) {
+                      setSelectedIDs(nextSelection)
+                      setSelectedID([...nextSelection].at(-1) ?? '')
+                      return
+                    }
+                    setSelectedIDs(nextSelection)
+                    setSelectedID(object.id)
+                    if (spacePressed || event.button === 1) return
+                    beginDrag(event, nextSelection)
+                  }
+                  if (pixiHitLayer)
+                    return (
+                      <div
+                        key={object.id}
+                        className="editor-object-hit"
+                        data-object-id={object.id}
+                        style={{
+                          ...objectStyle,
+                          width: asset.width,
+                          height: asset.height,
+                        }}
+                        onPointerDown={pointerDown}
+                      />
+                    )
                   return (
                     <img
                       key={object.id}
@@ -2128,36 +2202,8 @@ function ImageEditorPage() {
                       height={asset.height}
                       draggable={false}
                       alt="画布图层"
-                      style={{
-                        opacity: object.opacity,
-                        zIndex: object.z_index,
-                        transform: `matrix(${object.transform.join(',')})`,
-                        clipPath: visibleCrop
-                          ? `inset(${visibleCrop.y * 100}% ${(1 - visibleCrop.x - visibleCrop.width) * 100}% ${(1 - visibleCrop.y - visibleCrop.height) * 100}% ${visibleCrop.x * 100}%)`
-                          : undefined,
-                      }}
-                      onPointerDown={(event) => {
-                        if (cropSession) return
-                        viewportRef.current?.focus({ preventScroll: true })
-                        const nextSelection =
-                          event.shiftKey || selectedIDs.has(object.id)
-                            ? new Set(selectedIDs)
-                            : new Set([object.id])
-                        if (event.shiftKey) {
-                          if (nextSelection.has(object.id))
-                            nextSelection.delete(object.id)
-                          else nextSelection.add(object.id)
-                        }
-                        if (!nextSelection.has(object.id)) {
-                          setSelectedIDs(nextSelection)
-                          setSelectedID([...nextSelection].at(-1) ?? '')
-                          return
-                        }
-                        setSelectedIDs(nextSelection)
-                        setSelectedID(object.id)
-                        if (spacePressed || event.button === 1) return
-                        beginDrag(event, nextSelection)
-                      }}
+                      style={objectStyle}
+                      onPointerDown={pointerDown}
                     />
                   )
                 })}

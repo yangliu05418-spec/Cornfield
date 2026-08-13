@@ -6,7 +6,11 @@ export default defineConfig({
   workers: 1,
   retries: 0,
   reporter: 'line',
-  use: { baseURL: 'http://127.0.0.1:4180' },
+  use: {
+    baseURL: 'http://127.0.0.1:4180',
+    channel: process.env.EDITOR_DEVICE_CHANNEL || undefined,
+    headless: process.env.EDITOR_DEVICE_HEADLESS !== '0',
+  },
   webServer: {
     command: 'pnpm exec vite --config vite.editor-spike.config.ts',
     url: 'http://127.0.0.1:4180',

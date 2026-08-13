@@ -16,6 +16,7 @@
     "e2e": "playwright test",
     "spike:editor:build": "vite build --config vite.editor-spike.config.ts",
     "spike:editor:test": "playwright test --config playwright.editor-spike.config.ts",
+    "spike:editor:device": "node scripts/run-editor-device-gate.mjs",
     "typecheck": "tsc --noEmit",
     "lint": "eslint",
     "format": "prettier --write . && eslint --fix",

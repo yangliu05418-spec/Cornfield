@@ -10,6 +10,7 @@ declare global {
 
 type SpikeResult = {
   ok: boolean
+  environment: SpikeEnvironment
   initMs: number
   syncMs: number
   renderP50Ms: number
@@ -27,6 +28,18 @@ type SpikeResult = {
   error?: string
 }
 
+type SpikeEnvironment = {
+  userAgent: string
+  platform: string
+  logicalProcessors: number
+  deviceMemoryGiB?: number
+  devicePixelRatio: number
+  viewport: { width: number; height: number }
+  screen: { width: number; height: number }
+  gpuVendor: string
+  gpuRenderer: string
+}
+
 const output = document.querySelector('output')!
 const canvas = document.querySelector<HTMLCanvasElement>('#performance')!
 const correctnessCanvas =
@@ -34,6 +47,7 @@ const correctnessCanvas =
 void run().catch((error: unknown) => {
   const result: SpikeResult = {
     ok: false,
+    environment: readEnvironment(canvas),
     initMs: 0,
     syncMs: 0,
     renderP50Ms: 0,
@@ -114,6 +128,7 @@ async function run() {
   observer.disconnect()
   const statsBeforeDestroy = renderer.stats()
   const gl = canvas.getContext('webgl2') ?? canvas.getContext('webgl')
+  const environment = readEnvironment(canvas, gl)
   const loseContext = gl?.getExtension('WEBGL_lose_context')
   const contextLossSupported = Boolean(loseContext)
   if (loseContext) {
@@ -127,6 +142,7 @@ async function run() {
     for (const variant of asset.variants) URL.revokeObjectURL(variant.url)
   const result: SpikeResult = {
     ok: true,
+    environment,
     initMs,
     syncMs,
     renderP50Ms: percentile(renderTimes, 0.5),
@@ -144,6 +160,38 @@ async function run() {
   }
   window.__EDITOR_SPIKE__ = result
   output.value = JSON.stringify(result, null, 2)
+}
+
+function readEnvironment(
+  target: HTMLCanvasElement,
+  context?: WebGLRenderingContext | WebGL2RenderingContext | null,
+): SpikeEnvironment {
+  const gl =
+    context ?? target.getContext('webgl2') ?? target.getContext('webgl')
+  const debug = gl?.getExtension('WEBGL_debug_renderer_info')
+  const memory = (navigator as Navigator & { deviceMemory?: number })
+    .deviceMemory
+  return {
+    userAgent: navigator.userAgent,
+    platform: navigator.platform,
+    logicalProcessors: navigator.hardwareConcurrency || 0,
+    deviceMemoryGiB: memory,
+    devicePixelRatio: window.devicePixelRatio || 1,
+    viewport: { width: window.innerWidth, height: window.innerHeight },
+    screen: { width: window.screen.width, height: window.screen.height },
+    gpuVendor: gl
+      ? String(
+          gl.getParameter(debug?.UNMASKED_VENDOR_WEBGL ?? gl.VENDOR) ??
+            'unknown',
+        )
+      : 'unavailable',
+    gpuRenderer: gl
+      ? String(
+          gl.getParameter(debug?.UNMASKED_RENDERER_WEBGL ?? gl.RENDERER) ??
+            'unknown',
+        )
+      : 'unavailable',
+  }
 }
 
 async function runResolutionTransitionFixture() {

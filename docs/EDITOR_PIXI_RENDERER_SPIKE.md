@@ -31,13 +31,24 @@ The test runs in real Chromium and writes its machine-readable report to `web/ou
 | Significant pixel mismatch       |                                  < 1% |
 | Mean absolute channel error      |                                   < 1 |
 | Texture budget at spike zoom     |           <= 50 × 640 × 640 × 4 bytes |
-| Settled zoom variant transition  |      640 → required high-res → 640 |
+| Settled zoom variant transition  |         640 → required high-res → 640 |
 | Forced context loss/restore      |                         Both observed |
 | Resources after destroy          | 0 nodes, textures and estimated bytes |
 
 Frame intervals and long tasks are always recorded but are not hard gates on shared GitHub runners: headless Chromium can use software WebGL and throttle `requestAnimationFrame` independently of renderer work. Pixel semantics, CPU submission time, texture budget, context recovery and cleanup remain deterministic CI gates.
 
 Fixed-device performance runs set `EDITOR_SPIKE_ENFORCE_DEVICE_TIMING=1`; those runs additionally require frame-interval p95 below 22.3 ms (45 fps) and zero long tasks after warm-up. Device class and browser/GPU details must accompany the report.
+
+Use the dedicated command so the timing gate cannot be accidentally omitted. The run fails when the profile label is absent or Chromium reports a software renderer:
+
+```powershell
+$env:EDITOR_DEVICE_PROFILE = 'windows-mid-2026'
+$env:EDITOR_DEVICE_CHANNEL = 'chrome'
+$env:EDITOR_DEVICE_HEADLESS = '0'
+pnpm spike:editor:device
+```
+
+The JSON artifact records the profile label, capture time, browser, OS platform, logical processors, memory hint, DPR, viewport, screen and unmasked GPU vendor/renderer. Profile labels describe a stable lab device class and must not contain a person's name or other identifying information.
 
 ## Local baseline
 

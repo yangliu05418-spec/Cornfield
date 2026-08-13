@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs'
 import { expect, test } from '@playwright/test'
 import type { Page } from '@playwright/test'
 
@@ -872,6 +873,44 @@ test('image editor crops a rotated layer with explicit apply and cancel', async 
   await page.reload()
   await expect(page.getByText('裁切区域')).toBeVisible()
   expect(backend.editorState().document.objects[0].crop?.width).toBeLessThan(1)
+})
+
+test('image editor keeps DOM as the default renderer and mounts Pixi only when requested', async ({
+  page,
+}) => {
+  await installStudioMocks(page)
+  await page.route('**/mock-image.svg*', (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: 'image/webp',
+      body: readFileSync(
+        new URL('../public/cornfield-chair.webp', import.meta.url),
+      ),
+    }),
+  )
+  await page.goto('/app/editor/editor-project-1')
+  await expect(page.getByTestId('editor-pixi-surface')).toHaveCount(0)
+  await expect(page.locator('.editor-canvas > img')).toHaveCSS('opacity', '1')
+
+  await page.goto('/app/editor/editor-project-1?renderer=pixi')
+  const surface = page.getByTestId('editor-pixi-surface')
+  await expect(surface).toBeVisible()
+  await expect
+    .poll(() =>
+      surface.evaluate((canvas: HTMLCanvasElement) => ({
+        ready: canvas.width > 0 && canvas.height > 0,
+      })),
+    )
+    .toEqual({ ready: true })
+  await expect(page.locator('.editor-canvas > img')).toHaveCount(0)
+  await expect(page.getByTestId('editor-pixi-artboard-underlay')).toBeVisible()
+  await expect(page.locator('.editor-object-hit')).toHaveCount(1)
+  await expect(page.locator('.editor-selection-box')).toBeVisible()
+
+  await page.getByTestId('editor-crop-tool').click()
+  await expect(surface).toHaveCount(0)
+  await expect(page.getByTestId('editor-pixi-artboard-underlay')).toHaveCount(0)
+  await expect(page.locator('.editor-canvas > img')).toHaveCSS('opacity', '1')
 })
 
 test('image editor aligns and distributes multiple layers as one undoable edit', async ({

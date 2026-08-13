@@ -794,6 +794,23 @@
   outline: 1px solid color-mix(in srgb, var(--lime) 56%, transparent);
   outline-offset: -2px;
 }
+.editor-pixi-surface {
+  position: absolute;
+  z-index: 1;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+.editor-pixi-artboard-underlay {
+  position: absolute;
+  z-index: 0;
+  top: 50%;
+  left: 50%;
+  transform-origin: 0 0;
+  pointer-events: none;
+  will-change: transform;
+}
 .editor-world {
   position: absolute;
   top: 50%;
@@ -802,6 +819,12 @@
   height: 0;
   transform-origin: 0 0;
   will-change: transform;
+  z-index: 2;
+}
+.editor-artboard.is-pixi-hit-layer {
+  outline: none;
+  background: transparent;
+  box-shadow: none;
 }
 .editor-canvas {
   position: absolute;
@@ -880,6 +903,13 @@
   user-select: none;
   cursor: move;
   will-change: transform;
+}
+.editor-object-hit {
+  position: absolute;
+  inset: 0 auto auto 0;
+  max-width: none;
+  transform-origin: 0 0;
+  cursor: move;
 }
 .editor-selection-box {
   position: absolute;

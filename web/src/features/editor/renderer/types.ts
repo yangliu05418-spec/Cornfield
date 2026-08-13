@@ -49,6 +49,7 @@ export interface EditorRenderer {
     document: EditorDocument,
     assets: ReadonlyMap<string, EditorRenderAsset>,
   ) => Promise<void>
+  resize: (width: number, height: number) => void
   setViewport: (viewport: EditorViewport) => void
   render: () => void
   stats: () => EditorRendererStats

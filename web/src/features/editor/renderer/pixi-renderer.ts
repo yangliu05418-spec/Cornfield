@@ -35,6 +35,8 @@ type TextureResource = {
 export class PixiEditorRenderer implements EditorRenderer {
   #app?: Application
   #world = new Container()
+  #content = new Container()
+  #artboardMask = new Graphics()
   #nodes = new Map<string, SceneNode>()
   #textures = new ReferenceCountedResourceCache<TextureResource>((resource) => {
     resource.texture.destroy(true)
@@ -96,6 +98,9 @@ export class PixiEditorRenderer implements EditorRenderer {
       gcFrequency: 2_000,
     })
     this.#world.sortableChildren = true
+    this.#content.sortableChildren = true
+    this.#content.mask = this.#artboardMask
+    this.#world.addChild(this.#content, this.#artboardMask)
     app.stage.addChild(this.#world)
     this.#app = app
   }
@@ -125,6 +130,10 @@ export class PixiEditorRenderer implements EditorRenderer {
       this.#textureBudgetBytes,
     )
     this.#textureBudgetExceeded = plan.budgetExceeded
+    this.#artboardMask
+      .clear()
+      .rect(0, 0, document.canvas.width, document.canvas.height)
+      .fill(0xffffff)
     const live = new Set(document.objects.map((object) => object.id))
     for (const [id, node] of this.#nodes) {
       if (live.has(id)) continue
@@ -149,6 +158,12 @@ export class PixiEditorRenderer implements EditorRenderer {
     this.#viewport = viewport
     this.#applyViewport()
     if (zoomChanged) this.#scheduleResourceReconcile()
+  }
+
+  resize(width: number, height: number) {
+    if (!this.#app || width < 1 || height < 1) return
+    this.#app.renderer.resize(width, height)
+    this.render()
   }
 
   #applyViewport() {
@@ -228,7 +243,7 @@ export class PixiEditorRenderer implements EditorRenderer {
       sprite.width = asset.width
       sprite.height = asset.height
       container.addChild(sprite)
-      this.#world.addChild(container)
+      this.#content.addChild(container)
       node = {
         container,
         sprite,

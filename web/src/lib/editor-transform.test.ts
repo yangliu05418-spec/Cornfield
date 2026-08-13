@@ -9,8 +9,10 @@ import {
   objectAxisScales,
   objectBounds,
   rotateAroundCenter,
+  rotateAroundWorldPoint,
   scaleAroundCenter,
   scaleByFactorAroundCenter,
+  scaleAroundWorldPoint,
   snapObjectTranslation,
   snapBoundsTranslation,
   transformPoint,
@@ -54,6 +56,26 @@ describe('editor affine transforms', () => {
       expect(point(changed.transform, 50, 25).x).toBeCloseTo(center.x)
       expect(point(changed.transform, 50, 25).y).toBeCloseTo(center.y)
     }
+  })
+
+  it('transforms multiple object matrices around one world-space center', () => {
+    const center = { x: 100, y: 100 }
+    const first = [1, 0, 0, 1, 20, 40] as EditorObject['transform']
+    const second = [0, 1, -1, 0, 180, 40] as EditorObject['transform']
+
+    const scaledFirst = scaleAroundWorldPoint(first, center, 2)
+    const scaledSecond = scaleAroundWorldPoint(second, center, 2)
+    expect(transformPoint(scaledFirst, 0, 0)).toEqual({ x: -60, y: -20 })
+    expect(transformPoint(scaledSecond, 0, 0)).toEqual({ x: 260, y: -20 })
+    expect(objectAxisScales(scaledFirst)).toEqual({ x: 2, y: 2 })
+    expect(objectAxisScales(scaledSecond)).toEqual({ x: 2, y: 2 })
+
+    const rotatedFirst = rotateAroundWorldPoint(first, center, 90)
+    const rotatedSecond = rotateAroundWorldPoint(second, center, 90)
+    expect(transformPoint(rotatedFirst, 0, 0).x).toBeCloseTo(160)
+    expect(transformPoint(rotatedFirst, 0, 0).y).toBeCloseTo(20)
+    expect(transformPoint(rotatedSecond, 0, 0).x).toBeCloseTo(160)
+    expect(transformPoint(rotatedSecond, 0, 0).y).toBeCloseTo(180)
   })
 
   it('measures non-uniform axes and applies a uniform factor', () => {

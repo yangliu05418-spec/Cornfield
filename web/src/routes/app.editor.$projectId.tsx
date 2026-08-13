@@ -42,8 +42,10 @@ import {
   objectAxisScales,
   moveObjectCenter,
   rotateAroundCenter,
+  rotateAroundWorldPoint,
   scaleAroundCenter,
   scaleByFactorAroundCenter,
+  scaleAroundWorldPoint,
   screenPointToWorld,
   snapBoundsTranslation,
   transformPoint,
@@ -744,6 +746,105 @@ function ImageEditorPage() {
     const up = () => {
       window.removeEventListener('pointermove', move)
       window.removeEventListener('pointerup', up)
+      historyRef.current.push(initialDocument)
+      if (historyRef.current.length > 100) historyRef.current.shift()
+      futureRef.current = []
+      scheduleSave()
+    }
+    window.addEventListener('pointermove', move)
+    window.addEventListener('pointerup', up, { once: true })
+  }
+
+  function beginGroupTransform(
+    event: ReactPointerEvent<HTMLButtonElement>,
+    kind: 'scale' | 'rotate',
+  ) {
+    const current = documentRef.current
+    const viewport = viewportRef.current
+    if (!current || !viewport || operationRunning || !groupBounds) return
+    const transformable = current.objects.filter(
+      (item) => selectedIDs.has(item.id) && item.visible && !item.locked,
+    )
+    if (transformable.length !== selectedIDs.size) {
+      setNotice('请先解锁并显示所选图层')
+      return
+    }
+    viewport.focus({ preventScroll: true })
+    event.preventDefault()
+    event.stopPropagation()
+    const initialDocument = structuredClone(current)
+    const initialTransforms = new Map(
+      transformable.map((item) => [item.id, item.transform]),
+    )
+    const center = { x: groupBounds.centerX, y: groupBounds.centerY }
+    const rect = viewport.getBoundingClientRect()
+    const scale = view.zoom / 100
+    const screenCenter = {
+      x: rect.left + rect.width / 2 + view.panX + center.x * scale,
+      y: rect.top + rect.height / 2 + view.panY + center.y * scale,
+    }
+    const startDistance = Math.max(
+      1,
+      Math.hypot(
+        event.clientX - screenCenter.x,
+        event.clientY - screenCenter.y,
+      ),
+    )
+    const startAngle = Math.atan2(
+      event.clientY - screenCenter.y,
+      event.clientX - screenCenter.x,
+    )
+    const objectScales = transformable.map((item) =>
+      objectScale(item.transform),
+    )
+    const minFactor = Math.max(...objectScales.map((value) => 0.05 / value))
+    const maxFactor = Math.min(...objectScales.map((value) => 8 / value))
+    let changed = false
+    const move = (moveEvent: PointerEvent) => {
+      const latest = documentRef.current
+      if (!latest) return
+      let factor = 1
+      let degrees = 0
+      if (kind === 'scale') {
+        const distance = Math.hypot(
+          moveEvent.clientX - screenCenter.x,
+          moveEvent.clientY - screenCenter.y,
+        )
+        factor = Math.min(
+          maxFactor,
+          Math.max(minFactor, distance / startDistance),
+        )
+        changed = Math.abs(factor - 1) > 1e-6
+      } else {
+        const angle = Math.atan2(
+          moveEvent.clientY - screenCenter.y,
+          moveEvent.clientX - screenCenter.x,
+        )
+        degrees = ((angle - startAngle) * 180) / Math.PI
+        if (moveEvent.shiftKey) degrees = Math.round(degrees / 15) * 15
+        changed = Math.abs(degrees) > 1e-6
+      }
+      const next = {
+        ...latest,
+        objects: latest.objects.map((item) => {
+          const initial = initialTransforms.get(item.id)
+          if (!initial) return item
+          return {
+            ...item,
+            transform:
+              kind === 'scale'
+                ? scaleAroundWorldPoint(initial, center, factor)
+                : rotateAroundWorldPoint(initial, center, degrees),
+          }
+        }),
+      } satisfies EditorDocument
+      documentRef.current = next
+      setDocumentState(next)
+    }
+    const up = () => {
+      window.removeEventListener('pointermove', move)
+      window.removeEventListener('pointerup', up)
+      if (!changed) return
       historyRef.current.push(initialDocument)
       if (historyRef.current.length > 100) historyRef.current.shift()
       futureRef.current = []
@@ -1840,10 +1941,38 @@ function ImageEditorPage() {
                       width: groupBounds.width,
                       height: groupBounds.height,
                       '--editor-zoom': zoom / 100,
+                      '--editor-handle-size': `${12 / (zoom / 100)}px`,
+                      '--editor-handle-distance': `${34 / (zoom / 100)}px`,
                     } as CSSProperties
                   }
                 >
                   <span>{selectedIDs.size} 个图层</span>
+                  {selectedObjects.every(
+                    (item) => item.visible && !item.locked,
+                  ) &&
+                    !operationRunning && (
+                      <>
+                        {['nw', 'ne', 'se', 'sw'].map((position) => (
+                          <button
+                            key={position}
+                            className={`editor-transform-handle is-${position}`}
+                            type="button"
+                            aria-label="缩放所选图层"
+                            onPointerDown={(event) =>
+                              beginGroupTransform(event, 'scale')
+                            }
+                          />
+                        ))}
+                        <button
+                          className="editor-rotate-handle is-group"
+                          type="button"
+                          aria-label="旋转所选图层"
+                          onPointerDown={(event) =>
+                            beginGroupTransform(event, 'rotate')
+                          }
+                        />
+                      </>
+                    )}
                 </div>
               )}
               {marquee && (

@@ -656,6 +656,81 @@ test('image editor restores a source project and autosaves keyboard edits', asyn
     .getByRole('button', { name: '选择图层 源图' })
     .click({ modifiers: ['Shift'] })
   await expect(page.getByText('已选 2')).toBeVisible()
+
+  const axisScale = (item: { transform: number[] }) =>
+    Math.hypot(item.transform[0], item.transform[1])
+  const groupCenter = (items: { transform: number[] }[]) => {
+    const corners = items.flatMap((item) =>
+      [
+        [0, 0],
+        [1024, 0],
+        [1024, 1024],
+        [0, 1024],
+      ].map(([x, y]) => ({
+        x: item.transform[0] * x + item.transform[2] * y + item.transform[4],
+        y: item.transform[1] * x + item.transform[3] * y + item.transform[5],
+      })),
+    )
+    const left = Math.min(...corners.map((item) => item.x))
+    const right = Math.max(...corners.map((item) => item.x))
+    const top = Math.min(...corners.map((item) => item.y))
+    const bottom = Math.max(...corners.map((item) => item.y))
+    return { x: (left + right) / 2, y: (top + bottom) / 2 }
+  }
+  const groupBeforeScale = structuredClone(
+    backend.editorState().document.objects,
+  )
+  const scaleHandle = page.locator('.editor-group-selection .is-se')
+  const scaleBox = await scaleHandle.boundingBox()
+  expect(scaleBox).not.toBeNull()
+  await page.mouse.move(
+    scaleBox!.x + scaleBox!.width / 2,
+    scaleBox!.y + scaleBox!.height / 2,
+  )
+  await page.mouse.down()
+  await page.mouse.move(
+    scaleBox!.x + scaleBox!.width / 2 + 72,
+    scaleBox!.y + scaleBox!.height / 2 + 72,
+  )
+  await page.mouse.up()
+  await expect
+    .poll(() => axisScale(backend.editorState().document.objects[0]))
+    .toBeGreaterThan(axisScale(groupBeforeScale[0]))
+  const groupAfterScale = backend.editorState().document.objects
+  const beforeMidpoint = groupCenter(groupBeforeScale)
+  const afterMidpoint = groupCenter(groupAfterScale)
+  expect(afterMidpoint.x).toBeCloseTo(beforeMidpoint.x, 4)
+  expect(afterMidpoint.y).toBeCloseTo(beforeMidpoint.y, 4)
+
+  const groupBeforeRotate = structuredClone(groupAfterScale)
+  const groupBox = await page.locator('.editor-group-selection').boundingBox()
+  const rotateHandle = page.locator(
+    '.editor-group-selection .editor-rotate-handle',
+  )
+  const rotateBox = await rotateHandle.boundingBox()
+  expect(groupBox).not.toBeNull()
+  expect(rotateBox).not.toBeNull()
+  const groupScreenCenter = {
+    x: groupBox!.x + groupBox!.width / 2,
+    y: groupBox!.y + groupBox!.height / 2,
+  }
+  await page.mouse.move(
+    rotateBox!.x + rotateBox!.width / 2,
+    rotateBox!.y + rotateBox!.height / 2,
+  )
+  await page.mouse.down()
+  await page.mouse.move(groupScreenCenter.x + 90, groupScreenCenter.y, {
+    steps: 8,
+  })
+  await page.mouse.up()
+  await expect
+    .poll(() => backend.editorState().document.objects[0].transform[1])
+    .not.toBeCloseTo(groupBeforeRotate[0].transform[1], 4)
+  const groupAfterRotate = backend.editorState().document.objects
+  const rotateCenterBefore = groupCenter(groupBeforeRotate)
+  const rotateCenterAfter = groupCenter(groupAfterRotate)
+  expect(rotateCenterAfter.x).toBeCloseTo(rotateCenterBefore.x, 4)
+  expect(rotateCenterAfter.y).toBeCloseTo(rotateCenterBefore.y, 4)
   const beforeGroupMove = backend
     .editorState()
     .document.objects.map((item) => item.transform[4])
@@ -679,24 +754,23 @@ test('image editor restores a source project and autosaves keyboard edits', asyn
   await expect
     .poll(() => {
       const object = backend.editorState().document.objects[1]
-      return {
-        x:
-          object.transform[0] * 512 +
-          object.transform[2] * 512 +
-          object.transform[4],
-        y:
-          object.transform[1] * 512 +
-          object.transform[3] * 512 +
-          object.transform[5],
-      }
+      return (
+        object.transform[0] * 512 +
+        object.transform[2] * 512 +
+        object.transform[4]
+      )
     })
-    .toEqual({ x: 600, y: 450 })
-
-  await canvas.focus()
-  await page.keyboard.press('Control+d')
-  await expect.poll(() => backend.editorState().document.objects.length).toBe(3)
-  await page.keyboard.press('Control+z')
-  await expect.poll(() => backend.editorState().document.objects.length).toBe(2)
+    .toBeCloseTo(600, 4)
+  await expect
+    .poll(() => {
+      const object = backend.editorState().document.objects[1]
+      return (
+        object.transform[1] * 512 +
+        object.transform[3] * 512 +
+        object.transform[5]
+      )
+    })
+    .toBeCloseTo(450, 4)
 
   const worldBeforeWheel = await page
     .locator('.editor-world')

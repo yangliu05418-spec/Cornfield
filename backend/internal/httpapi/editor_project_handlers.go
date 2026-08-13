@@ -203,12 +203,30 @@ func (s *Server) saveEditorProject(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusUnprocessableEntity, "INVALID_EDITOR_DOCUMENT", "编辑工程结构无效，请撤销最近的修改", false, r)
 		return
 	}
-	if err = s.requireOwnedEditorAssets(r, document.AssetIDs()); err != nil {
+	tx, err := s.db.Begin(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "EDITOR_PROJECT_SAVE_FAILED", "保存编辑工程失败", true, r)
+		return
+	}
+	defer tx.Rollback(r.Context())
+	assetIDs := document.AssetIDs()
+	rows, err := tx.Query(r.Context(), `SELECT id FROM assets
+		WHERE owner_user_id=$1 AND id=ANY($2) AND purged_at IS NULL AND purge_pending=false
+		ORDER BY id FOR KEY SHARE`, currentSession(r).UserID, assetIDs)
+	assetCount := 0
+	if err == nil {
+		for rows.Next() {
+			assetCount++
+		}
+		err = rows.Err()
+		rows.Close()
+	}
+	if err != nil || assetCount != len(assetIDs) {
 		writeError(w, http.StatusUnprocessableEntity, "EDITOR_ASSET_INVALID", "工程包含不存在或不可访问的图片", false, r)
 		return
 	}
 	var revision int64
-	err = s.db.QueryRow(r.Context(), `UPDATE image_editor_projects SET document=$4,revision=revision+1,updated_at=now()
+	err = tx.QueryRow(r.Context(), `UPDATE image_editor_projects SET document=$4,revision=revision+1,updated_at=now()
 		WHERE id=$1 AND owner_user_id=$2 AND revision=$3 RETURNING revision`, id, currentSession(r).UserID, input.ExpectedRevision, input.Document).Scan(&revision)
 	if errors.Is(err, pgx.ErrNoRows) {
 		writeError(w, http.StatusConflict, "EDITOR_PROJECT_CONFLICT", "工程已在其他页面更新，请刷新后继续", false, r)
@@ -218,17 +236,11 @@ func (s *Server) saveEditorProject(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "EDITOR_PROJECT_SAVE_FAILED", "保存编辑工程失败", true, r)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"revision": revision})
-}
-
-func (s *Server) requireOwnedEditorAssets(r *http.Request, assetIDs []uuid.UUID) error {
-	var count int
-	err := s.db.QueryRow(r.Context(), `SELECT count(*) FROM assets
-		WHERE owner_user_id=$1 AND id=ANY($2) AND purged_at IS NULL AND purge_pending=false`, currentSession(r).UserID, assetIDs).Scan(&count)
-	if err != nil || count != len(assetIDs) {
-		return errors.New("editor asset unavailable")
+	if err = tx.Commit(r.Context()); err != nil {
+		writeError(w, http.StatusInternalServerError, "EDITOR_PROJECT_SAVE_FAILED", "保存编辑工程失败", true, r)
+		return
 	}
-	return nil
+	writeJSON(w, http.StatusOK, map[string]any{"revision": revision})
 }
 
 func (s *Server) renameEditorProject(w http.ResponseWriter, r *http.Request) {

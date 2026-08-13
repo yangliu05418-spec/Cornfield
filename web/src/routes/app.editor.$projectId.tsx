@@ -876,6 +876,10 @@ function ImageEditorPage() {
   function removeSelectedObject() {
     const current = documentRef.current
     if (!selected || !current || operationRunning) return
+    if (selected.asset_id === projectQuery.data?.source_asset_id) {
+      setNotice('源图是当前工程的锚点，可以隐藏，但不能移除')
+      return
+    }
     if (current.objects.length === 1) {
       setNotice('画板至少需要保留一个图层')
       return
@@ -1226,56 +1230,56 @@ function ImageEditorPage() {
                     />
                   )
                 })}
-                {selected && selectedAsset && selected.visible && (
-                  <div
-                    className="editor-selection-box"
-                    style={
-                      {
-                        width: selectedAsset.width,
-                        height: selectedAsset.height,
-                        transform: `matrix(${selected.transform.join(',')})`,
-                        '--editor-handle-size': `${12 / (zoom / 100) / Math.max(0.05, objectScale(selected.transform))}px`,
-                        '--editor-handle-distance': `${34 / (zoom / 100) / Math.max(0.05, objectScale(selected.transform))}px`,
-                      } as CSSProperties
-                    }
-                    aria-hidden={selected.locked || operationRunning}
-                  >
-                    {!selected.locked && !operationRunning && (
-                      <>
-                        {['nw', 'ne', 'se', 'sw'].map((position) => (
-                          <button
-                            key={position}
-                            className={`editor-transform-handle is-${position}`}
-                            type="button"
-                            aria-label="缩放图层"
-                            onPointerDown={(event) =>
-                              beginObjectTransform(
-                                event,
-                                selected,
-                                selectedAsset,
-                                'scale',
-                              )
-                            }
-                          />
-                        ))}
+              </div>
+              {selected && selectedAsset && selected.visible && (
+                <div
+                  className="editor-selection-box"
+                  style={
+                    {
+                      width: selectedAsset.width,
+                      height: selectedAsset.height,
+                      transform: `matrix(${selected.transform.join(',')})`,
+                      '--editor-handle-size': `${12 / (zoom / 100) / Math.max(0.05, objectScale(selected.transform))}px`,
+                      '--editor-handle-distance': `${34 / (zoom / 100) / Math.max(0.05, objectScale(selected.transform))}px`,
+                    } as CSSProperties
+                  }
+                  aria-hidden={selected.locked || operationRunning}
+                >
+                  {!selected.locked && !operationRunning && (
+                    <>
+                      {['nw', 'ne', 'se', 'sw'].map((position) => (
                         <button
-                          className="editor-rotate-handle"
+                          key={position}
+                          className={`editor-transform-handle is-${position}`}
                           type="button"
-                          aria-label="旋转图层"
+                          aria-label="缩放图层"
                           onPointerDown={(event) =>
                             beginObjectTransform(
                               event,
                               selected,
                               selectedAsset,
-                              'rotate',
+                              'scale',
                             )
                           }
                         />
-                      </>
-                    )}
-                  </div>
-                )}
-              </div>
+                      ))}
+                      <button
+                        className="editor-rotate-handle"
+                        type="button"
+                        aria-label="旋转图层"
+                        onPointerDown={(event) =>
+                          beginObjectTransform(
+                            event,
+                            selected,
+                            selectedAsset,
+                            'rotate',
+                          )
+                        }
+                      />
+                    </>
+                  )}
+                </div>
+              )}
             </div>
             {operationRunning && (
               <DecompositionWaiting
@@ -1360,7 +1364,9 @@ function ImageEditorPage() {
                   className="editor-remove-layer"
                   type="button"
                   disabled={
-                    operationRunning || documentState.objects.length <= 1
+                    operationRunning ||
+                    documentState.objects.length <= 1 ||
+                    selected.asset_id === projectQuery.data?.source_asset_id
                   }
                   onClick={removeSelectedObject}
                 >

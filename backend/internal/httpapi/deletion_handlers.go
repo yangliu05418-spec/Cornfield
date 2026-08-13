@@ -37,6 +37,18 @@ func (s *Server) deleteAsset(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusConflict, "DERIVED_ASSET_MANAGED", "工作台内部图层由工程统一管理", false, r)
 		return
 	}
+	var editorReferences int
+	err = tx.QueryRow(r.Context(), `SELECT count(*) FROM image_editor_projects
+		WHERE owner_user_id=$1 AND source_asset_id<>$2
+		AND document @> jsonb_build_object('objects',jsonb_build_array(jsonb_build_object('asset_id',$2::text)))`, sess.UserID, assetID).Scan(&editorReferences)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "ASSET_DELETE_FAILED", "删除资产失败", true, r)
+		return
+	}
+	if editorReferences > 0 {
+		writeError(w, http.StatusConflict, "ASSET_USED_BY_EDITOR", "图片仍在编辑工程中，请先从对应画板移除", false, r)
+		return
+	}
 	var requestID uuid.UUID
 	if pending {
 		err = tx.QueryRow(r.Context(), `SELECT id FROM deletion_requests WHERE asset_id=$1 AND status IN ('pending','running')`, assetID).Scan(&requestID)

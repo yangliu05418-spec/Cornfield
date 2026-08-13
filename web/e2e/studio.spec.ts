@@ -591,7 +591,7 @@ test('image editor restores a source project and autosaves keyboard edits', asyn
   expect(backend.editorState().document.objects[0].transform[4]).toBe(1)
 
   const beforeRotate = backend.editorState().document.objects[0].transform
-  await page.locator('.editor-tools button').nth(3).click()
+  await page.getByTitle('旋转 90°').click()
   await expect.poll(() => backend.editorState().revision).toBe(2)
   const afterRotate = backend.editorState().document.objects[0].transform
   const center = (matrix: number[]) => ({

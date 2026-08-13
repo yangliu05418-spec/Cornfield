@@ -958,6 +958,12 @@
   background: var(--lime);
   pointer-events: none;
 }
+.editor-rotate-handle.is-group {
+  top: calc(var(--editor-handle-size, 12px) / 2);
+}
+.editor-rotate-handle.is-group::after {
+  display: none;
+}
 .editor-remove-layer {
   display: inline-flex;
   align-items: center;

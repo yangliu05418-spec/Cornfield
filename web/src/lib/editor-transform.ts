@@ -15,6 +15,55 @@ export function multiplyAffine(left: Affine, right: Affine): Affine {
   ]
 }
 
+export function transformAroundWorldPoint(
+  transform: Affine,
+  center: { x: number; y: number },
+  worldTransform: Affine,
+): Affine {
+  return multiplyAffine(
+    multiplyAffine(
+      multiplyAffine([1, 0, 0, 1, center.x, center.y], worldTransform),
+      [1, 0, 0, 1, -center.x, -center.y],
+    ),
+    transform,
+  )
+}
+
+export function scaleAroundWorldPoint(
+  transform: Affine,
+  center: { x: number; y: number },
+  factor: number,
+): Affine {
+  if (!Number.isFinite(factor) || factor <= 0) return transform
+  return transformAroundWorldPoint(transform, center, [
+    factor,
+    0,
+    0,
+    factor,
+    0,
+    0,
+  ])
+}
+
+export function rotateAroundWorldPoint(
+  transform: Affine,
+  center: { x: number; y: number },
+  degrees: number,
+): Affine {
+  if (!Number.isFinite(degrees)) return transform
+  const radians = (degrees * Math.PI) / 180
+  const cos = Math.cos(radians)
+  const sin = Math.sin(radians)
+  return transformAroundWorldPoint(transform, center, [
+    cos,
+    sin,
+    -sin,
+    cos,
+    0,
+    0,
+  ])
+}
+
 export function aroundObjectCenter(
   transform: Affine,
   width: number,

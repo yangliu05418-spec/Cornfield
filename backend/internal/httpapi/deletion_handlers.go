@@ -41,12 +41,14 @@ func (s *Server) deleteAsset(w http.ResponseWriter, r *http.Request) {
 	err = tx.QueryRow(r.Context(), `SELECT count(*) FROM (
 		SELECT p.id::text AS ref FROM image_editor_projects p
 		WHERE p.owner_user_id=$1 AND p.source_asset_id<>$2
-		AND p.document @> jsonb_build_object('objects',jsonb_build_array(jsonb_build_object('asset_id',$2::text)))
+		AND (p.document @> jsonb_build_object('objects',jsonb_build_array(jsonb_build_object('asset_id',$2::text)))
+			OR p.document @> jsonb_build_object('nodes',jsonb_build_array(jsonb_build_object('asset_id',$2::text))))
 		UNION ALL
 		SELECT o.id::text FROM asset_operations o JOIN image_editor_projects p ON p.id=o.editor_project_id
 		WHERE o.owner_user_id=$1 AND p.source_asset_id<>$2
 		AND o.status NOT IN ('succeeded','failed','cancelled','submission_uncertain')
-		AND o.source_document @> jsonb_build_object('objects',jsonb_build_array(jsonb_build_object('asset_id',$2::text)))
+		AND (o.source_document @> jsonb_build_object('objects',jsonb_build_array(jsonb_build_object('asset_id',$2::text)))
+			OR o.source_document @> jsonb_build_object('nodes',jsonb_build_array(jsonb_build_object('asset_id',$2::text))))
 	) refs`, sess.UserID, assetID).Scan(&editorReferences)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "ASSET_DELETE_FAILED", "删除资产失败", true, r)

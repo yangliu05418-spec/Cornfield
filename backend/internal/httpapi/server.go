@@ -290,7 +290,11 @@ func (s *Server) metrics(w http.ResponseWriter, r *http.Request) {
 }
 
 func decodeJSON(w http.ResponseWriter, r *http.Request, target any) bool {
-	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20))
+	return decodeJSONLimited(w, r, target, 1<<20)
+}
+
+func decodeJSONLimited(w http.ResponseWriter, r *http.Request, target any, limit int64) bool {
+	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, limit))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(target); err != nil {
 		writeError(w, http.StatusBadRequest, "INVALID_JSON", "请求内容格式不正确", false, r)

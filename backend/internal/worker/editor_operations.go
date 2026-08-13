@@ -294,7 +294,7 @@ func (w *AssetOperationWorker) decompose(ctx context.Context, record assetOperat
 }
 
 func (w *AssetOperationWorker) renderAndStoreSnapshot(ctx context.Context, record assetOperationRecord) (uuid.UUID, error) {
-	document, err := studioEditor.Decode(record.SourceDocument)
+	document, err := studioEditor.DecodeRenderable(record.SourceDocument)
 	if err != nil {
 		return uuid.Nil, w.failOperationAndCancel(ctx, record, "INVALID_EDITOR_DOCUMENT", "当前画布无法处理，请撤销最近修改")
 	}
@@ -661,7 +661,7 @@ func (w *AssetOperationWorker) persistPreparedLayerManifest(ctx context.Context,
 }
 
 func (w *AssetOperationWorker) publishEditorDocument(ctx context.Context, record assetOperationRecord) error {
-	document, err := studioEditor.Decode(record.SourceDocument)
+	document, err := studioEditor.DecodeRenderable(record.SourceDocument)
 	if err != nil {
 		return w.failOperation(ctx, record, "INVALID_EDITOR_DOCUMENT", "当前画布无法发布")
 	}

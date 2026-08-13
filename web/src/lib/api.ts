@@ -1,4 +1,5 @@
 import type { EditorDocument } from '#/features/editor/domain/document'
+import type { EditorDocumentV2 } from '#/features/editor/domain/document-v2'
 
 export type User = {
   id: string
@@ -67,7 +68,7 @@ export type EditorProject = {
   id: string
   source_asset_id: string
   name: string
-  document: EditorDocument
+  document: EditorDocument | EditorDocumentV2
   revision: number
   active_layer_set_id?: string
   active_layer_set?: LayerSet

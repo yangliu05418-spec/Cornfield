@@ -1,12 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 
-import type { EditorDocument } from '../domain/document'
+import type { EditorRenderDocument } from './scene-compiler'
 import type { Asset } from '#/lib/api'
 import type { EditorRenderAsset, EditorRenderer, EditorViewport } from './types'
 
 type PixiSurfaceProps = {
   enabled: boolean
-  document: EditorDocument
+  document: EditorRenderDocument
   assets?: ReadonlyMap<string, Asset>
   viewport: EditorViewport
   onUnavailable: (reason: string) => void

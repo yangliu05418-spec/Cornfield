@@ -39,6 +39,12 @@ import type { CSSProperties, PointerEvent as ReactPointerEvent } from 'react'
 import { AppShell } from '#/components/app-shell'
 import { ConfirmDialog } from '#/components/confirm-dialog'
 import { EditorHistory } from '#/features/editor/domain/history'
+import {
+  applyFlatEditorViewToV2,
+  projectFlatEditorDocumentV2,
+} from '#/features/editor/domain/flat-authoring-v2'
+import { migrateEditorDocumentV1ToV2 } from '#/features/editor/domain/document-v2'
+import type { EditorDocumentV2 } from '#/features/editor/domain/document-v2'
 import { PixiSurface } from '#/features/editor/renderer/pixi-surface'
 import { api, APIError } from '#/lib/api'
 import { mergeAssetIntoCaches } from '#/lib/asset-cache'
@@ -116,6 +122,7 @@ function ImageEditorPage() {
   const [documentState, setDocumentState] = useState<EditorDocument | null>(
     null,
   )
+  const [documentUnsupported, setDocumentUnsupported] = useState(false)
   const [, setHistoryRevision] = useState(0)
   const [selectedID, setSelectedID] = useState('')
   const [selectedIDs, setSelectedIDs] = useState<Set<string>>(new Set())
@@ -158,6 +165,9 @@ function ImageEditorPage() {
   const saveTimerRef = useRef<number | undefined>(undefined)
   const savePromiseRef = useRef<Promise<void> | null>(null)
   const documentRef = useRef<EditorDocument | null>(null)
+  const persistedDocumentRef = useRef<EditorDocument | EditorDocumentV2 | null>(
+    null,
+  )
   const historyRef = useRef(new EditorHistory(100))
   const appliedLayerSetRef = useRef<string | undefined>(undefined)
   const continuousHistoryRef = useRef<EditorDocument | null>(null)
@@ -176,11 +186,28 @@ function ImageEditorPage() {
 
   useEffect(() => {
     if (!projectQuery.data || documentRef.current) return
-    documentRef.current = projectQuery.data.document
-    setDocumentState(projectQuery.data.document)
-    setCanvasDraft(projectQuery.data.document.canvas)
+    const requestedV2 =
+      new URLSearchParams(window.location.search).get('document') === 'v2'
+    const persisted =
+      projectQuery.data.document.schema_version === 1 && requestedV2
+        ? migrateEditorDocumentV1ToV2(projectQuery.data.document)
+        : projectQuery.data.document
+    let projectedDocument: EditorDocument
+    try {
+      projectedDocument =
+        persisted.schema_version === 2
+          ? projectFlatEditorDocumentV2(persisted)
+          : persisted
+    } catch {
+      setDocumentUnsupported(true)
+      return
+    }
+    persistedDocumentRef.current = persisted
+    documentRef.current = projectedDocument
+    setDocumentState(projectedDocument)
+    setCanvasDraft(projectedDocument.canvas)
     revisionRef.current = projectQuery.data.revision
-    const initialSelection = projectQuery.data.document.objects.at(-1)?.id ?? ''
+    const initialSelection = projectedDocument.objects.at(-1)?.id ?? ''
     setSelectedID(initialSelection)
     setSelectedIDs(new Set(initialSelection ? [initialSelection] : []))
     setOperationID(projectQuery.data.latest_operation_id)
@@ -304,9 +331,9 @@ function ImageEditorPage() {
   }, [operation?.created_at, operation?.started_at, operationRunning])
 
   const saveNow = useCallback(async () => {
-    if (!dirtyRef.current || !documentRef.current) return
+    if (!dirtyRef.current || !persistedDocumentRef.current) return
     if (savePromiseRef.current) return savePromiseRef.current
-    const documentToSave = structuredClone(documentRef.current)
+    const documentToSave = structuredClone(persistedDocumentRef.current)
     const signature = JSON.stringify(documentToSave)
     setSaveState('saving')
     const task = saveEditorDocument(
@@ -316,7 +343,7 @@ function ImageEditorPage() {
     )
       .then((result) => {
         revisionRef.current = result.revision
-        if (JSON.stringify(documentRef.current) === signature) {
+        if (JSON.stringify(persistedDocumentRef.current) === signature) {
           dirtyRef.current = false
           setSaveState('saved')
         } else {
@@ -374,9 +401,18 @@ function ImageEditorPage() {
     if (!documentRef.current || operationRunning) return
     if (remember && historyRef.current.commit(documentRef.current, next))
       setHistoryRevision((value) => value + 1)
+    setEditorView(next)
+    scheduleSave()
+  }
+
+  function setEditorView(next: EditorDocument) {
+    const persisted = persistedDocumentRef.current
+    persistedDocumentRef.current =
+      persisted?.schema_version === 2
+        ? applyFlatEditorViewToV2(persisted, next)
+        : next
     documentRef.current = next
     setDocumentState(next)
-    scheduleSave()
   }
 
   function selectOnly(id = '') {
@@ -450,8 +486,7 @@ function ImageEditorPage() {
     if (!documentRef.current || !historyRef.current.canUndo || operationRunning)
       return
     const previous = historyRef.current.undo(documentRef.current)
-    documentRef.current = previous
-    setDocumentState(previous)
+    setEditorView(previous)
     setHistoryRevision((value) => value + 1)
     scheduleSave()
   }
@@ -460,8 +495,7 @@ function ImageEditorPage() {
     if (!documentRef.current || !historyRef.current.canRedo || operationRunning)
       return
     const next = historyRef.current.redo(documentRef.current)
-    documentRef.current = next
-    setDocumentState(next)
+    setEditorView(next)
     setHistoryRevision((value) => value + 1)
     scheduleSave()
   }
@@ -493,10 +527,13 @@ function ImageEditorPage() {
   }
 
   function downloadDocument() {
-    if (!documentRef.current) return
-    const blob = new Blob([JSON.stringify(documentRef.current, null, 2)], {
-      type: 'application/json',
-    })
+    if (!persistedDocumentRef.current) return
+    const blob = new Blob(
+      [JSON.stringify(persistedDocumentRef.current, null, 2)],
+      {
+        type: 'application/json',
+      },
+    )
     const href = URL.createObjectURL(blob)
     const link = document.createElement('a')
     link.href = href
@@ -591,8 +628,7 @@ function ImageEditorPage() {
             : item,
         ),
       } satisfies EditorDocument
-      documentRef.current = next
-      setDocumentState(next)
+      setEditorView(next)
     }
     const up = () => {
       window.removeEventListener('pointermove', move)
@@ -771,8 +807,7 @@ function ImageEditorPage() {
           item.id === object.id ? transformed : item,
         ),
       }
-      documentRef.current = next
-      setDocumentState(next)
+      setEditorView(next)
     }
     const up = () => {
       window.removeEventListener('pointermove', move)
@@ -963,8 +998,7 @@ function ImageEditorPage() {
           }
         }),
       } satisfies EditorDocument
-      documentRef.current = next
-      setDocumentState(next)
+      setEditorView(next)
     }
     const up = () => {
       window.removeEventListener('pointermove', move)
@@ -1644,6 +1678,23 @@ function ImageEditorPage() {
     [documentState],
   )
 
+  if (projectQuery.isError)
+    return (
+      <AppShell immersive>
+        <main className="editor-loading">图片编辑工程无法打开</main>
+      </AppShell>
+    )
+  if (documentUnsupported)
+    return (
+      <AppShell immersive>
+        <main className="editor-loading">
+          当前工程包含图层组或蒙版，请使用新版图层面板继续编辑。
+          <button type="button" onClick={() => void returnToWorkspace()}>
+            返回工作区
+          </button>
+        </main>
+      </AppShell>
+    )
   if (projectQuery.isLoading || !documentState)
     return (
       <AppShell immersive>
@@ -1653,13 +1704,6 @@ function ImageEditorPage() {
         </main>
       </AppShell>
     )
-  if (projectQuery.isError)
-    return (
-      <AppShell immersive>
-        <main className="editor-loading">图片编辑工程无法打开</main>
-      </AppShell>
-    )
-
   return (
     <AppShell immersive>
       <main className="image-editor">
@@ -3274,7 +3318,7 @@ function DecompositionWaiting({
 async function saveEditorDocument(
   url: string,
   expectedRevision: number,
-  document: EditorDocument,
+  document: EditorDocument | EditorDocumentV2,
 ): Promise<{ revision: number }> {
   for (let attempt = 0; ; attempt++) {
     try {

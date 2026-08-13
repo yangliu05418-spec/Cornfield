@@ -152,7 +152,8 @@ func (s *Server) writeMetrics(parent context.Context, w http.ResponseWriter) {
 	if err := s.db.QueryRow(ctx, `SELECT
 		COALESCE(EXTRACT(EPOCH FROM now()-(min(created_at) FILTER (WHERE outcome='started' AND finished_at IS NULL))),0),
 		count(*) FILTER (WHERE operation='submit' AND attempt_no>1 AND created_at>=now()-interval '5 minutes'),
-		(SELECT count(*) FROM generation_jobs WHERE status='submission_uncertain')
+		(SELECT count(*) FROM generation_jobs WHERE status='submission_uncertain')+
+		(SELECT count(*) FROM asset_operations WHERE status='submission_uncertain')
 		FROM provider_attempts`).Scan(&oldestStartedSeconds, &submitRetries, &uncertainJobs); err == nil {
 		fmt.Fprintln(w, "# TYPE image_studio_provider_oldest_started_attempt_seconds gauge")
 		fmt.Fprintf(w, "image_studio_provider_oldest_started_attempt_seconds %f\n", oldestStartedSeconds)
@@ -160,6 +161,19 @@ func (s *Server) writeMetrics(parent context.Context, w http.ResponseWriter) {
 		fmt.Fprintf(w, "image_studio_provider_submit_retries_5m %d\n", submitRetries)
 		fmt.Fprintln(w, "# TYPE image_studio_submission_uncertain_jobs gauge")
 		fmt.Fprintf(w, "image_studio_submission_uncertain_jobs %d\n", uncertainJobs)
+	}
+	operationRows, err := s.db.Query(ctx, `SELECT operation_type,status,count(*) FROM asset_operations
+		WHERE created_at>=now()-interval '24 hours' GROUP BY operation_type,status`)
+	if err == nil {
+		fmt.Fprintln(w, "# TYPE image_studio_asset_operations_24h gauge")
+		for operationRows.Next() {
+			var operationType, status string
+			var total int64
+			if operationRows.Scan(&operationType, &status, &total) == nil {
+				fmt.Fprintf(w, "image_studio_asset_operations_24h{operation=%q,status=%q} %d\n", operationType, status, total)
+			}
+		}
+		operationRows.Close()
 	}
 	heartbeatRows, err := s.db.Query(ctx, `SELECT service_name,EXTRACT(EPOCH FROM now()-max(heartbeat_at))
 		FROM service_heartbeats GROUP BY service_name ORDER BY service_name`)

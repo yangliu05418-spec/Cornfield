@@ -20,16 +20,21 @@ func (s *Server) deleteAsset(w http.ResponseWriter, r *http.Request) {
 	}
 	defer tx.Rollback(r.Context())
 	var ownerID uuid.UUID
+	var kind string
 	var pending bool
 	var purged bool
-	err = tx.QueryRow(r.Context(), `SELECT owner_user_id,purge_pending,purged_at IS NOT NULL FROM assets
-		WHERE id=$1 AND owner_user_id=$2 FOR UPDATE`, assetID, sess.UserID).Scan(&ownerID, &pending, &purged)
+	err = tx.QueryRow(r.Context(), `SELECT owner_user_id,kind,purge_pending,purged_at IS NOT NULL FROM assets
+		WHERE id=$1 AND owner_user_id=$2 FOR UPDATE`, assetID, sess.UserID).Scan(&ownerID, &kind, &pending, &purged)
 	if isNotFound(err) || purged {
 		writeError(w, http.StatusNotFound, "ASSET_NOT_FOUND", "资产不存在", false, r)
 		return
 	}
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "ASSET_DELETE_FAILED", "删除资产失败", true, r)
+		return
+	}
+	if kind == "derived" {
+		writeError(w, http.StatusConflict, "DERIVED_ASSET_MANAGED", "工作台内部图层由工程统一管理", false, r)
 		return
 	}
 	var requestID uuid.UUID

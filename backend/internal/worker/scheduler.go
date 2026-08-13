@@ -107,7 +107,8 @@ func (s *Scheduler) ListenNotifications(ctx context.Context) {
 		}
 		_, callbackErr := conn.Exec(ctx, "LISTEN provider_callbacks")
 		_, controlErr := conn.Exec(ctx, "LISTEN job_controls")
-		if callbackErr != nil || controlErr != nil {
+		_, operationErr := conn.Exec(ctx, "LISTEN asset_operations")
+		if callbackErr != nil || controlErr != nil || operationErr != nil {
 			conn.Release()
 			s.waitReconnect(ctx)
 			continue
@@ -116,6 +117,13 @@ func (s *Scheduler) ListenNotifications(ctx context.Context) {
 			notification, waitErr := conn.Conn().WaitForNotification(ctx)
 			if waitErr != nil {
 				break
+			}
+			if notification.Channel == "asset_operations" {
+				select {
+				case s.Wake <- struct{}{}:
+				default:
+				}
+				continue
 			}
 			jobID, parseErr := uuid.Parse(notification.Payload)
 			if parseErr != nil {
@@ -170,6 +178,10 @@ func (s *Scheduler) dispatch(ctx context.Context) {
 	defer tx.Rollback(ctx)
 	if err := s.recoverStagedIngests(ctx, tx); err != nil {
 		s.Log.Warn("staged ingest recovery scheduling failed", "error", err)
+		return
+	}
+	if err := s.dispatchAssetOperations(ctx, tx); err != nil {
+		s.Log.Warn("asset operation scheduling failed", "error", err)
 		return
 	}
 	free, diskErr := diskspace.FreePercent(s.AssetRoot)
@@ -294,6 +306,82 @@ func (s *Scheduler) dispatch(ctx context.Context) {
 	if err := tx.Commit(ctx); err != nil {
 		s.Log.Warn("scheduler commit failed", "error", err)
 	}
+}
+
+type AssetOperationArgs struct {
+	AssetOperationID string `json:"asset_operation_id" river:"unique"`
+}
+
+func (AssetOperationArgs) Kind() string { return "asset_operation.execute" }
+
+func assetOperationRiverInsertOpts() *river.InsertOpts {
+	return &river.InsertOpts{
+		MaxAttempts: 8,
+		Queue:       "asset_operations",
+		UniqueOpts: river.UniqueOpts{
+			ByArgs: true, ByQueue: true,
+			ByState: []rivertype.JobState{rivertype.JobStateAvailable, rivertype.JobStatePending, rivertype.JobStateRetryable, rivertype.JobStateRunning, rivertype.JobStateScheduled},
+		},
+	}
+}
+
+func (s *Scheduler) dispatchAssetOperations(ctx context.Context, tx pgx.Tx) error {
+	rows, err := tx.Query(ctx, `WITH active AS (
+		SELECT owner_user_id,count(*)::int AS count FROM asset_operations
+		WHERE status NOT IN ('queued','succeeded','failed','cancelled','submission_uncertain') GROUP BY owner_user_id
+	), candidates AS (
+		SELECT o.id,o.owner_user_id,o.created_at,
+			row_number() OVER(PARTITION BY o.owner_user_id ORDER BY o.created_at,o.id) AS user_rank,
+			COALESCE(a.count,0) AS active_count
+		FROM asset_operations o
+		LEFT JOIN active a ON a.owner_user_id=o.owner_user_id
+		LEFT JOIN providers p ON p.id=o.provider_id
+		WHERE o.dispatch_state='pending' AND o.status='queued' AND o.next_attempt_at<=now()
+		  AND (o.provider_id IS NULL OR (p.enabled=true AND p.state<>'paused'))
+	) SELECT id,owner_user_id FROM candidates
+	WHERE user_rank<=GREATEST(0,1-active_count)
+	ORDER BY user_rank,created_at LIMIT 16`)
+	if err != nil {
+		return err
+	}
+	type candidate struct{ id, ownerID uuid.UUID }
+	items := make([]candidate, 0, 16)
+	for rows.Next() {
+		var item candidate
+		if err = rows.Scan(&item.id, &item.ownerID); err != nil {
+			rows.Close()
+			return err
+		}
+		items = append(items, item)
+	}
+	if err = rows.Err(); err != nil {
+		rows.Close()
+		return err
+	}
+	rows.Close()
+	for _, item := range items {
+		result, insertErr := s.River.InsertTx(ctx, tx, AssetOperationArgs{AssetOperationID: item.id.String()}, assetOperationRiverInsertOpts())
+		if insertErr != nil {
+			return insertErr
+		}
+		if result == nil || result.Job == nil {
+			return errors.New("asset operation River insert returned no job")
+		}
+		command, updateErr := tx.Exec(ctx, `UPDATE asset_operations SET dispatch_state='dispatched',status='dispatched',river_job_id=$2,started_at=COALESCE(started_at,now()),updated_at=now()
+			WHERE id=$1 AND dispatch_state='pending'`, item.id, result.Job.ID)
+		if updateErr != nil {
+			return updateErr
+		}
+		if command.RowsAffected() == 0 {
+			continue
+		}
+		if _, err = tx.Exec(ctx, `INSERT INTO job_events(owner_user_id,asset_operation_id,editor_project_id,event_type,payload)
+			SELECT owner_user_id,id,editor_project_id,'asset_operation.updated',jsonb_build_object('id',id,'status','dispatched','editor_project_id',editor_project_id)
+			FROM asset_operations WHERE id=$1`, item.id); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func generationRiverInsertOpts() *river.InsertOpts {

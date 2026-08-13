@@ -52,6 +52,9 @@ type Capabilities struct {
 	MaxReferenceBytes        int64               `yaml:"max_reference_bytes" json:"max_reference_bytes"`
 	DrawCount                DrawCount           `yaml:"draw_count" json:"draw_count"`
 	MidjourneyVersions       []string            `yaml:"midjourney_versions,omitempty" json:"midjourney_versions,omitempty"`
+	LayerDecomposition       bool                `yaml:"layer_decomposition,omitempty" json:"layer_decomposition,omitempty"`
+	LayerDecompositionSizes  []string            `yaml:"layer_decomposition_sizes,omitempty" json:"layer_decomposition_sizes,omitempty"`
+	MaxDecompositionLayers   int                 `yaml:"max_decomposition_layers,omitempty" json:"max_decomposition_layers,omitempty"`
 }
 
 type DrawCount struct {
@@ -61,14 +64,15 @@ type DrawCount struct {
 }
 
 type Policy struct {
-	SubmitTimeoutSeconds     int      `yaml:"submit_timeout_seconds" json:"submit_timeout_seconds"`
-	GenerationTimeoutSeconds int      `yaml:"generation_timeout_seconds" json:"generation_timeout_seconds"`
-	MaxConcurrency           int      `yaml:"max_concurrency" json:"max_concurrency"`
-	MaxSafeRetries           int      `yaml:"max_safe_retries" json:"max_safe_retries"`
-	BreakerMinRequests       int      `yaml:"breaker_min_requests" json:"breaker_min_requests"`
-	BreakerFailureRatio      float64  `yaml:"breaker_failure_ratio" json:"breaker_failure_ratio"`
-	BreakerCooldownSeconds   int      `yaml:"breaker_cooldown_seconds" json:"breaker_cooldown_seconds"`
-	AllowedOutputHosts       []string `yaml:"allowed_output_hosts" json:"allowed_output_hosts"`
+	SubmitTimeoutSeconds             int      `yaml:"submit_timeout_seconds" json:"submit_timeout_seconds"`
+	GenerationTimeoutSeconds         int      `yaml:"generation_timeout_seconds" json:"generation_timeout_seconds"`
+	MaxConcurrency                   int      `yaml:"max_concurrency" json:"max_concurrency"`
+	MaxSafeRetries                   int      `yaml:"max_safe_retries" json:"max_safe_retries"`
+	BreakerMinRequests               int      `yaml:"breaker_min_requests" json:"breaker_min_requests"`
+	BreakerFailureRatio              float64  `yaml:"breaker_failure_ratio" json:"breaker_failure_ratio"`
+	BreakerCooldownSeconds           int      `yaml:"breaker_cooldown_seconds" json:"breaker_cooldown_seconds"`
+	AllowedOutputHosts               []string `yaml:"allowed_output_hosts" json:"allowed_output_hosts"`
+	LayerDecompositionTimeoutSeconds int      `yaml:"layer_decomposition_timeout_seconds,omitempty" json:"layer_decomposition_timeout_seconds,omitempty"`
 }
 
 var legacyPolicyJSONKeys = [][2]string{
@@ -80,6 +84,7 @@ var legacyPolicyJSONKeys = [][2]string{
 	{"BreakerFailureRatio", "breaker_failure_ratio"},
 	{"BreakerCooldownSeconds", "breaker_cooldown_seconds"},
 	{"AllowedOutputHosts", "allowed_output_hosts"},
+	{"LayerDecompositionTimeoutSeconds", "layer_decomposition_timeout_seconds"},
 }
 
 func (p *Policy) UnmarshalJSON(data []byte) error {
@@ -329,6 +334,23 @@ func (c Catalog) MaxSubmitTimeout() time.Duration {
 	return maximum
 }
 
+// MaxOperationTimeout is the final business timeout boundary used by River.
+// It includes synchronous generation submits and optional long-running asset
+// operations such as layer decomposition.
+func (c Catalog) MaxOperationTimeout() time.Duration {
+	maximum := c.MaxSubmitTimeout()
+	for _, model := range c.Models {
+		if !model.Enabled || model.Policy.LayerDecompositionTimeoutSeconds <= 0 {
+			continue
+		}
+		candidate := time.Duration(model.Policy.LayerDecompositionTimeoutSeconds) * time.Second
+		if candidate > maximum {
+			maximum = candidate
+		}
+	}
+	return maximum
+}
+
 func (m Model) AspectRatiosForResolution(resolution string) []string {
 	if ratios, ok := m.Capabilities.AspectRatiosByResolution[resolution]; ok {
 		return ratios
@@ -382,6 +404,25 @@ func validateCapabilities(m Model) error {
 	}
 	if duplicateOrBlank(capabilities.PromptOptimizationModes) {
 		return fmt.Errorf("model %s has blank or duplicate prompt optimization modes", m.ID)
+	}
+	if duplicateOrBlank(capabilities.LayerDecompositionSizes) {
+		return fmt.Errorf("model %s has blank or duplicate layer decomposition sizes", m.ID)
+	}
+	if capabilities.LayerDecomposition || len(capabilities.LayerDecompositionSizes) > 0 || capabilities.MaxDecompositionLayers != 0 || m.Policy.LayerDecompositionTimeoutSeconds != 0 {
+		if m.Provider != "byteplus" {
+			return fmt.Errorf("model %s enables layer decomposition for an unsupported provider", m.ID)
+		}
+		if len(capabilities.LayerDecompositionSizes) == 0 || capabilities.MaxDecompositionLayers < 1 || capabilities.MaxDecompositionLayers > 16 {
+			return fmt.Errorf("model %s has invalid layer decomposition capability", m.ID)
+		}
+		if m.Policy.LayerDecompositionTimeoutSeconds < 60 {
+			return fmt.Errorf("model %s layer decomposition timeout must be at least 60 seconds", m.ID)
+		}
+		for _, size := range capabilities.LayerDecompositionSizes {
+			if size != "auto" && size != "1K" && size != "1.5K" && size != "2K" {
+				return fmt.Errorf("model %s has unsupported layer decomposition size %q", m.ID, size)
+			}
+		}
 	}
 	if capabilities.MaxReferenceImages < 0 || capabilities.MaxReferenceImages > 16 {
 		return fmt.Errorf("model %s has invalid max_reference_images", m.ID)

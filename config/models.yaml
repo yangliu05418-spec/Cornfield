@@ -203,7 +203,7 @@ models:
     provider_model: dola-seedream-5-0-pro-260628
     enabled: true
     order: 75
-    request_parameters: ["size", "input_references", "response_format", "output_format", "watermark", "prompt_optimization_mode"]
+    request_parameters: ["size", "input_references", "response_format", "output_format", "watermark", "prompt_optimization_mode", "layer_decomposition"]
     outputs_per_draw: 1
     capabilities:
       text_to_image: true
@@ -211,6 +211,9 @@ models:
       aspect_ratios: ["1:1", "4:3", "3:4", "16:9", "9:16", "3:2", "2:3", "21:9"]
       resolutions: ["1K", "1.5K", "2K"]
       prompt_optimization_modes: ["standard", "fast"]
+      layer_decomposition: false
+      layer_decomposition_sizes: ["auto", "1K", "1.5K", "2K"]
+      max_decomposition_layers: 16
       max_reference_images: 10
       max_reference_bytes: 26214400
       draw_count: { min: 1, max: 4, default: 1 }
@@ -242,7 +245,7 @@ models:
         "3:2": "2496x1664"
         "2:3": "1664x2496"
         "21:9": "3136x1344"
-    policy: { submit_timeout_seconds: 300, generation_timeout_seconds: 360, max_concurrency: 2, max_safe_retries: 2, breaker_min_requests: 10, breaker_failure_ratio: 0.5, breaker_cooldown_seconds: 30, allowed_output_hosts: [] }
+    policy: { submit_timeout_seconds: 300, generation_timeout_seconds: 360, layer_decomposition_timeout_seconds: 600, max_concurrency: 2, max_safe_retries: 2, breaker_min_requests: 10, breaker_failure_ratio: 0.5, breaker_cooldown_seconds: 30, allowed_output_hosts: [] }
 
   - id: openrouter-flux-2-pro
     display_name: "Black Forest Labs: FLUX.2 Pro"

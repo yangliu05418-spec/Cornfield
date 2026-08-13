@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptrace"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -21,12 +22,15 @@ const (
 	bytePlusMaxReferences = 10
 	bytePlusMaxBodyBytes  = 160 << 20
 	bytePlusProbeInterval = 5 * time.Minute
+	bytePlusLayerTimeout  = 10 * time.Minute
+	bytePlusMaxLayers     = 16
 )
 
 type BytePlus struct {
-	APIKey  string
-	BaseURL string
-	Client  *http.Client
+	APIKey      string
+	BaseURL     string
+	Client      *http.Client
+	LayerClient *http.Client
 
 	probeMu       sync.Mutex
 	probeAt       time.Time
@@ -45,8 +49,150 @@ func NewBytePlusWithSubmitTimeout(apiKey string, submitTimeout time.Duration) *B
 	return &BytePlus{
 		APIKey: apiKey, BaseURL: bytePlusBaseURL,
 		Client:        newHTTPClient(submitTimeout+20*time.Second, submitTimeout+10*time.Second),
+		LayerClient:   newHTTPClient(bytePlusLayerTimeout+20*time.Second, bytePlusLayerTimeout+10*time.Second),
 		ProbeInterval: bytePlusProbeInterval,
 	}
+}
+
+type bytePlusLayerRequest struct {
+	Model                 string                 `json:"model"`
+	Prompt                string                 `json:"prompt,omitempty"`
+	Image                 string                 `json:"image"`
+	Size                  string                 `json:"size"`
+	ResponseFormat        string                 `json:"response_format"`
+	OutputFormat          string                 `json:"output_format"`
+	Watermark             bool                   `json:"watermark"`
+	LayerDecomposition    bool                   `json:"layer_decomposition"`
+	OptimizePromptOptions *bytePlusPromptOptions `json:"optimize_prompt_options,omitempty"`
+}
+
+type bytePlusLayerResponse struct {
+	Data []struct {
+		URL          string `json:"url"`
+		Size         string `json:"size"`
+		OutputFormat string `json:"output_format"`
+		ZIndex       int    `json:"z_index"`
+		BoundingBox  *struct {
+			Absolute   [4]int     `json:"absolute"`
+			Normalized [4]float64 `json:"normalized"`
+		} `json:"bounding_box"`
+		Name        string                `json:"name"`
+		Description string                `json:"description"`
+		Error       bytePlusErrorEnvelope `json:"error"`
+	} `json:"data"`
+	Usage map[string]any        `json:"usage"`
+	Error bytePlusErrorEnvelope `json:"error"`
+}
+
+func (b *BytePlus) DecomposeLayers(ctx context.Context, input LayerDecompositionRequest) (LayerDecompositionResult, error) {
+	if strings.TrimSpace(input.Image) == "" {
+		return LayerDecompositionResult{}, &Error{Code: "INVALID_LAYER_INPUT", Message: "layer decomposition requires one image"}
+	}
+	if utf8.RuneCountInString(input.Prompt) > 8192 {
+		return LayerDecompositionResult{}, &Error{Code: "PROMPT_TOO_LONG", Message: "final BytePlus prompt exceeds 8192 characters"}
+	}
+	if input.Size == "" {
+		input.Size = "auto"
+	}
+	if input.Size != "auto" && input.Size != "1K" && input.Size != "1.5K" && input.Size != "2K" {
+		return LayerDecompositionResult{}, &Error{Code: "UNSUPPORTED_PARAMETER", Message: "unsupported layer decomposition size"}
+	}
+	mode := input.PromptOptimizationMode
+	if mode == "" {
+		mode = "standard"
+	}
+	if mode != "standard" && mode != "fast" {
+		return LayerDecompositionResult{}, &Error{Code: "UNSUPPORTED_PARAMETER", Message: "unsupported BytePlus prompt optimization mode"}
+	}
+	payload := bytePlusLayerRequest{
+		Model: input.Model, Prompt: strings.TrimSpace(input.Prompt), Image: input.Image,
+		Size: input.Size, ResponseFormat: "url", OutputFormat: "png", Watermark: false,
+		LayerDecomposition: true, OptimizePromptOptions: &bytePlusPromptOptions{Mode: mode},
+	}
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return LayerDecompositionResult{}, err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(b.BaseURL, "/")+"/images/generations", bytes.NewReader(body))
+	if err != nil {
+		return LayerDecompositionResult{}, err
+	}
+	req.Header.Set("Authorization", "Bearer "+b.APIKey)
+	req.Header.Set("Content-Type", "application/json")
+	var requestWritten atomic.Bool
+	req = req.WithContext(httptrace.WithClientTrace(req.Context(), &httptrace.ClientTrace{
+		WroteRequest: func(httptrace.WroteRequestInfo) { requestWritten.Store(true) },
+	}))
+	client := b.LayerClient
+	if client == nil {
+		client = newHTTPClient(bytePlusLayerTimeout+20*time.Second, bytePlusLayerTimeout+10*time.Second)
+	}
+	res, err := client.Do(req)
+	if err != nil {
+		if !requestWritten.Load() {
+			return LayerDecompositionResult{}, &Error{Code: "PROVIDER_CONNECT_FAILED", Message: "provider connection failed before the request was written", Retryable: true}
+		}
+		return LayerDecompositionResult{}, &Error{Code: "SUBMISSION_UNCERTAIN", Message: sanitizeProviderErrorDetail(err.Error(), []string{b.APIKey, input.Prompt, input.Image}), SubmissionUncertain: true}
+	}
+	defer res.Body.Close()
+	if res.StatusCode < 200 || res.StatusCode >= 300 {
+		return LayerDecompositionResult{}, bytePlusHTTPError(res, b.APIKey, input.Prompt, input.Image)
+	}
+	limited := &io.LimitedReader{R: res.Body, N: 2<<20 + 1}
+	var response bytePlusLayerResponse
+	if err := json.NewDecoder(limited).Decode(&response); err != nil || limited.N == 0 {
+		return LayerDecompositionResult{}, &Error{Code: "SUBMISSION_UNCERTAIN", Message: "BytePlus accepted layer decomposition but returned an invalid response", SubmissionUncertain: true, Telemetry: responseTelemetryExcluding(res, []string{b.APIKey, input.Prompt, input.Image})}
+	}
+	telemetry := responseTelemetryExcluding(res, []string{b.APIKey, input.Prompt, input.Image})
+	if response.Error.Code != "" || response.Error.Message != "" {
+		return LayerDecompositionResult{}, bytePlusStructuredError(res.StatusCode, response.Error, telemetry, b.APIKey, input.Prompt, input.Image)
+	}
+	if len(response.Data) < 2 || len(response.Data) > bytePlusMaxLayers+1 {
+		return LayerDecompositionResult{}, &Error{Code: "PROVIDER_RESPONSE_INVALID", Message: "BytePlus returned an invalid layer count", Telemetry: telemetry}
+	}
+	items := make([]LayerDecompositionItem, 0, len(response.Data))
+	seen := make(map[int]struct{}, len(response.Data))
+	for _, item := range response.Data {
+		if item.Error.Code != "" || item.Error.Message != "" {
+			return LayerDecompositionResult{}, bytePlusStructuredError(res.StatusCode, item.Error, telemetry, b.APIKey, input.Prompt, input.Image)
+		}
+		if strings.TrimSpace(item.URL) == "" || item.ZIndex < 0 || item.ZIndex > bytePlusMaxLayers {
+			return LayerDecompositionResult{}, &Error{Code: "PROVIDER_RESPONSE_INVALID", Message: "BytePlus returned invalid layer metadata", Telemetry: telemetry}
+		}
+		if _, duplicate := seen[item.ZIndex]; duplicate {
+			return LayerDecompositionResult{}, &Error{Code: "PROVIDER_RESPONSE_INVALID", Message: "BytePlus returned duplicate layer order", Telemetry: telemetry}
+		}
+		seen[item.ZIndex] = struct{}{}
+		output := LayerDecompositionItem{URL: item.URL, Size: item.Size, ZIndex: item.ZIndex, Name: item.Name, Description: item.Description}
+		if strings.EqualFold(item.OutputFormat, "jpeg") || strings.EqualFold(item.OutputFormat, "jpg") {
+			output.MediaType = "image/jpeg"
+		} else {
+			output.MediaType = "image/png"
+		}
+		if item.ZIndex == 0 {
+			if item.BoundingBox != nil {
+				return LayerDecompositionResult{}, &Error{Code: "PROVIDER_RESPONSE_INVALID", Message: "BytePlus returned a bounding box for the base layer", Telemetry: telemetry}
+			}
+		} else {
+			if item.BoundingBox == nil || strings.TrimSpace(item.Name) == "" {
+				return LayerDecompositionResult{}, &Error{Code: "PROVIDER_RESPONSE_INVALID", Message: "BytePlus returned incomplete layer metadata", Telemetry: telemetry}
+			}
+			absolute := item.BoundingBox.Absolute
+			normalized := item.BoundingBox.Normalized
+			if absolute[0] < 0 || absolute[1] < 0 || absolute[2] <= absolute[0] || absolute[3] <= absolute[1] ||
+				normalized[0] < 0 || normalized[1] < 0 || normalized[2] <= normalized[0] || normalized[3] <= normalized[1] ||
+				normalized[2] > 1000 || normalized[3] > 1000 {
+				return LayerDecompositionResult{}, &Error{Code: "PROVIDER_RESPONSE_INVALID", Message: "BytePlus returned an invalid layer bounding box", Telemetry: telemetry}
+			}
+			output.BoundingBox = &LayerBoundingBox{Absolute: item.BoundingBox.Absolute, Normalized: item.BoundingBox.Normalized}
+		}
+		items = append(items, output)
+	}
+	if _, ok := seen[0]; !ok {
+		return LayerDecompositionResult{}, &Error{Code: "PROVIDER_RESPONSE_INVALID", Message: "BytePlus response is missing the base layer", Telemetry: telemetry}
+	}
+	sort.Slice(items, func(i, j int) bool { return items[i].ZIndex < items[j].ZIndex })
+	return LayerDecompositionResult{Items: items, Usage: response.Usage, Telemetry: telemetry}, nil
 }
 
 type bytePlusPromptOptions struct {

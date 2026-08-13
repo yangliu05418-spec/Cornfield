@@ -1,0 +1,48 @@
+{
+  "schema_version": 2,
+  "renderer_semantics_version": 1,
+  "canvas": { "width": 256, "height": 256 },
+  "nodes": [
+    {
+      "id": "mask",
+      "type": "raster",
+      "name": "Mask",
+      "parent_id": null,
+      "order_key": "00000001",
+      "transform": [1, 0, 0, 1, 76, 66],
+      "opacity": 0.65,
+      "blend_mode": "normal",
+      "visible": true,
+      "locked": false,
+      "asset_id": "33333333-3333-4333-8333-333333333333",
+      "effects": []
+    },
+    {
+      "id": "group",
+      "type": "group",
+      "name": "Subject",
+      "parent_id": null,
+      "order_key": "00000002",
+      "transform": [0, 1.2, -1.2, 0, 204, 54],
+      "opacity": 0.7,
+      "blend_mode": "normal",
+      "visible": true,
+      "locked": false
+    },
+    {
+      "id": "content",
+      "type": "raster",
+      "name": "Content",
+      "parent_id": "group",
+      "order_key": "00000001",
+      "transform": [1, 0, 0, 1, 3, 4],
+      "opacity": 0.8,
+      "blend_mode": "normal",
+      "visible": true,
+      "locked": false,
+      "mask_id": "mask",
+      "asset_id": "44444444-4444-4444-8444-444444444444",
+      "effects": []
+    }
+  ]
+}

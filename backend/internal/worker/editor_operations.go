@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"image"
 	"image/color"
+	stddraw "image/draw"
 	"image/jpeg"
 	"image/png"
 	"io"
@@ -19,7 +20,6 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
-	"sort"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -294,7 +294,7 @@ func (w *AssetOperationWorker) decompose(ctx context.Context, record assetOperat
 }
 
 func (w *AssetOperationWorker) renderAndStoreSnapshot(ctx context.Context, record assetOperationRecord) (uuid.UUID, error) {
-	document, err := studioEditor.DecodeRenderable(record.SourceDocument)
+	scene, err := studioEditor.DecodeRenderScene(record.SourceDocument)
 	if err != nil {
 		return uuid.Nil, w.failOperationAndCancel(ctx, record, "INVALID_EDITOR_DOCUMENT", "当前画布无法处理，请撤销最近修改")
 	}
@@ -308,7 +308,7 @@ func (w *AssetOperationWorker) renderAndStoreSnapshot(ctx context.Context, recor
 			return uuid.Nil, ctx.Err()
 		}
 	}
-	if err = w.renderDocument(ctx, record.OwnerID, document, tempPath); err != nil {
+	if err = w.renderDocument(ctx, record.OwnerID, scene, tempPath); err != nil {
 		return uuid.Nil, err
 	}
 	mediaType, extension, width, height, err := validateProviderImageFile(tempPath)
@@ -408,8 +408,8 @@ func encodeOpaqueJPEG(path string, quality int) error {
 	return err
 }
 
-func (w *AssetOperationWorker) renderDocument(ctx context.Context, ownerID uuid.UUID, document studioEditor.Document, target string) error {
-	canvas, err := compositeEditorDocument(ctx, document, func(assetID uuid.UUID) (image.Image, error) {
+func (w *AssetOperationWorker) renderDocument(ctx context.Context, ownerID uuid.UUID, scene studioEditor.RenderScene, target string) error {
+	canvas, err := compositeEditorScene(ctx, scene, func(assetID uuid.UUID) (image.Image, error) {
 		var storageKey string
 		err := w.DB.QueryRow(ctx, `SELECT storage_key FROM assets WHERE id=$1 AND owner_user_id=$2 AND purged_at IS NULL AND purge_pending=false`, assetID, ownerID).Scan(&storageKey)
 		if err != nil {
@@ -441,39 +441,120 @@ func (w *AssetOperationWorker) renderDocument(ctx context.Context, ownerID uuid.
 }
 
 func compositeEditorDocument(ctx context.Context, document studioEditor.Document, load func(uuid.UUID) (image.Image, error)) (*image.RGBA, error) {
-	canvas := image.NewRGBA(image.Rect(0, 0, document.Canvas.Width, document.Canvas.Height))
-	objects := append([]studioEditor.Object(nil), document.Objects...)
-	sort.SliceStable(objects, func(i, j int) bool { return objects[i].ZIndex < objects[j].ZIndex })
-	for _, object := range objects {
-		if !object.Visible || object.Opacity == 0 {
+	scene, err := studioEditor.CompileV1RenderScene(document)
+	if err != nil {
+		return nil, err
+	}
+	return compositeEditorScene(ctx, scene, load)
+}
+
+func compositeEditorScene(ctx context.Context, scene studioEditor.RenderScene, load func(uuid.UUID) (image.Image, error)) (*image.RGBA, error) {
+	if err := scene.Validate(); err != nil {
+		return nil, err
+	}
+	canvasBounds := image.Rect(0, 0, scene.Canvas.Width, scene.Canvas.Height)
+	canvas := image.NewRGBA(canvasBounds)
+	nodesByID := make(map[string]studioEditor.RenderNode, len(scene.Nodes))
+	for _, node := range scene.Nodes {
+		nodesByID[node.ID] = node
+	}
+	for _, node := range scene.Nodes {
+		if node.Role != studioEditor.RenderRoleContent || !node.Visible || node.Opacity == 0 {
 			continue
 		}
-		source, err := load(object.AssetID)
+		source, err := load(node.AssetID)
 		if err != nil {
 			return nil, err
 		}
 		sourceBounds := source.Bounds()
 		crop := sourceBounds
-		if object.Crop != nil {
+		if node.Crop != nil {
 			crop = image.Rect(
-				sourceBounds.Min.X+int(math.Round(float64(sourceBounds.Dx())*object.Crop.X)),
-				sourceBounds.Min.Y+int(math.Round(float64(sourceBounds.Dy())*object.Crop.Y)),
-				sourceBounds.Min.X+int(math.Round(float64(sourceBounds.Dx())*(object.Crop.X+object.Crop.Width))),
-				sourceBounds.Min.Y+int(math.Round(float64(sourceBounds.Dy())*(object.Crop.Y+object.Crop.Height))),
+				sourceBounds.Min.X+int(math.Round(float64(sourceBounds.Dx())*node.Crop.X)),
+				sourceBounds.Min.Y+int(math.Round(float64(sourceBounds.Dy())*node.Crop.Y)),
+				sourceBounds.Min.X+int(math.Round(float64(sourceBounds.Dx())*(node.Crop.X+node.Crop.Width))),
+				sourceBounds.Min.Y+int(math.Round(float64(sourceBounds.Dy())*(node.Crop.Y+node.Crop.Height))),
 			).Intersect(sourceBounds)
 		}
-		matrix := f64.Aff3{object.Transform[0], object.Transform[2], object.Transform[4], object.Transform[1], object.Transform[3], object.Transform[5]}
-		var options *draw.Options
-		if object.Opacity < 0.999 {
-			options = &draw.Options{SrcMask: image.NewUniform(color.Alpha{A: uint8(math.Round(object.Opacity * 255))})}
+		if crop.Empty() {
+			continue
 		}
-		draw.BiLinear.Transform(canvas, matrix, source, crop, draw.Over, options)
+		if node.MaskNodeID == nil {
+			drawEditorNode(canvas, node, source, crop)
+		} else {
+			maskNode, exists := nodesByID[*node.MaskNodeID]
+			if !exists || !maskNode.Visible || maskNode.Opacity == 0 {
+				continue
+			}
+			maskSource, loadErr := load(maskNode.AssetID)
+			if loadErr != nil {
+				return nil, loadErr
+			}
+			if renderErr := drawMaskedEditorNode(canvas, canvasBounds, node, source, crop, maskNode, maskSource); renderErr != nil {
+				return nil, renderErr
+			}
+			maskSource = nil
+		}
 		source = nil
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
 	}
 	return canvas, nil
+}
+
+func drawEditorNode(destination *image.RGBA, node studioEditor.RenderNode, source image.Image, sourceBounds image.Rectangle) {
+	matrix := affineMatrix(node.Transform, 0, 0)
+	var options *draw.Options
+	if node.Opacity < 0.999 {
+		options = &draw.Options{SrcMask: image.NewUniform(color.Alpha{A: uint8(math.Round(node.Opacity * 255))})}
+	}
+	draw.BiLinear.Transform(destination, matrix, source, sourceBounds, draw.Over, options)
+}
+
+func drawMaskedEditorNode(destination *image.RGBA, canvasBounds image.Rectangle, node studioEditor.RenderNode, source image.Image, sourceBounds image.Rectangle, maskNode studioEditor.RenderNode, maskSource image.Image) error {
+	bounds := transformedBounds(node.Transform, sourceBounds).Intersect(canvasBounds)
+	if bounds.Empty() {
+		return nil
+	}
+	layer := image.NewRGBA(image.Rect(0, 0, bounds.Dx(), bounds.Dy()))
+	draw.BiLinear.Transform(layer, affineMatrix(node.Transform, bounds.Min.X, bounds.Min.Y), source, sourceBounds, draw.Src, nil)
+	mask := image.NewAlpha(layer.Bounds())
+	draw.BiLinear.Transform(mask, affineMatrix(maskNode.Transform, bounds.Min.X, bounds.Min.Y), maskSource, maskSource.Bounds(), draw.Src, nil)
+	opacity := node.Opacity * maskNode.Opacity
+	for y := 0; y < layer.Bounds().Dy(); y++ {
+		for x := 0; x < layer.Bounds().Dx(); x++ {
+			pixelOffset := layer.PixOffset(x, y)
+			maskAlpha := float64(mask.AlphaAt(x, y).A) / 255 * opacity
+			for channel := 0; channel < 4; channel++ {
+				layer.Pix[pixelOffset+channel] = uint8(math.Round(float64(layer.Pix[pixelOffset+channel]) * maskAlpha))
+			}
+		}
+	}
+	stddraw.Draw(destination, bounds, layer, image.Point{}, stddraw.Over)
+	return nil
+}
+
+func affineMatrix(transform [6]float64, offsetX, offsetY int) f64.Aff3 {
+	return f64.Aff3{transform[0], transform[2], transform[4] - float64(offsetX), transform[1], transform[3], transform[5] - float64(offsetY)}
+}
+
+func transformedBounds(transform [6]float64, source image.Rectangle) image.Rectangle {
+	points := [][2]float64{
+		{float64(source.Min.X), float64(source.Min.Y)},
+		{float64(source.Max.X), float64(source.Min.Y)},
+		{float64(source.Min.X), float64(source.Max.Y)},
+		{float64(source.Max.X), float64(source.Max.Y)},
+	}
+	minX, minY := math.Inf(1), math.Inf(1)
+	maxX, maxY := math.Inf(-1), math.Inf(-1)
+	for _, point := range points {
+		x := transform[0]*point[0] + transform[2]*point[1] + transform[4]
+		y := transform[1]*point[0] + transform[3]*point[1] + transform[5]
+		minX, minY = math.Min(minX, x), math.Min(minY, y)
+		maxX, maxY = math.Max(maxX, x), math.Max(maxY, y)
+	}
+	return image.Rect(int(math.Floor(minX))-1, int(math.Floor(minY))-1, int(math.Ceil(maxX))+1, int(math.Ceil(maxY))+1)
 }
 
 func (w *AssetOperationWorker) snapshotDataURL(ctx context.Context, assetID uuid.UUID) (string, error) {
@@ -661,7 +742,7 @@ func (w *AssetOperationWorker) persistPreparedLayerManifest(ctx context.Context,
 }
 
 func (w *AssetOperationWorker) publishEditorDocument(ctx context.Context, record assetOperationRecord) error {
-	document, err := studioEditor.DecodeRenderable(record.SourceDocument)
+	scene, err := studioEditor.DecodeRenderScene(record.SourceDocument)
 	if err != nil {
 		return w.failOperation(ctx, record, "INVALID_EDITOR_DOCUMENT", "当前画布无法发布")
 	}
@@ -670,7 +751,7 @@ func (w *AssetOperationWorker) publishEditorDocument(ctx context.Context, record
 	}
 	tempPath := filepath.Join(w.Config.AssetRoot, "uploads", "tmp", "editor-publish-"+record.ID.String()+"-"+uuid.NewString()+".part.png")
 	defer os.Remove(tempPath)
-	if err = w.renderDocument(ctx, record.OwnerID, document, tempPath); err != nil {
+	if err = w.renderDocument(ctx, record.OwnerID, scene, tempPath); err != nil {
 		return err
 	}
 	stored, err := w.storeLayerFile(ctx, tempPath)

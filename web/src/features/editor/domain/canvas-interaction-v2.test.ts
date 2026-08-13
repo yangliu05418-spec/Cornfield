@@ -5,6 +5,7 @@ import {
   editorSelectionContainsNode,
   editorSelectionBounds,
   hitTestEditorDocument,
+  transformEditorNodesAroundWorldPoint,
   translateEditorNodes,
 } from './canvas-interaction-v2'
 
@@ -108,6 +109,56 @@ describe('V2 canvas interaction geometry', () => {
       }),
     ).toThrow('Locked')
   })
+
+  it('scales a nested selection around a world point without losing its parent', () => {
+    const group = groupNode('group', null, 0)
+    group.transform = [0, 2, -2, 0, 100, 20]
+    const child = raster('child', 'group', 'asset-b', 0)
+    child.transform = [1, 0, 0, 1, 5, 6]
+    const moved = transformEditorNodesAroundWorldPoint(
+      v2([group, child]),
+      new Set(['child']),
+      { x: 50, y: 50 },
+      { type: 'scale', factor: 2 },
+    )
+    expect(moved.nodes.find((node) => node.id === 'child')?.parent_id).toBe(
+      'group',
+    )
+    expect(moved.nodes.find((node) => node.id === 'child')?.transform).toEqual([
+      2, 0, 0, 2, -5, -13,
+    ])
+  })
+
+  it('rotates selected roots once when a group and child are both selected', () => {
+    const group = groupNode('group', null, 0)
+    group.transform = [1, 0, 0, 1, 10, 0]
+    const child = raster('child', 'group', 'asset-b', 0)
+    child.transform = [1, 0, 0, 1, 5, 0]
+    const moved = transformEditorNodesAroundWorldPoint(
+      v2([group, child]),
+      new Set(['group', 'child']),
+      { x: 0, y: 0 },
+      { type: 'rotate', degrees: 90 },
+    )
+    const transformedGroup = moved.nodes.find((node) => node.id === 'group')!
+    expect(transformedGroup.transform.map(round)).toEqual([0, 1, -1, 0, 0, 10])
+    expect(moved.nodes.find((node) => node.id === 'child')?.transform).toEqual([
+      1, 0, 0, 1, 5, 0,
+    ])
+  })
+
+  it('rejects transforms that make a document matrix non-invertible', () => {
+    const layer = raster('layer', null, 'asset-b', 0)
+    layer.transform = [0.0001, 0, 0, 0.0001, 0, 0]
+    expect(() =>
+      transformEditorNodesAroundWorldPoint(
+        v2([layer]),
+        new Set(['layer']),
+        { x: 0, y: 0 },
+        { type: 'scale', factor: 0.02 },
+      ),
+    ).toThrow('document limits')
+  })
 })
 
 function v2(nodes: EditorNodeV2[]): EditorDocumentV2 {
@@ -117,6 +168,10 @@ function v2(nodes: EditorNodeV2[]): EditorDocumentV2 {
     canvas: { width: 300, height: 240 },
     nodes,
   }
+}
+
+function round(value: number) {
+  return Math.round(value * 1e9) / 1e9
 }
 
 function raster(

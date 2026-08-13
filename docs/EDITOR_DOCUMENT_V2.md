@@ -50,3 +50,5 @@ The renderer-independent V2 authoring kernel owns structural edits before React 
 - node-delta undo/redo with a bounded 100-entry history.
 
 Commands are immutable and reject edits that cannot preserve the current visual result. The production editor route remains on V1 until its selection, autosave and layer-panel state are migrated together.
+
+The real editor route has a reversible flat-authoring development gate at `?document=v2`. It migrates a V1 project in memory, keeps V2 as the autosave and JSON-download source of truth, and projects only the lossless flat-raster subset into the existing interaction code. Existing structured V2 documents are never flattened; until the V2 layer panel takes ownership, the route displays a protected handoff state instead of editing or overwriting them.

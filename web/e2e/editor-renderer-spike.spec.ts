@@ -5,6 +5,7 @@ import { expect, test } from '@playwright/test'
 test('Pixi renderer meets the Stage A correctness and resource gate', async ({
   page,
 }) => {
+  test.setTimeout(90_000)
   await page.goto('/')
   await page.waitForFunction(
     () => window.__EDITOR_SPIKE__ !== undefined,

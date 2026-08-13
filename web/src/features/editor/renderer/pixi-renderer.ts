@@ -9,8 +9,12 @@ import {
 } from 'pixi.js'
 
 import { ReferenceCountedResourceCache } from '../resources/resource-cache'
-import { planEditorAssetVariants } from '../resources/variant-plan'
-import type { EditorDocument, EditorObject } from '../domain/document'
+import { planEditorSceneAssetVariants } from '../resources/variant-plan'
+import { compileEditorRenderScene } from './scene-compiler'
+import type {
+  EditorRenderDocument,
+  EditorSceneRasterNode,
+} from './scene-compiler'
 import type {
   EditorRenderAsset,
   EditorRenderer,
@@ -48,7 +52,7 @@ export class PixiEditorRenderer implements EditorRenderer {
   #textureBudgetExceeded = false
   #resolutionUpgradeDelayMs = 150
   #resourceTimer?: number
-  #latestDocument?: EditorDocument
+  #latestDocument?: EditorRenderDocument
   #latestAssets?: ReadonlyMap<string, EditorRenderAsset>
   #syncTail: Promise<void> = Promise.resolve()
   #destroyed = false
@@ -106,7 +110,7 @@ export class PixiEditorRenderer implements EditorRenderer {
   }
 
   async sync(
-    document: EditorDocument,
+    document: EditorRenderDocument,
     assets: ReadonlyMap<string, EditorRenderAsset>,
   ) {
     this.#assertReady()
@@ -118,12 +122,13 @@ export class PixiEditorRenderer implements EditorRenderer {
   }
 
   async #syncScene(
-    document: EditorDocument,
+    document: EditorRenderDocument,
     assets: ReadonlyMap<string, EditorRenderAsset>,
   ) {
     if (this.#destroyed) return
-    const plan = planEditorAssetVariants(
-      document,
+    const scene = compileEditorRenderScene(document)
+    const plan = planEditorSceneAssetVariants(
+      scene,
       assets,
       this.#viewport,
       this.#resolution,
@@ -132,15 +137,15 @@ export class PixiEditorRenderer implements EditorRenderer {
     this.#textureBudgetExceeded = plan.budgetExceeded
     this.#artboardMask
       .clear()
-      .rect(0, 0, document.canvas.width, document.canvas.height)
+      .rect(0, 0, scene.canvas.width, scene.canvas.height)
       .fill(0xffffff)
-    const live = new Set(document.objects.map((object) => object.id))
+    const live = new Set(scene.nodes.map((object) => object.id))
     for (const [id, node] of this.#nodes) {
       if (live.has(id)) continue
       this.#removeNode(id, node)
     }
-    await mapWithConcurrency(document.objects, 6, async (object) => {
-      const asset = assets.get(object.asset_id)
+    await mapWithConcurrency(scene.nodes, 6, async (object) => {
+      const asset = assets.get(object.assetID)
       const variant = plan.variants.get(object.id)
       if (asset && variant) await this.#syncObject(object, asset, variant)
       else {
@@ -148,6 +153,7 @@ export class PixiEditorRenderer implements EditorRenderer {
         if (node) this.#removeNode(object.id, node)
       }
     })
+    this.#syncAlphaMasks(scene.nodes)
     this.#textures.prune(this.#textureBudgetBytes)
     this.#applyViewport()
     this.render()
@@ -217,14 +223,14 @@ export class PixiEditorRenderer implements EditorRenderer {
   }
 
   async #syncObject(
-    object: EditorObject,
+    object: EditorSceneRasterNode,
     asset: EditorRenderAsset,
     variant: EditorRenderAsset['variants'][number],
   ) {
     let node = this.#nodes.get(object.id)
     if (
       !node ||
-      node.assetID !== object.asset_id ||
+      node.assetID !== object.assetID ||
       node.variantURL !== variant.url
     ) {
       const resource = await this.#textures.retain(
@@ -247,19 +253,24 @@ export class PixiEditorRenderer implements EditorRenderer {
       node = {
         container,
         sprite,
-        assetID: object.asset_id,
+        assetID: object.assetID,
         variantURL: variant.url,
       }
       this.#nodes.set(object.id, node)
     }
     node.container.setFromMatrix(new Matrix(...object.transform))
-    node.container.alpha = object.opacity
+    node.container.alpha = object.role === 'mask' ? 1 : object.opacity
+    node.sprite.alpha = 1
     node.container.visible = object.visible
-    node.container.zIndex = object.z_index
+    node.container.zIndex = object.order
     this.#syncCrop(node, object, asset)
   }
 
-  #syncCrop(node: SceneNode, object: EditorObject, asset: EditorRenderAsset) {
+  #syncCrop(
+    node: SceneNode,
+    object: EditorSceneRasterNode,
+    asset: EditorRenderAsset,
+  ) {
     node.mask?.destroy()
     node.mask = undefined
     node.sprite.mask = null
@@ -275,6 +286,25 @@ export class PixiEditorRenderer implements EditorRenderer {
     node.container.addChild(mask)
     node.sprite.mask = mask
     node.mask = mask
+  }
+
+  #syncAlphaMasks(objects: readonly EditorSceneRasterNode[]) {
+    const objectsByID = new Map(objects.map((object) => [object.id, object]))
+    for (const node of this.#nodes.values()) {
+      node.container.mask = null
+      node.sprite.renderable = true
+    }
+    for (const object of objects) {
+      if (!object.maskNodeID) continue
+      const target = this.#nodes.get(object.id)
+      const maskObject = objectsByID.get(object.maskNodeID)
+      if (!target || !maskObject) continue
+      const mask = this.#nodes.get(object.maskNodeID)
+      target.container.alpha *= maskObject.opacity
+      target.container.visible &&= maskObject.visible && mask !== undefined
+      if (!target.container.visible || !mask) continue
+      target.container.setMask({ mask: mask.sprite, channel: 'alpha' })
+    }
   }
 
   async #loadTexture(url: string) {

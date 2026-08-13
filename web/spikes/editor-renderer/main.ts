@@ -1,6 +1,8 @@
 import { PixiEditorRenderer } from '../../src/features/editor/renderer/pixi-renderer'
 import type { EditorDocument } from '../../src/features/editor/domain/document'
+import type { EditorDocumentV2 } from '../../src/features/editor/domain/document-v2'
 import type { EditorRenderAsset } from '../../src/features/editor/renderer/types'
+import { compileEditorRenderScene } from '../../src/features/editor/renderer/scene-compiler'
 
 declare global {
   interface Window {
@@ -19,6 +21,12 @@ type SpikeResult = {
   longTasks: number
   pixelMeanAbsoluteError: number
   pixelMismatchRatio: number
+  v2PixelMeanAbsoluteError: number
+  v2PixelMismatchRatio: number
+  v2MaskRemovalMeanAbsoluteError: number
+  v2MaskRemovalMismatchRatio: number
+  v2ActualBounds?: PixelBounds
+  v2ExpectedBounds?: PixelBounds
   resolutionTransitionBytes: number[]
   contextLossSupported: boolean
   contextLostObserved: boolean
@@ -40,10 +48,14 @@ type SpikeEnvironment = {
   gpuRenderer: string
 }
 
+type PixelBounds = { left: number; top: number; right: number; bottom: number }
+
 const output = document.querySelector('output')!
 const canvas = document.querySelector<HTMLCanvasElement>('#performance')!
 const correctnessCanvas =
   document.querySelector<HTMLCanvasElement>('#correctness')!
+const v2CorrectnessCanvas =
+  document.querySelector<HTMLCanvasElement>('#v2-correctness')!
 void run().catch((error: unknown) => {
   const result: SpikeResult = {
     ok: false,
@@ -56,6 +68,10 @@ void run().catch((error: unknown) => {
     longTasks: 0,
     pixelMeanAbsoluteError: Number.POSITIVE_INFINITY,
     pixelMismatchRatio: 1,
+    v2PixelMeanAbsoluteError: Number.POSITIVE_INFINITY,
+    v2PixelMismatchRatio: 1,
+    v2MaskRemovalMeanAbsoluteError: Number.POSITIVE_INFINITY,
+    v2MaskRemovalMismatchRatio: 1,
     resolutionTransitionBytes: [],
     contextLossSupported: false,
     contextLostObserved: false,
@@ -70,6 +86,8 @@ void run().catch((error: unknown) => {
 
 async function run() {
   const pixelComparison = await runPixelCorrectnessFixture(correctnessCanvas)
+  const v2PixelComparison =
+    await runV2PixelCorrectnessFixture(v2CorrectnessCanvas)
   const resolutionTransitionBytes = await runResolutionTransitionFixture()
   const assets = await buildAssets(50)
   const document = buildDocument(assets)
@@ -151,6 +169,13 @@ async function run() {
     longTasks: longTasks.length,
     pixelMeanAbsoluteError: pixelComparison.meanAbsoluteError,
     pixelMismatchRatio: pixelComparison.mismatchRatio,
+    v2PixelMeanAbsoluteError: v2PixelComparison.meanAbsoluteError,
+    v2PixelMismatchRatio: v2PixelComparison.mismatchRatio,
+    v2MaskRemovalMeanAbsoluteError:
+      v2PixelComparison.maskRemovalMeanAbsoluteError,
+    v2MaskRemovalMismatchRatio: v2PixelComparison.maskRemovalMismatchRatio,
+    v2ActualBounds: v2PixelComparison.actualBounds,
+    v2ExpectedBounds: v2PixelComparison.expectedBounds,
     resolutionTransitionBytes,
     contextLossSupported,
     contextLostObserved,
@@ -160,6 +185,174 @@ async function run() {
   }
   window.__EDITOR_SPIKE__ = result
   output.value = JSON.stringify(result, null, 2)
+}
+
+async function runV2PixelCorrectnessFixture(targetCanvas: HTMLCanvasElement) {
+  const sources = buildV2CorrectnessSources()
+  const assets = new Map<string, EditorRenderAsset>()
+  const urls: string[] = []
+  for (const [id, source] of sources) {
+    const url = URL.createObjectURL(await canvasToBlob(source))
+    urls.push(url)
+    assets.set(id, {
+      id,
+      width: source.width,
+      height: source.height,
+      variants: [{ url, width: source.width, height: source.height }],
+    })
+  }
+  const fixture: EditorDocumentV2 = {
+    schema_version: 2,
+    renderer_semantics_version: 1,
+    canvas: { width: 256, height: 256 },
+    nodes: [
+      {
+        id: 'mask',
+        type: 'raster',
+        parent_id: null,
+        order_key: '00000001',
+        transform: [1, 0, 0, 1, 76, 66],
+        opacity: 0.65,
+        blend_mode: 'normal',
+        visible: true,
+        locked: false,
+        asset_id: 'mask-asset',
+        effects: [],
+      },
+      {
+        id: 'group',
+        type: 'group',
+        parent_id: null,
+        order_key: '00000002',
+        transform: [0, 1.2, -1.2, 0, 204, 54],
+        opacity: 0.7,
+        blend_mode: 'normal',
+        visible: true,
+        locked: false,
+      },
+      {
+        id: 'masked-content',
+        type: 'raster',
+        parent_id: 'group',
+        order_key: '00000001',
+        transform: [1, 0, 0, 1, 0, 0],
+        opacity: 0.8,
+        blend_mode: 'normal',
+        visible: true,
+        locked: false,
+        mask_id: 'mask',
+        asset_id: 'content-asset',
+        effects: [],
+      },
+    ],
+  }
+  const renderer = new PixiEditorRenderer()
+  try {
+    await renderer.init(targetCanvas, {
+      width: 256,
+      height: 256,
+      resolution: 1,
+      preserveDrawingBuffer: true,
+    })
+    renderer.setViewport({ zoom: 100, panX: 0, panY: 0 })
+    await renderer.sync(fixture, assets)
+    renderer.render()
+    await nextFrame()
+    const actual = await canvasPixels(targetCanvas)
+    const expected = referenceV2Pixels(fixture, sources)
+    const unmaskedFixture = structuredClone(fixture)
+    unmaskedFixture.nodes = unmaskedFixture.nodes.filter(
+      (node) => node.id !== 'mask',
+    )
+    const unmaskedContent = unmaskedFixture.nodes.find(
+      (node) => node.id === 'masked-content',
+    )!
+    unmaskedContent.mask_id = undefined
+    await renderer.sync(unmaskedFixture, assets)
+    renderer.render()
+    await nextFrame()
+    const unmaskedActual = await canvasPixels(targetCanvas)
+    const unmaskedExpected = referenceV2Pixels(unmaskedFixture, sources)
+    const unmaskedComparison = comparePixels(
+      unmaskedActual,
+      unmaskedExpected,
+      true,
+    )
+    return {
+      ...comparePixels(actual, expected, true),
+      maskRemovalMeanAbsoluteError: unmaskedComparison.meanAbsoluteError,
+      maskRemovalMismatchRatio: unmaskedComparison.mismatchRatio,
+      actualBounds: opaqueBounds(actual, fixture.canvas.width),
+      expectedBounds: opaqueBounds(expected, fixture.canvas.width),
+    }
+  } finally {
+    renderer.destroy()
+    for (const url of urls) URL.revokeObjectURL(url)
+  }
+}
+
+function buildV2CorrectnessSources() {
+  const sources = new Map<string, HTMLCanvasElement>()
+  const content = document.createElement('canvas')
+  content.width = 112
+  content.height = 84
+  const contentContext = content.getContext('2d')!
+  contentContext.fillStyle = '#d1fe17'
+  contentContext.fillRect(0, 0, content.width, content.height)
+  contentContext.fillStyle = '#7247c9'
+  contentContext.fillRect(18, 12, 54, 42)
+  sources.set('content-asset', content)
+
+  const mask = document.createElement('canvas')
+  mask.width = 120
+  mask.height = 120
+  const maskContext = mask.getContext('2d')!
+  const gradient = maskContext.createRadialGradient(60, 60, 12, 60, 60, 54)
+  gradient.addColorStop(0, 'rgba(255,255,255,1)')
+  gradient.addColorStop(1, 'rgba(255,255,255,0)')
+  maskContext.fillStyle = gradient
+  maskContext.fillRect(0, 0, 120, 120)
+  sources.set('mask-asset', mask)
+  return sources
+}
+
+function referenceV2Pixels(
+  fixture: EditorDocumentV2,
+  sources: ReadonlyMap<string, HTMLCanvasElement>,
+) {
+  const reference = document.createElement('canvas')
+  reference.width = fixture.canvas.width
+  reference.height = fixture.canvas.height
+  const context = reference.getContext('2d', { willReadFrequently: true })!
+  const scene = compileEditorRenderScene(fixture)
+  const masks = new Map(
+    scene.nodes
+      .filter((node) => node.role === 'mask')
+      .map((node) => [node.id, node]),
+  )
+  for (const node of scene.nodes) {
+    if (node.role !== 'content' || !node.visible || node.opacity === 0) continue
+    const source = sources.get(node.assetID)
+    if (!source) continue
+    const layer = document.createElement('canvas')
+    layer.width = fixture.canvas.width
+    layer.height = fixture.canvas.height
+    const layerContext = layer.getContext('2d')!
+    layerContext.setTransform(...node.transform)
+    layerContext.globalAlpha = node.opacity
+    layerContext.drawImage(source, 0, 0)
+    if (node.maskNodeID) {
+      const mask = masks.get(node.maskNodeID)!
+      const maskSource = sources.get(mask.assetID)!
+      layerContext.resetTransform()
+      layerContext.globalAlpha = mask.opacity
+      layerContext.globalCompositeOperation = 'destination-in'
+      layerContext.setTransform(...mask.transform)
+      layerContext.drawImage(maskSource, 0, 0)
+    }
+    context.drawImage(layer, 0, 0)
+  }
+  return context.getImageData(0, 0, reference.width, reference.height).data
 }
 
 function readEnvironment(
@@ -413,16 +606,26 @@ async function canvasPixels(sourceCanvas: HTMLCanvasElement) {
   return context.getImageData(0, 0, copy.width, copy.height).data
 }
 
-function comparePixels(actual: Uint8ClampedArray, expected: Uint8ClampedArray) {
+function comparePixels(
+  actual: Uint8ClampedArray,
+  expected: Uint8ClampedArray,
+  premultiplyColor = false,
+) {
   if (actual.length !== expected.length) throw new Error('pixel buffers differ')
   let absoluteError = 0
   let mismatchedPixels = 0
   for (let index = 0; index < actual.length; index += 4) {
     let pixelMismatch = false
     for (let channel = 0; channel < 4; channel += 1) {
-      const difference = Math.abs(
-        actual[index + channel] - expected[index + channel],
-      )
+      const actualValue =
+        premultiplyColor && channel < 3
+          ? (actual[index + channel] * actual[index + 3]) / 255
+          : actual[index + channel]
+      const expectedValue =
+        premultiplyColor && channel < 3
+          ? (expected[index + channel] * expected[index + 3]) / 255
+          : expected[index + channel]
+      const difference = Math.abs(actualValue - expectedValue)
       absoluteError += difference
       if (difference > 16) pixelMismatch = true
     }
@@ -432,6 +635,24 @@ function comparePixels(actual: Uint8ClampedArray, expected: Uint8ClampedArray) {
     meanAbsoluteError: absoluteError / actual.length,
     mismatchRatio: mismatchedPixels / (actual.length / 4),
   }
+}
+
+function opaqueBounds(pixels: Uint8ClampedArray, width: number) {
+  let left = width
+  let top = Math.ceil(pixels.length / 4 / width)
+  let right = -1
+  let bottom = -1
+  for (let offset = 3; offset < pixels.length; offset += 4) {
+    if (pixels[offset] === 0) continue
+    const pixel = (offset - 3) / 4
+    const x = pixel % width
+    const y = Math.floor(pixel / width)
+    left = Math.min(left, x)
+    top = Math.min(top, y)
+    right = Math.max(right, x)
+    bottom = Math.max(bottom, y)
+  }
+  return right < 0 ? undefined : { left, top, right, bottom }
 }
 
 function canvasToBlob(sourceCanvas: HTMLCanvasElement) {

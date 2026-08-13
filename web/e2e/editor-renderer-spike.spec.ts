@@ -55,6 +55,10 @@ test('Pixi renderer meets the Stage A correctness and resource gate', async ({
   }
   expect(result.pixelMeanAbsoluteError).toBeLessThan(1)
   expect(result.pixelMismatchRatio).toBeLessThan(0.01)
+  expect(result.v2PixelMeanAbsoluteError).toBeLessThan(1)
+  expect(result.v2PixelMismatchRatio).toBeLessThan(0.01)
+  expect(result.v2MaskRemovalMeanAbsoluteError).toBeLessThan(1)
+  expect(result.v2MaskRemovalMismatchRatio).toBeLessThan(0.01)
   expect(result.resolutionTransitionBytes).toEqual([
     640 * 640 * 4,
     2048 * 2048 * 4,
@@ -97,6 +101,22 @@ declare global {
       longTasks: number
       pixelMeanAbsoluteError: number
       pixelMismatchRatio: number
+      v2PixelMeanAbsoluteError: number
+      v2PixelMismatchRatio: number
+      v2MaskRemovalMeanAbsoluteError: number
+      v2MaskRemovalMismatchRatio: number
+      v2ActualBounds?: {
+        left: number
+        top: number
+        right: number
+        bottom: number
+      }
+      v2ExpectedBounds?: {
+        left: number
+        top: number
+        right: number
+        bottom: number
+      }
       resolutionTransitionBytes: number[]
       contextLossSupported: boolean
       contextLostObserved: boolean

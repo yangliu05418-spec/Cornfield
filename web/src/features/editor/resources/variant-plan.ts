@@ -1,5 +1,10 @@
 import { selectEditorAssetVariant } from '../renderer/types'
-import type { EditorDocument, EditorObject } from '../domain/document'
+import { compileEditorRenderScene } from '../renderer/scene-compiler'
+import type {
+  EditorRenderDocument,
+  EditorRenderScene,
+  EditorSceneRasterNode,
+} from '../renderer/scene-compiler'
 import type {
   EditorAssetVariant,
   EditorRenderAsset,
@@ -20,16 +25,32 @@ type Candidate = {
 }
 
 export function planEditorAssetVariants(
-  document: EditorDocument,
+  document: EditorRenderDocument,
+  assets: ReadonlyMap<string, EditorRenderAsset>,
+  viewport: EditorViewport,
+  resolution: number,
+  budgetBytes: number,
+): EditorVariantPlan {
+  return planEditorSceneAssetVariants(
+    compileEditorRenderScene(document),
+    assets,
+    viewport,
+    resolution,
+    budgetBytes,
+  )
+}
+
+export function planEditorSceneAssetVariants(
+  scene: EditorRenderScene,
   assets: ReadonlyMap<string, EditorRenderAsset>,
   viewport: EditorViewport,
   resolution: number,
   budgetBytes: number,
 ): EditorVariantPlan {
   const candidatesByAsset = new Map<string, Candidate>()
-  for (const object of document.objects) {
+  for (const object of scene.nodes) {
     if (!object.visible || object.opacity === 0) continue
-    const asset = assets.get(object.asset_id)
+    const asset = assets.get(object.assetID)
     if (!asset || asset.variants.length === 0) continue
     const variants = [...asset.variants].sort(
       (left, right) => variantPixels(left) - variantPixels(right),
@@ -90,7 +111,7 @@ export function planEditorAssetVariants(
 }
 
 export function requiredEditorAssetPixels(
-  object: EditorObject,
+  object: EditorSceneRasterNode,
   asset: EditorRenderAsset,
   viewport: EditorViewport,
   resolution: number,

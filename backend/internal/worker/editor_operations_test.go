@@ -215,6 +215,81 @@ func TestCompositeEditorDocumentSupportsFlipsAndLayerOrder(t *testing.T) {
 	}
 }
 
+func TestCompositeEditorSceneAppliesIndependentAlphaMask(t *testing.T) {
+	contentID, maskID := uuid.New(), uuid.New()
+	content := solidNRGBA(4, 4, color.NRGBA{R: 255, A: 255})
+	mask := image.NewNRGBA(image.Rect(0, 0, 4, 4))
+	for y := 0; y < 4; y++ {
+		for x := 0; x < 4; x++ {
+			alpha := uint8(0)
+			if x >= 2 {
+				alpha = 255
+			}
+			mask.SetNRGBA(x, y, color.NRGBA{R: 255, G: 255, B: 255, A: alpha})
+		}
+	}
+	maskNodeID := "mask"
+	scene := studioEditor.RenderScene{
+		Canvas: studioEditor.Canvas{Width: 8, Height: 8},
+		Nodes: []studioEditor.RenderNode{
+			{ID: maskNodeID, AssetID: maskID, Transform: [6]float64{1, 0, 0, 1, 1, 1}, Opacity: .5, Visible: true, Order: 0, Role: studioEditor.RenderRoleMask},
+			{ID: "content", AssetID: contentID, Transform: [6]float64{1, 0, 0, 1, 1, 1}, Opacity: 1, Visible: true, Order: 1, Role: studioEditor.RenderRoleContent, MaskNodeID: &maskNodeID},
+		},
+	}
+	canvas, err := compositeEditorScene(context.Background(), scene, func(id uuid.UUID) (image.Image, error) {
+		if id == maskID {
+			return mask, nil
+		}
+		return content, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, _, alpha := canvas.At(1, 2).RGBA(); alpha != 0 {
+		t.Fatalf("masked-out pixel remains visible: %#v", canvas.At(1, 2))
+	}
+	if red, _, _, alpha := canvas.At(3, 2).RGBA(); red < 0x7000 || red > 0x9000 || alpha < 0x7000 || alpha > 0x9000 {
+		t.Fatalf("mask opacity was not applied: %#v", canvas.At(3, 2))
+	}
+}
+
+func TestCompositeEditorSceneDoesNotRevealContentWhenMaskIsMissingOrHidden(t *testing.T) {
+	contentID, maskAssetID := uuid.New(), uuid.New()
+	maskNodeID := "mask"
+	base := studioEditor.RenderScene{
+		Canvas: studioEditor.Canvas{Width: 4, Height: 4},
+		Nodes: []studioEditor.RenderNode{
+			{ID: maskNodeID, AssetID: maskAssetID, Transform: [6]float64{1, 0, 0, 1, 0, 0}, Opacity: 1, Visible: false, Order: 0, Role: studioEditor.RenderRoleMask},
+			{ID: "content", AssetID: contentID, Transform: [6]float64{1, 0, 0, 1, 0, 0}, Opacity: 1, Visible: true, Order: 1, Role: studioEditor.RenderRoleContent, MaskNodeID: &maskNodeID},
+		},
+	}
+	for _, test := range []struct {
+		name  string
+		scene studioEditor.RenderScene
+	}{
+		{name: "hidden", scene: base},
+		{name: "missing", scene: studioEditor.RenderScene{Canvas: base.Canvas, Nodes: base.Nodes[1:]}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			canvas, err := compositeEditorScene(context.Background(), test.scene, func(uuid.UUID) (image.Image, error) {
+				return solidNRGBA(4, 4, color.NRGBA{R: 255, A: 255}), nil
+			})
+			if test.name == "missing" {
+				if err == nil {
+					t.Fatal("missing mask reference was accepted")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, _, _, alpha := canvas.At(1, 1).RGBA(); alpha != 0 {
+				t.Fatalf("content leaked through hidden mask: %#v", canvas.At(1, 1))
+			}
+		})
+	}
+}
+
 func solidNRGBA(width, height int, value color.NRGBA) *image.NRGBA {
 	result := image.NewNRGBA(image.Rect(0, 0, width, height))
 	for y := 0; y < height; y++ {

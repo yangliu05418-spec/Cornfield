@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 
 import type { EditorDocumentV1, EditorTransform } from '../domain/document'
@@ -78,6 +79,33 @@ describe('editor scene compiler', () => {
     ])
   })
 
+  it('matches the shared V2 group and mask scene fixture', () => {
+    const document = fixture('v2-group-mask.json') as EditorDocumentV2
+    const scene = compileEditorRenderScene(document)
+    expect(scene).toMatchObject({
+      canvas: { width: 256, height: 256 },
+      nodes: [
+        expect.objectContaining({
+          id: 'mask',
+          assetID: '33333333-3333-4333-8333-333333333333',
+          transform: [1, 0, 0, 1, 76, 66],
+          opacity: 0.65,
+          role: 'mask',
+          order: 0,
+        }),
+        expect.objectContaining({
+          id: 'content',
+          assetID: '44444444-4444-4444-8444-444444444444',
+          transform: [0, 1.2, -1.2, 0, 199.2, 57.6],
+          role: 'content',
+          maskNodeID: 'mask',
+          order: 1,
+        }),
+      ],
+    })
+    expect(scene.nodes[1]?.opacity).toBeCloseTo(0.56)
+  })
+
   it('rejects unimplemented semantics instead of flattening them', () => {
     const blend = raster('blend', null, '00000001', identity, 1)
     blend.blend_mode = 'multiply'
@@ -115,6 +143,15 @@ function v2(nodes: EditorDocumentV2['nodes']): EditorDocumentV2 {
     canvas: { width: 100, height: 80 },
     nodes,
   }
+}
+
+function fixture(name: string) {
+  return JSON.parse(
+    readFileSync(
+      new URL(`../../../../../testdata/editor/${name}`, import.meta.url),
+      'utf8',
+    ),
+  )
 }
 
 function group(

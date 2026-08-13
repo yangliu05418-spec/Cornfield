@@ -426,7 +426,7 @@ func (s *Server) createLayerDecomposition(w http.ResponseWriter, r *http.Request
 		writeError(w, http.StatusConflict, "EDITOR_PROJECT_CONFLICT", "请先完成最新工程保存后再启动分层", false, r)
 		return
 	}
-	if _, err = studioEditor.DecodeRenderable(sourceDocument); err != nil {
+	if _, err = studioEditor.DecodeRenderScene(sourceDocument); err != nil {
 		writeError(w, http.StatusUnprocessableEntity, "EDITOR_DOCUMENT_SEMANTICS_UNSUPPORTED", "当前工程包含尚未支持导出的图层结构，请先简化图层后再智能分层", false, r)
 		return
 	}
@@ -778,7 +778,7 @@ func (s *Server) createSimpleEditorOperation(w http.ResponseWriter, r *http.Requ
 		writeError(w, http.StatusInternalServerError, "EDITOR_PUBLISH_FAILED", "无法读取待发布工程", true, r)
 		return
 	}
-	if _, err = studioEditor.DecodeRenderable(sourceDocument); err != nil {
+	if _, err = studioEditor.DecodeRenderScene(sourceDocument); err != nil {
 		writeError(w, http.StatusUnprocessableEntity, "EDITOR_DOCUMENT_SEMANTICS_UNSUPPORTED", "当前工程包含尚未支持导出的图层结构，请先简化图层后再发布", false, r)
 		return
 	}

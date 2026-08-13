@@ -38,3 +38,15 @@ The Go and TypeScript implementations share `testdata/editor/v1-flat.json`, `tes
 - Single and bulk asset deletion detect references in both V1 `objects` and V2 `nodes`.
 
 The renderer-neutral TypeScript and Go scene compilers traverse sibling `order_key` values deterministically, accumulate CSS-compatible affine transforms and group state, and reserve mask nodes from ordinary content drawing. The Worker exports V1 and supported V2 documents through this contract. The live editor store still writes V1 documents; switching authoring to V2 remains a separate, reversible release step.
+
+## Authoring commands
+
+The renderer-independent V2 authoring kernel owns structural edits before React or Pixi integration:
+
+- deterministic layer-tree projection and sibling order normalization;
+- group/ungroup with world appearance preservation;
+- attach/detach of one independent raster alpha mask;
+- cycle-safe reparenting that preserves world transforms, opacity, visibility and lock state;
+- node-delta undo/redo with a bounded 100-entry history.
+
+Commands are immutable and reject edits that cannot preserve the current visual result. The production editor route remains on V1 until its selection, autosave and layer-panel state are migrated together.

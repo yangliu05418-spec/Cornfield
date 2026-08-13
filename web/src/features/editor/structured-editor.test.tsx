@@ -107,6 +107,8 @@ describe('StructuredEditor', () => {
     apiMock.mockImplementation((path: string) => {
       if (path === '/api/v1/assets/resolve')
         return Promise.resolve({ items: [firstAsset, secondAsset] })
+      if (path === '/api/v1/models')
+        return Promise.resolve({ revision: 'test', models: [] })
       return Promise.resolve({ revision: 2 })
     })
     const queryClient = new QueryClient({

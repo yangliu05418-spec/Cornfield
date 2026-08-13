@@ -39,6 +39,7 @@ import type { CSSProperties, PointerEvent as ReactPointerEvent } from 'react'
 import { AppShell } from '#/components/app-shell'
 import { ConfirmDialog } from '#/components/confirm-dialog'
 import { StructuredEditor } from '#/features/editor/structured-editor'
+import { EditorOperationWaiting } from '#/features/editor/editor-operation-waiting'
 import { EditorHistory } from '#/features/editor/domain/history'
 import {
   applyFlatEditorViewToV2,
@@ -47,6 +48,8 @@ import {
 import { migrateEditorDocumentV1ToV2 } from '#/features/editor/domain/document-v2'
 import type { EditorDocumentV2 } from '#/features/editor/domain/document-v2'
 import { PixiSurface } from '#/features/editor/renderer/pixi-surface'
+import { useEditorOperations } from '#/features/editor/use-editor-operations'
+import type { LayerDecompositionSettings } from '#/features/editor/use-editor-operations'
 import { api, APIError } from '#/lib/api'
 import { mergeAssetIntoCaches } from '#/lib/asset-cache'
 import {
@@ -77,11 +80,10 @@ import {
 import type { Alignment, CropHandle, CropRect } from '#/lib/editor-transform'
 import type {
   Asset,
-  AssetOperation,
   EditorDocument,
   EditorObject,
   EditorProject,
-  Model,
+  LayerSet,
 } from '#/lib/api'
 
 export const Route = createFileRoute('/app/editor/$projectId')({
@@ -90,18 +92,7 @@ export const Route = createFileRoute('/app/editor/$projectId')({
 
 type SaveState =
   'saved' | 'dirty' | 'saving' | 'offline' | 'conflict' | 'invalid'
-type LayerSettings = {
-  prompt: string
-  resolution: 'auto' | '1K' | '1.5K' | '2K'
-  mode: 'standard' | 'fast'
-}
-
-const terminalOperationStates = new Set([
-  'succeeded',
-  'failed',
-  'cancelled',
-  'submission_uncertain',
-])
+type LayerSettings = LayerDecompositionSettings
 const maxEditorObjects = 64
 const maxUploadBytes = 25 << 20
 const acceptedUploadTypes = new Set(['image/jpeg', 'image/png', 'image/webp'])
@@ -114,11 +105,6 @@ function ImageEditorPage() {
     queryKey: ['editor-project', projectId],
     queryFn: () => api<EditorProject>(`/api/v1/editor-projects/${projectId}`),
     retry: false,
-  })
-  const modelsQuery = useQuery({
-    queryKey: ['models'],
-    queryFn: () => api<{ revision: string; models: Model[] }>('/api/v1/models'),
-    staleTime: 30_000,
   })
   const [documentState, setDocumentState] = useState<EditorDocument | null>(
     null,
@@ -162,9 +148,7 @@ function ImageEditorPage() {
     resolution: 'auto',
     mode: 'standard',
   })
-  const [operationID, setOperationID] = useState<string>()
-  const [packageOperationID, setPackageOperationID] = useState<string>()
-  const [elapsed, setElapsed] = useState(0)
+  const [pendingLayerSet, setPendingLayerSet] = useState<LayerSet>()
   const revisionRef = useRef(0)
   const serverDocumentVersionRef = useRef<1 | 2>(1)
   const dirtyRef = useRef(false)
@@ -175,7 +159,6 @@ function ImageEditorPage() {
     null,
   )
   const historyRef = useRef(new EditorHistory(100))
-  const appliedLayerSetRef = useRef<string | undefined>(undefined)
   const continuousHistoryRef = useRef<EditorDocument | null>(null)
   const viewportRef = useRef<HTMLDivElement>(null)
   const uploadInputRef = useRef<HTMLInputElement>(null)
@@ -223,7 +206,6 @@ function ImageEditorPage() {
     const initialSelection = projectedDocument.objects.at(-1)?.id ?? ''
     setSelectedID(initialSelection)
     setSelectedIDs(new Set(initialSelection ? [initialSelection] : []))
-    setOperationID(projectQuery.data.latest_operation_id)
   }, [projectQuery.data])
 
   const fitCanvas = useCallback(() => {
@@ -293,56 +275,6 @@ function ImageEditorPage() {
       return new Map(assets.map((asset) => [asset.id, asset]))
     },
   })
-  const operationQuery = useQuery({
-    queryKey: ['asset-operation', operationID],
-    enabled: Boolean(operationID),
-    queryFn: () =>
-      api<AssetOperation>(`/api/v1/asset-operations/${operationID}`),
-    refetchInterval: (query) =>
-      terminalOperationStates.has(query.state.data?.status ?? '')
-        ? false
-        : 2_000,
-  })
-  const operation = operationQuery.data
-  const currentLayerSet =
-    operation?.layer_set ?? projectQuery.data?.active_layer_set
-  const packageOperationQuery = useQuery({
-    queryKey: ['asset-operation', packageOperationID],
-    enabled: Boolean(packageOperationID),
-    queryFn: () =>
-      api<AssetOperation>(`/api/v1/asset-operations/${packageOperationID}`),
-    refetchInterval: (query) =>
-      terminalOperationStates.has(query.state.data?.status ?? '')
-        ? false
-        : 2_000,
-  })
-  const operationRunning = Boolean(
-    operationID && !terminalOperationStates.has(operation?.status ?? ''),
-  )
-  const layerCapability = modelsQuery.data?.models.find(
-    (model) => model.id === 'byteplus-seedream-5-0-pro',
-  )
-  const canDecompose = Boolean(
-    layerCapability?.availability.can_submit &&
-    layerCapability.capabilities.layer_decomposition,
-  )
-
-  useEffect(() => {
-    if (!operationRunning) {
-      setElapsed(0)
-      return
-    }
-    const started = Date.parse(
-      operation?.started_at ?? operation?.created_at ?? '',
-    )
-    const startedAt = Number.isFinite(started) ? started : Date.now()
-    const update = () =>
-      setElapsed(Math.max(0, Math.floor((Date.now() - startedAt) / 1_000)))
-    update()
-    const timer = window.setInterval(update, 1_000)
-    return () => window.clearInterval(timer)
-  }, [operation?.created_at, operation?.started_at, operationRunning])
-
   const saveNow = useCallback(async () => {
     if (!dirtyRef.current || !persistedDocumentRef.current) return
     if (savePromiseRef.current) return savePromiseRef.current
@@ -393,6 +325,14 @@ function ImageEditorPage() {
       1_000,
     )
   }, [saveNow])
+
+  async function flushSaves() {
+    window.clearTimeout(saveTimerRef.current)
+    while (dirtyRef.current) {
+      if (savePromiseRef.current) await savePromiseRef.current
+      else await saveNow()
+    }
+  }
 
   useEffect(
     () => () => {
@@ -521,7 +461,7 @@ function ImageEditorPage() {
     }
     try {
       await Promise.race([
-        saveNow(),
+        flushSaves(),
         new Promise((_, reject) =>
           window.setTimeout(() => reject(new Error('save timeout')), 3_000),
         ),
@@ -541,7 +481,7 @@ function ImageEditorPage() {
     }
     setEnteringStructured(true)
     try {
-      await saveNow()
+      await flushSaves()
       const current = persistedDocumentRef.current
       const next =
         current.schema_version === 2
@@ -1251,40 +1191,8 @@ function ImageEditorPage() {
     return () => window.removeEventListener('paste', paste)
   }, [])
 
-  async function startDecomposition(confirmed = false) {
-    if (!canDecompose) {
-      setNotice('智能分层仍在灰度验证中')
-      return
-    }
-    if (currentLayerSet && !confirmed) {
-      setRerunConfirm(true)
-      return
-    }
-    try {
-      await saveNow()
-      const result = await api<{ id: string }>(
-        `/api/v1/editor-projects/${projectId}/layer-decompositions`,
-        {
-          method: 'POST',
-          headers: { 'Idempotency-Key': crypto.randomUUID() },
-          body: JSON.stringify({
-            expected_revision: revisionRef.current,
-            prompt: settings.prompt,
-            resolution: settings.resolution,
-            prompt_optimization_mode: settings.mode,
-          }),
-        },
-      )
-      setOperationID(result.id)
-      setSettingsOpen(false)
-    } catch (error) {
-      setNotice(error instanceof Error ? error.message : '无法启动智能分层')
-    }
-  }
-
-  function applyLayerSet() {
-    const layerSet = operation?.layer_set
-    if (!layerSet || !documentRef.current) return
+  function applyLayerSet(layerSet: LayerSet) {
+    if (!documentRef.current) return
     const objects: EditorObject[] = [
       {
         id: `base-${layerSet.id}`,
@@ -1317,177 +1225,37 @@ function ImageEditorPage() {
         }
       }),
     ]
-    appliedLayerSetRef.current = layerSet.id
     applyDocument({ ...documentRef.current, objects })
     selectOnly(objects.at(-1)?.id ?? '')
+    setPendingLayerSet(undefined)
   }
 
-  useEffect(() => {
-    const layerSet = operation?.layer_set
-    if (operation?.status === 'succeeded' && layerSet?.applied_to_project) {
-      queryClient.setQueryData<EditorProject>(
-        ['editor-project', projectId],
-        (current) =>
-          current
-            ? {
-                ...current,
-                active_layer_set_id: layerSet.id,
-                active_layer_set: layerSet,
-              }
-            : current,
-      )
-    }
-    if (
-      operation?.status === 'succeeded' &&
-      layerSet?.applied_to_project &&
-      appliedLayerSetRef.current !== layerSet.id &&
-      documentRef.current &&
-      revisionRef.current === operation.source_revision
-    ) {
-      applyLayerSet()
-    }
-    if (operation?.status === 'failed')
-      setNotice(operation.error_message ?? '智能分层失败，请稍后重试')
-  }, [
-    operation?.id,
-    operation?.status,
-    operation?.layer_set?.id,
-    projectId,
-    queryClient,
-  ])
+  const operations = useEditorOperations({
+    projectID: projectId,
+    initialOperationID: projectQuery.data?.latest_operation_id,
+    activeLayerSet: projectQuery.data?.active_layer_set,
+    getRevision: () => revisionRef.current,
+    flushSaves,
+    onLayerSetReady: (layerSet, sourceRevision) => {
+      if (sourceRevision === revisionRef.current && layerSet.applied_to_project)
+        applyLayerSet(layerSet)
+      else if (!layerSet.applied_to_project) setPendingLayerSet(layerSet)
+    },
+    onNotice: setNotice,
+  })
+  const operation = operations.operation
+  const currentLayerSet = operations.currentLayerSet
+  const operationRunning = operations.running
+  const canDecompose = operations.canDecompose
+  const elapsed = operations.elapsed
 
-  useEffect(() => {
-    if (!operationID) return
-    const source = new EventSource('/api/v1/events')
-    let reconciliation: number | undefined
-    const onOperationEvent = (event: MessageEvent) => {
-      try {
-        const envelope = JSON.parse(event.data) as {
-          payload?: { id?: string; status?: string }
-        }
-        const payload = envelope.payload ?? {}
-        if (payload.id !== operationID) return
-        queryClient.setQueryData(
-          ['asset-operation', operationID],
-          (current: AssetOperation | undefined) =>
-            current ? { ...current, ...payload } : current,
-        )
-        window.clearTimeout(reconciliation)
-        reconciliation = window.setTimeout(
-          () =>
-            void queryClient.invalidateQueries({
-              queryKey: ['asset-operation', operationID],
-            }),
-          2_000,
-        )
-      } catch {
-        void queryClient.invalidateQueries({
-          queryKey: ['asset-operation', operationID],
-        })
-      }
-    }
-    source.addEventListener('job', onOperationEvent)
-    return () => {
-      window.clearTimeout(reconciliation)
-      source.removeEventListener('job', onOperationEvent)
-      source.close()
-    }
-  }, [operationID, queryClient])
-
-  async function publish() {
-    try {
-      await saveNow()
-      const result = await api<{ id: string }>(
-        `/api/v1/editor-projects/${projectId}/publish`,
-        {
-          method: 'POST',
-          headers: { 'Idempotency-Key': crypto.randomUUID() },
-          body: JSON.stringify({ expected_revision: revisionRef.current }),
-        },
-      )
-      setOperationID(result.id)
-      setNotice('正在保存为新图片')
-    } catch (error) {
-      setNotice(error instanceof Error ? error.message : '保存新图片失败')
-    }
-  }
-
-  async function publishSelectedLayer() {
-    if (!currentLayerSet || !selectedLayer) return
-    try {
-      const asset = await api<Asset>(
-        `/api/v1/layer-sets/${currentLayerSet.id}/items/${selectedLayer.id}/publish`,
-        { method: 'POST' },
-      )
-      mergeAssetIntoCaches(queryClient, asset)
-      setNotice('图层已保存为新图片')
-    } catch (error) {
-      setNotice(error instanceof Error ? error.message : '保存图层失败')
-    }
-  }
-
-  async function packageLayers() {
-    const layerSet = currentLayerSet
-    if (!layerSet) return
-    if (layerSet.package_ready) {
-      window.location.assign(
-        `/api/v1/layer-sets/${layerSet.id}/package/content`,
-      )
+  async function startDecomposition(confirmed = false) {
+    if (currentLayerSet && !confirmed) {
+      setRerunConfirm(true)
       return
     }
-    try {
-      const result = await api<{
-        id?: string
-        status: string
-        content_url?: string
-      }>(`/api/v1/layer-sets/${layerSet.id}/package`, {
-        method: 'POST',
-        headers: { 'Idempotency-Key': crypto.randomUUID() },
-      })
-      if (result.status === 'succeeded' && result.content_url) {
-        window.location.assign(result.content_url)
-        return
-      }
-      if (result.id) setPackageOperationID(result.id)
-      setNotice('正在后台整理图层压缩包')
-    } catch (error) {
-      setNotice(error instanceof Error ? error.message : '创建压缩包失败')
-    }
+    if (await operations.startDecomposition(settings)) setSettingsOpen(false)
   }
-
-  useEffect(() => {
-    const result = packageOperationQuery.data
-    if (!result || !currentLayerSet) return
-    if (result.status === 'succeeded') {
-      const layerSetID = currentLayerSet.id
-      setPackageOperationID(undefined)
-      window.location.assign(`/api/v1/layer-sets/${layerSetID}/package/content`)
-    } else if (result.status === 'failed') {
-      setNotice(result.error_message ?? '创建图层压缩包失败')
-      setPackageOperationID(undefined)
-    }
-  }, [packageOperationQuery.data?.status, currentLayerSet?.id])
-
-  useEffect(() => {
-    if (
-      operation?.operation_type !== 'editor_publish' ||
-      operation.status !== 'succeeded' ||
-      !operation.result_asset_id
-    )
-      return
-    void api<Asset>(`/api/v1/assets/${operation.result_asset_id}`).then(
-      (asset) => {
-        mergeAssetIntoCaches(queryClient, asset)
-        setNotice('新图片已置入灵感墙顶部')
-      },
-    )
-  }, [
-    operation?.id,
-    operation?.status,
-    operation?.result_asset_id,
-    operation?.operation_type,
-    queryClient,
-  ])
 
   const selected = documentState?.objects.find(
     (object) => object.id === selectedID,
@@ -1867,7 +1635,7 @@ function ImageEditorPage() {
               title={
                 canDecompose
                   ? '智能分层'
-                  : layerCapability?.availability.message || '智能分层暂未开放'
+                  : operations.capabilityMessage || '智能分层暂未开放'
               }
               onClick={() => void startDecomposition()}
             >
@@ -1878,7 +1646,7 @@ function ImageEditorPage() {
               type="button"
               className="editor-publish"
               disabled={operationRunning || Boolean(cropSession)}
-              onClick={() => void publish()}
+              onClick={() => void operations.publish()}
             >
               <Save size={16} />
               保存为新图片
@@ -2546,23 +2314,21 @@ function ImageEditorPage() {
               </div>
             )}
             {operationRunning && (
-              <DecompositionWaiting
+              <EditorOperationWaiting
                 status={operation?.status}
                 message={operation?.message}
                 elapsed={elapsed}
               />
             )}
-            {operation?.status === 'succeeded' &&
-              operation.layer_set &&
-              !operation.layer_set.applied_to_project && (
-                <button
-                  className="editor-pending-result"
-                  type="button"
-                  onClick={applyLayerSet}
-                >
-                  工程已在其他标签页更新 · 应用这次分层结果
-                </button>
-              )}
+            {pendingLayerSet && (
+              <button
+                className="editor-pending-result"
+                type="button"
+                onClick={() => applyLayerSet(pendingLayerSet)}
+              >
+                工程已在其他标签页更新 · 应用这次分层结果
+              </button>
+            )}
           </div>
 
           <aside className="editor-inspector">
@@ -3191,7 +2957,13 @@ function ImageEditorPage() {
                     </a>
                     <button
                       type="button"
-                      onClick={() => void publishSelectedLayer()}
+                      onClick={() => {
+                        if (currentLayerSet)
+                          void operations.publishLayer(
+                            currentLayerSet.id,
+                            selectedLayer.id,
+                          )
+                      }}
                     >
                       保存为图片
                     </button>
@@ -3201,10 +2973,10 @@ function ImageEditorPage() {
                   <button
                     className="editor-package-layers"
                     type="button"
-                    disabled={Boolean(packageOperationID)}
-                    onClick={() => void packageLayers()}
+                    disabled={operations.packageRunning}
+                    onClick={() => void operations.packageLayers()}
                   >
-                    {packageOperationID ? '正在打包' : '下载全部图层'}
+                    {operations.packageRunning ? '正在打包' : '下载全部图层'}
                   </button>
                 )}
               </div>
@@ -3366,33 +3138,6 @@ function ImageEditorPage() {
         />
       </main>
     </AppShell>
-  )
-}
-
-function DecompositionWaiting({
-  status,
-  message,
-  elapsed,
-}: {
-  status?: string
-  message?: string
-  elapsed: number
-}) {
-  const messages: Record<string, string> = {
-    queued: '等待处理资源',
-    dispatched: '等待处理资源',
-    snapshotting: '识别画面结构',
-    submitting: '区分主体与背景',
-    provider_processing: '整理图层关系',
-    ingesting: '生成图层预览',
-  }
-  return (
-    <div className="decomposition-wait" aria-live="polite">
-      <div className="decomposition-scan" />
-      <Sparkles size={24} />
-      <strong>{message || messages[status ?? ''] || '准备透明图层'}</strong>
-      <span>{elapsed} 秒 · 可以返回，任务会在后台继续</span>
-    </div>
   )
 }
 

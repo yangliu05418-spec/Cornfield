@@ -640,6 +640,38 @@ test('image editor restores a source project and autosaves keyboard edits', asyn
     .toBe(true)
   await page.getByRole('button', { name: '解锁图层 前景人物' }).click()
 
+  const viewport = await canvas.boundingBox()
+  expect(viewport).not.toBeNull()
+  await page.mouse.move(viewport!.x + 8, viewport!.y + 8)
+  await page.mouse.down()
+  await page.mouse.move(
+    viewport!.x + viewport!.width - 8,
+    viewport!.y + viewport!.height - 8,
+  )
+  await page.mouse.up()
+  await expect(page.getByText('已选 2')).toBeVisible()
+  await page.getByRole('button', { name: '选择图层 前景人物' }).click()
+
+  await page
+    .getByRole('button', { name: '选择图层 源图' })
+    .click({ modifiers: ['Shift'] })
+  await expect(page.getByText('已选 2')).toBeVisible()
+  const beforeGroupMove = backend
+    .editorState()
+    .document.objects.map((item) => item.transform[4])
+  await canvas.focus()
+  await page.keyboard.press('ArrowRight')
+  await expect
+    .poll(() =>
+      backend.editorState().document.objects.map((item) => item.transform[4]),
+    )
+    .toEqual(beforeGroupMove.map((value) => value + 1))
+  await page.keyboard.press('Control+d')
+  await expect.poll(() => backend.editorState().document.objects.length).toBe(4)
+  await page.keyboard.press('Control+z')
+  await expect.poll(() => backend.editorState().document.objects.length).toBe(2)
+  await page.getByRole('button', { name: '选择图层 前景人物' }).click()
+
   const centerX = page.locator('.editor-geometry-grid input').nth(0)
   const centerY = page.locator('.editor-geometry-grid input').nth(1)
   await centerX.fill('600')

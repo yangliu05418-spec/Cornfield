@@ -45,8 +45,10 @@ import {
   scaleAroundCenter,
   scaleByFactorAroundCenter,
   screenPointToWorld,
-  snapObjectTranslation,
+  snapBoundsTranslation,
   transformPoint,
+  unionBounds,
+  boundsIntersect,
   zoomAtScreenPoint,
 } from '#/lib/editor-transform'
 import type {
@@ -98,6 +100,13 @@ function ImageEditorPage() {
     null,
   )
   const [selectedID, setSelectedID] = useState('')
+  const [selectedIDs, setSelectedIDs] = useState<Set<string>>(new Set())
+  const [marquee, setMarquee] = useState<{
+    left: number
+    top: number
+    right: number
+    bottom: number
+  }>()
   const [view, setView] = useState({ zoom: 100, panX: 0, panY: 0 })
   const [spacePressed, setSpacePressed] = useState(false)
   const [uploading, setUploading] = useState(false)
@@ -142,7 +151,9 @@ function ImageEditorPage() {
     setDocumentState(projectQuery.data.document)
     setCanvasDraft(projectQuery.data.document.canvas)
     revisionRef.current = projectQuery.data.revision
-    setSelectedID(projectQuery.data.document.objects.at(-1)?.id ?? '')
+    const initialSelection = projectQuery.data.document.objects.at(-1)?.id ?? ''
+    setSelectedID(initialSelection)
+    setSelectedIDs(new Set(initialSelection ? [initialSelection] : []))
     setOperationID(projectQuery.data.latest_operation_id)
   }, [projectQuery.data])
 
@@ -165,6 +176,16 @@ function ImageEditorPage() {
     fittedRef.current = true
     requestAnimationFrame(fitCanvas)
   }, [documentState, fitCanvas])
+
+  useEffect(() => {
+    if (!documentState || !selectedID) return
+    const valid = new Set(documentState.objects.map((item) => item.id))
+    const next = new Set([...selectedIDs].filter((id) => valid.has(id)))
+    if (valid.has(selectedID) && next.has(selectedID)) return
+    const fallback = [...next].at(-1) ?? documentState.objects.at(-1)?.id ?? ''
+    setSelectedID(fallback)
+    setSelectedIDs(new Set(fallback && !next.size ? [fallback] : next))
+  }, [documentState, selectedID, selectedIDs])
 
   useEffect(() => {
     const down = (event: KeyboardEvent) => {
@@ -332,6 +353,21 @@ function ImageEditorPage() {
     scheduleSave()
   }
 
+  function selectOnly(id = '') {
+    setSelectedID(id)
+    setSelectedIDs(new Set(id ? [id] : []))
+  }
+
+  function toggleSelection(id: string) {
+    setSelectedIDs((current) => {
+      const next = new Set(current)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      setSelectedID(next.has(id) ? id : ([...next].at(-1) ?? ''))
+      return next
+    })
+  }
+
   function updateObject(
     id: string,
     update: (object: EditorObject) => EditorObject,
@@ -380,7 +416,7 @@ function ImageEditorPage() {
       ...current,
       objects: ordered.map((item, index) => ({ ...item, z_index: index })),
     })
-    setSelectedID(sourceID)
+    selectOnly(sourceID)
   }
 
   function undo() {
@@ -438,11 +474,10 @@ function ImageEditorPage() {
     URL.revokeObjectURL(href)
   }
 
-  function beginDrag(event: ReactPointerEvent, object: EditorObject) {
+  function beginDrag(event: ReactPointerEvent, dragIDs: Set<string>) {
     if (
       spacePressed ||
       event.button === 1 ||
-      object.locked ||
       operationRunning ||
       !documentRef.current
     )
@@ -452,8 +487,27 @@ function ImageEditorPage() {
     const startX = event.clientX
     const startY = event.clientY
     const initialDocument = structuredClone(documentRef.current)
-    const initial = [...object.transform] as EditorObject['transform']
-    const asset = assetsQuery.data?.get(object.asset_id)
+    const movableIDs = new Set(
+      initialDocument.objects
+        .filter((item) => dragIDs.has(item.id) && !item.locked)
+        .map((item) => item.id),
+    )
+    if (!movableIDs.size) return
+    const initialTransforms = new Map(
+      initialDocument.objects
+        .filter((item) => movableIDs.has(item.id))
+        .map((item) => [item.id, item.transform]),
+    )
+    const movingBounds = unionBounds(
+      initialDocument.objects.flatMap((item) => {
+        if (!movableIDs.has(item.id)) return []
+        const asset = assetsQuery.data?.get(item.asset_id)
+        return asset
+          ? [objectBounds(item.transform, asset.width, asset.height)]
+          : []
+      }),
+    )
+    let changed = false
     const snapTargets = [
       {
         left: 0,
@@ -466,7 +520,7 @@ function ImageEditorPage() {
         height: initialDocument.canvas.height,
       },
       ...initialDocument.objects.flatMap((item) => {
-        if (item.id === object.id || !item.visible) return []
+        if (movableIDs.has(item.id) || !item.visible) return []
         const itemAsset = assetsQuery.data?.get(item.asset_id)
         return itemAsset
           ? [objectBounds(item.transform, itemAsset.width, itemAsset.height)]
@@ -476,40 +530,33 @@ function ImageEditorPage() {
     const move = (moveEvent: PointerEvent) => {
       const current = documentRef.current
       if (!current) return
-      let transform: EditorObject['transform'] = [
-        initial[0],
-        initial[1],
-        initial[2],
-        initial[3],
-        initial[4] + (moveEvent.clientX - startX) / (zoom / 100),
-        initial[5] + (moveEvent.clientY - startY) / (zoom / 100),
-      ]
-      if (asset && !moveEvent.altKey) {
-        const snapped = snapObjectTranslation(
-          transform,
-          asset.width,
-          asset.height,
+      let dx = (moveEvent.clientX - startX) / (zoom / 100)
+      let dy = (moveEvent.clientY - startY) / (zoom / 100)
+      if (movingBounds && !moveEvent.altKey) {
+        const translatedBounds = {
+          ...movingBounds,
+          left: movingBounds.left + dx,
+          right: movingBounds.right + dx,
+          centerX: movingBounds.centerX + dx,
+          top: movingBounds.top + dy,
+          bottom: movingBounds.bottom + dy,
+          centerY: movingBounds.centerY + dy,
+        }
+        const snapped = snapBoundsTranslation(
+          translatedBounds,
           snapTargets,
           8 / (zoom / 100),
         )
-        transform = [
-          transform[0],
-          transform[1],
-          transform[2],
-          transform[3],
-          transform[4] + snapped.dx,
-          transform[5] + snapped.dy,
-        ]
+        dx += snapped.dx
+        dy += snapped.dy
         setSnapGuides(snapped.guides)
       } else setSnapGuides([])
+      changed = Math.abs(dx) > 1e-6 || Math.abs(dy) > 1e-6
       const next = {
         ...current,
         objects: current.objects.map((item) =>
-          item.id === object.id
-            ? {
-                ...item,
-                transform,
-              }
+          movableIDs.has(item.id)
+            ? translateObject(item, initialTransforms.get(item.id)!, dx, dy)
             : item,
         ),
       } satisfies EditorDocument
@@ -519,6 +566,10 @@ function ImageEditorPage() {
     const up = () => {
       window.removeEventListener('pointermove', move)
       window.removeEventListener('pointerup', up)
+      if (!changed) {
+        setSnapGuides([])
+        return
+      }
       historyRef.current.push(initialDocument)
       if (historyRef.current.length > 100) historyRef.current.shift()
       futureRef.current = []
@@ -532,8 +583,67 @@ function ImageEditorPage() {
   function beginPan(event: ReactPointerEvent<HTMLDivElement>) {
     event.currentTarget.focus({ preventScroll: true })
     if (!(spacePressed || event.button === 1)) {
-      if (event.button === 0 && event.target === event.currentTarget)
-        setSelectedID('')
+      if (event.button !== 0 || operationRunning) return
+      if (
+        event.target instanceof Element &&
+        event.target.closest('.editor-canvas > img, .editor-selection-box')
+      )
+        return
+      event.preventDefault()
+      const rect = event.currentTarget.getBoundingClientRect()
+      const start = screenPointToWorld(event.clientX, event.clientY, rect, view)
+      const move = (moveEvent: PointerEvent) => {
+        const end = screenPointToWorld(
+          moveEvent.clientX,
+          moveEvent.clientY,
+          rect,
+          view,
+        )
+        setMarquee({
+          left: Math.min(start.x, end.x),
+          top: Math.min(start.y, end.y),
+          right: Math.max(start.x, end.x),
+          bottom: Math.max(start.y, end.y),
+        })
+      }
+      const up = (upEvent: PointerEvent) => {
+        window.removeEventListener('pointermove', move)
+        window.removeEventListener('pointerup', up)
+        const end = screenPointToWorld(
+          upEvent.clientX,
+          upEvent.clientY,
+          rect,
+          view,
+        )
+        const selectionBounds = boundsFromPoints(start, end)
+        const dragged =
+          Math.abs(upEvent.clientX - event.clientX) > 3 ||
+          Math.abs(upEvent.clientY - event.clientY) > 3
+        const matched = dragged
+          ? (documentRef.current?.objects.filter((item) => {
+              if (!item.visible) return false
+              const asset = assetsQuery.data?.get(item.asset_id)
+              return (
+                asset &&
+                boundsIntersect(
+                  selectionBounds,
+                  objectBounds(item.transform, asset.width, asset.height),
+                )
+              )
+            }) ?? [])
+          : []
+        const next = upEvent.shiftKey ? new Set(selectedIDs) : new Set<string>()
+        for (const item of matched) next.add(item.id)
+        setSelectedIDs(next)
+        setSelectedID(
+          [...matched].sort((a, b) => b.z_index - a.z_index).at(0)?.id ??
+            [...next].at(-1) ??
+            '',
+        )
+        setMarquee(undefined)
+      }
+      window.addEventListener('pointermove', move)
+      window.addEventListener('pointerup', up, { once: true })
       return
     }
     event.preventDefault()
@@ -738,7 +848,7 @@ function ImageEditorPage() {
         z_index: current.objects.length,
       }
       applyDocument({ ...current, objects: [...current.objects, nextObject] })
-      setSelectedID(nextObject.id)
+      selectOnly(nextObject.id)
       setNotice('图片已置入画板')
     } catch (error) {
       setNotice(error instanceof Error ? error.message : '图片上传失败')
@@ -777,30 +887,35 @@ function ImageEditorPage() {
     }
   }
 
-  function duplicateSelectedObject() {
+  function duplicateSelectedObjects() {
     const current = documentRef.current
-    if (!selected || !current || operationRunning) return
-    if (current.objects.length >= maxEditorObjects) {
+    if (!current || operationRunning) return
+    const sources = current.objects.filter((item) => selectedIDs.has(item.id))
+    if (!sources.length) return
+    if (current.objects.length + sources.length > maxEditorObjects) {
       setNotice('当前工程最多可放置 64 个图层')
       return
     }
-    const duplicate: EditorObject = {
-      ...structuredClone(selected),
-      id: crypto.randomUUID(),
-      name: `${selected.name || '图层'} 副本`.slice(0, 64),
-      z_index: current.objects.length,
-      transform: [
-        selected.transform[0],
-        selected.transform[1],
-        selected.transform[2],
-        selected.transform[3],
-        selected.transform[4] + 24,
-        selected.transform[5] + 24,
-      ],
-    }
-    applyDocument({ ...current, objects: [...current.objects, duplicate] })
-    setSelectedID(duplicate.id)
-    setNotice('已复制图层')
+    const duplicates = sources
+      .sort((a, b) => a.z_index - b.z_index)
+      .map((source, index): EditorObject => ({
+        ...structuredClone(source),
+        id: crypto.randomUUID(),
+        name: `${source.name || '图层'} 副本`.slice(0, 64),
+        z_index: current.objects.length + index,
+        transform: [
+          source.transform[0],
+          source.transform[1],
+          source.transform[2],
+          source.transform[3],
+          source.transform[4] + 24,
+          source.transform[5] + 24,
+        ],
+      }))
+    applyDocument({ ...current, objects: [...current.objects, ...duplicates] })
+    setSelectedIDs(new Set(duplicates.map((item) => item.id)))
+    setSelectedID(duplicates.at(-1)?.id ?? '')
+    setNotice(`已复制 ${duplicates.length} 个图层`)
   }
 
   uploadEditorImageRef.current = (file, position) =>
@@ -888,7 +1003,7 @@ function ImageEditorPage() {
     ]
     appliedLayerSetRef.current = layerSet.id
     applyDocument({ ...documentRef.current, objects })
-    setSelectedID(objects.at(-1)?.id ?? '')
+    selectOnly(objects.at(-1)?.id ?? '')
   }
 
   useEffect(() => {
@@ -1079,23 +1194,60 @@ function ImageEditorPage() {
   const selectedAxisScales = selected
     ? objectAxisScales(selected.transform)
     : undefined
+  const selectedObjects =
+    documentState?.objects.filter((object) => selectedIDs.has(object.id)) ?? []
+  const groupBounds = unionBounds(
+    selectedObjects.flatMap((object) => {
+      if (!object.visible) return []
+      const asset = objectAssets?.get(object.asset_id)
+      return asset
+        ? [objectBounds(object.transform, asset.width, asset.height)]
+        : []
+    }),
+  )
 
-  function removeSelectedObject() {
+  function removeSelectedObjects() {
     const current = documentRef.current
     if (!selected || !current || operationRunning) return
-    if (selected.asset_id === projectQuery.data?.source_asset_id) {
-      setNotice('源图是当前工程的锚点，可以隐藏，但不能移除')
+    const removable = new Set(
+      selectedObjects
+        .filter(
+          (item) =>
+            !item.locked &&
+            item.asset_id !== projectQuery.data?.source_asset_id,
+        )
+        .map((item) => item.id),
+    )
+    if (!removable.size) {
+      setNotice(
+        selectedObjects.some((item) => item.locked)
+          ? '请先解锁需要删除的图层'
+          : '源图是当前工程的锚点，可以隐藏，但不能移除',
+      )
       return
     }
-    if (current.objects.length === 1) {
+    if (current.objects.length - removable.size < 1) {
       setNotice('画板至少需要保留一个图层')
       return
     }
     const remaining = current.objects
-      .filter((object) => object.id !== selected.id)
+      .filter((object) => !removable.has(object.id))
       .map((object, index) => ({ ...object, z_index: index }))
     applyDocument({ ...current, objects: remaining })
-    setSelectedID(remaining.at(-1)?.id ?? '')
+    selectOnly(remaining.at(-1)?.id ?? '')
+  }
+
+  function updateSelectedObjects(
+    update: (object: EditorObject) => EditorObject,
+  ) {
+    const current = documentRef.current
+    if (!current || !selectedIDs.size || operationRunning) return
+    applyDocument({
+      ...current,
+      objects: current.objects.map((item) =>
+        selectedIDs.has(item.id) ? update(item) : item,
+      ),
+    })
   }
 
   function resizeArtboard() {
@@ -1326,7 +1478,7 @@ function ImageEditorPage() {
             <button
               type="button"
               title="旋转 90°"
-              disabled={!selected || operationRunning}
+              disabled={!selected || selectedIDs.size !== 1 || operationRunning}
               onClick={() =>
                 selected &&
                 selectedAsset &&
@@ -1345,7 +1497,7 @@ function ImageEditorPage() {
             <button
               type="button"
               title="水平翻转"
-              disabled={!selected || operationRunning}
+              disabled={!selected || selectedIDs.size !== 1 || operationRunning}
               onClick={() =>
                 selected &&
                 selectedAsset &&
@@ -1364,7 +1516,7 @@ function ImageEditorPage() {
             <button
               type="button"
               title="垂直翻转"
-              disabled={!selected || operationRunning}
+              disabled={!selected || selectedIDs.size !== 1 || operationRunning}
               onClick={() =>
                 selected &&
                 selectedAsset &&
@@ -1383,7 +1535,7 @@ function ImageEditorPage() {
             <button
               type="button"
               title="裁切边缘"
-              disabled={!selected || operationRunning}
+              disabled={!selected || selectedIDs.size !== 1 || operationRunning}
               onClick={() =>
                 selected &&
                 updateObject(selected.id, (object) => ({
@@ -1465,6 +1617,18 @@ function ImageEditorPage() {
             onKeyDown={(event) => {
               if (
                 (event.ctrlKey || event.metaKey) &&
+                event.key.toLowerCase() === 'a'
+              ) {
+                event.preventDefault()
+                const selectable = documentState.objects
+                  .filter((item) => item.visible)
+                  .map((item) => item.id)
+                setSelectedIDs(new Set(selectable))
+                setSelectedID(selectable.at(-1) ?? '')
+                return
+              }
+              if (
+                (event.ctrlKey || event.metaKey) &&
                 event.key.toLowerCase() === 'z'
               ) {
                 event.preventDefault()
@@ -1478,11 +1642,11 @@ function ImageEditorPage() {
                 event.key.toLowerCase() === 'd'
               ) {
                 event.preventDefault()
-                duplicateSelectedObject()
+                duplicateSelectedObjects()
                 return
               }
               if (event.key === 'Escape') {
-                setSelectedID('')
+                selectOnly()
                 return
               }
               if (event.key === '0') {
@@ -1497,17 +1661,17 @@ function ImageEditorPage() {
               }
               if (
                 selected &&
-                !selected.locked &&
+                selectedObjects.some((item) => !item.locked) &&
                 !operationRunning &&
                 (event.key === 'Delete' || event.key === 'Backspace')
               ) {
                 event.preventDefault()
-                removeSelectedObject()
+                removeSelectedObjects()
                 return
               }
               if (
                 !selected ||
-                selected.locked ||
+                !selectedObjects.some((item) => !item.locked) ||
                 operationRunning ||
                 !['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(
                   event.key,
@@ -1528,17 +1692,21 @@ function ImageEditorPage() {
                   : event.key === 'ArrowDown'
                     ? distance
                     : 0
-              updateObject(selected.id, (object) => ({
-                ...object,
-                transform: [
-                  object.transform[0],
-                  object.transform[1],
-                  object.transform[2],
-                  object.transform[3],
-                  object.transform[4] + dx,
-                  object.transform[5] + dy,
-                ],
-              }))
+              updateSelectedObjects((object) =>
+                object.locked
+                  ? object
+                  : {
+                      ...object,
+                      transform: [
+                        object.transform[0],
+                        object.transform[1],
+                        object.transform[2],
+                        object.transform[3],
+                        object.transform[4] + dx,
+                        object.transform[5] + dy,
+                      ],
+                    },
+              )
             }}
           >
             <div
@@ -1567,7 +1735,11 @@ function ImageEditorPage() {
                   return (
                     <img
                       key={object.id}
-                      className={object.id === selectedID ? 'is-selected' : ''}
+                      className={
+                        selectedIDs.size === 1 && selectedIDs.has(object.id)
+                          ? 'is-selected'
+                          : ''
+                      }
                       src={asset.thumb_1280_url || asset.thumb_640_url}
                       width={asset.width}
                       height={asset.height}
@@ -1583,62 +1755,110 @@ function ImageEditorPage() {
                       }}
                       onPointerDown={(event) => {
                         viewportRef.current?.focus({ preventScroll: true })
+                        const nextSelection =
+                          event.shiftKey || selectedIDs.has(object.id)
+                            ? new Set(selectedIDs)
+                            : new Set([object.id])
+                        if (event.shiftKey) {
+                          if (nextSelection.has(object.id))
+                            nextSelection.delete(object.id)
+                          else nextSelection.add(object.id)
+                        }
+                        if (!nextSelection.has(object.id)) {
+                          setSelectedIDs(nextSelection)
+                          setSelectedID([...nextSelection].at(-1) ?? '')
+                          return
+                        }
+                        setSelectedIDs(nextSelection)
                         setSelectedID(object.id)
                         if (spacePressed || event.button === 1) return
-                        beginDrag(event, object)
+                        beginDrag(event, nextSelection)
                       }}
                     />
                   )
                 })}
               </div>
-              {selected && selectedAsset && selected.visible && (
-                <div
-                  className="editor-selection-box"
-                  style={
-                    {
-                      width: selectedAsset.width,
-                      height: selectedAsset.height,
-                      transform: `matrix(${selected.transform.join(',')})`,
-                      '--editor-handle-size': `${12 / (zoom / 100) / Math.max(0.05, objectScale(selected.transform))}px`,
-                      '--editor-handle-distance': `${34 / (zoom / 100) / Math.max(0.05, objectScale(selected.transform))}px`,
-                    } as CSSProperties
-                  }
-                  aria-hidden={selected.locked || operationRunning}
-                >
-                  {!selected.locked && !operationRunning && (
-                    <>
-                      {['nw', 'ne', 'se', 'sw'].map((position) => (
+              {selected &&
+                selectedAsset &&
+                selected.visible &&
+                selectedIDs.size === 1 && (
+                  <div
+                    className="editor-selection-box"
+                    style={
+                      {
+                        width: selectedAsset.width,
+                        height: selectedAsset.height,
+                        transform: `matrix(${selected.transform.join(',')})`,
+                        '--editor-handle-size': `${12 / (zoom / 100) / Math.max(0.05, objectScale(selected.transform))}px`,
+                        '--editor-handle-distance': `${34 / (zoom / 100) / Math.max(0.05, objectScale(selected.transform))}px`,
+                      } as CSSProperties
+                    }
+                    aria-hidden={selected.locked || operationRunning}
+                  >
+                    {!selected.locked && !operationRunning && (
+                      <>
+                        {['nw', 'ne', 'se', 'sw'].map((position) => (
+                          <button
+                            key={position}
+                            className={`editor-transform-handle is-${position}`}
+                            type="button"
+                            aria-label="缩放图层"
+                            onPointerDown={(event) =>
+                              beginObjectTransform(
+                                event,
+                                selected,
+                                selectedAsset,
+                                'scale',
+                              )
+                            }
+                          />
+                        ))}
                         <button
-                          key={position}
-                          className={`editor-transform-handle is-${position}`}
+                          className="editor-rotate-handle"
                           type="button"
-                          aria-label="缩放图层"
+                          aria-label="旋转图层"
                           onPointerDown={(event) =>
                             beginObjectTransform(
                               event,
                               selected,
                               selectedAsset,
-                              'scale',
+                              'rotate',
                             )
                           }
                         />
-                      ))}
-                      <button
-                        className="editor-rotate-handle"
-                        type="button"
-                        aria-label="旋转图层"
-                        onPointerDown={(event) =>
-                          beginObjectTransform(
-                            event,
-                            selected,
-                            selectedAsset,
-                            'rotate',
-                          )
-                        }
-                      />
-                    </>
-                  )}
+                      </>
+                    )}
+                  </div>
+                )}
+              {selectedIDs.size > 1 && groupBounds && (
+                <div
+                  className="editor-group-selection"
+                  style={
+                    {
+                      left: groupBounds.left,
+                      top: groupBounds.top,
+                      width: groupBounds.width,
+                      height: groupBounds.height,
+                      '--editor-zoom': zoom / 100,
+                    } as CSSProperties
+                  }
+                >
+                  <span>{selectedIDs.size} 个图层</span>
                 </div>
+              )}
+              {marquee && (
+                <div
+                  className="editor-marquee"
+                  style={
+                    {
+                      left: marquee.left,
+                      top: marquee.top,
+                      width: marquee.right - marquee.left,
+                      height: marquee.bottom - marquee.top,
+                      '--editor-zoom': zoom / 100,
+                    } as CSSProperties
+                  }
+                />
               )}
               {snapGuides.map((guide) => (
                 <span
@@ -1681,8 +1901,63 @@ function ImageEditorPage() {
           <aside className="editor-inspector">
             <div className="editor-panel-tabs">
               <strong>图层</strong>
-              <span>{documentState.objects.length} / 64</span>
+              <span>
+                {selectedIDs.size > 1
+                  ? `已选 ${selectedIDs.size}`
+                  : `${documentState.objects.length} / 64`}
+              </span>
             </div>
+            {selectedIDs.size > 1 && (
+              <div
+                className="editor-bulk-layer-actions"
+                aria-label="批量图层操作"
+              >
+                <button
+                  type="button"
+                  onClick={() =>
+                    updateSelectedObjects((item) => ({
+                      ...item,
+                      visible: false,
+                    }))
+                  }
+                >
+                  <EyeOff size={14} /> 隐藏
+                </button>
+                <button
+                  type="button"
+                  onClick={() =>
+                    updateSelectedObjects((item) => ({
+                      ...item,
+                      visible: true,
+                    }))
+                  }
+                >
+                  <Eye size={14} /> 显示
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const lock = !selectedObjects.every((item) => item.locked)
+                    updateSelectedObjects((item) => ({ ...item, locked: lock }))
+                  }}
+                >
+                  {selectedObjects.every((item) => item.locked) ? (
+                    <Unlock size={14} />
+                  ) : (
+                    <Lock size={14} />
+                  )}
+                  {selectedObjects.every((item) => item.locked)
+                    ? '解锁'
+                    : '锁定'}
+                </button>
+                <button type="button" onClick={duplicateSelectedObjects}>
+                  <Copy size={14} /> 复制
+                </button>
+                <button type="button" onClick={removeSelectedObjects}>
+                  <Trash2 size={14} /> 删除
+                </button>
+              </div>
+            )}
             <div className="editor-artboard-settings">
               <span>画板尺寸</span>
               <label>
@@ -1738,7 +2013,7 @@ function ImageEditorPage() {
                 return (
                   <div
                     key={object.id}
-                    className={`editor-layer-row${object.id === selectedID ? ' active' : ''}`}
+                    className={`editor-layer-row${selectedIDs.has(object.id) ? ' active' : ''}`}
                     draggable={!operationRunning}
                     onDragStart={(event) => {
                       event.dataTransfer.effectAllowed = 'move'
@@ -1769,7 +2044,12 @@ function ImageEditorPage() {
                       className="editor-layer-select"
                       type="button"
                       aria-label={`选择图层 ${layerName}`}
-                      onClick={() => setSelectedID(object.id)}
+                      aria-pressed={selectedIDs.has(object.id)}
+                      onClick={(event) =>
+                        event.shiftKey
+                          ? toggleSelection(object.id)
+                          : selectOnly(object.id)
+                      }
                     >
                       <img
                         src={objectAssets?.get(object.asset_id)?.thumb_320_url}
@@ -1817,7 +2097,7 @@ function ImageEditorPage() {
                 )
               })}
             </div>
-            {selected && (
+            {selected && selectedIDs.size === 1 && (
               <div className="editor-properties">
                 <label className="editor-layer-name">
                   图层名称
@@ -1957,7 +2237,7 @@ function ImageEditorPage() {
                     type="button"
                     title="复制图层"
                     disabled={operationRunning}
-                    onClick={duplicateSelectedObject}
+                    onClick={duplicateSelectedObjects}
                   >
                     <Copy size={15} />
                   </button>
@@ -2003,9 +2283,12 @@ function ImageEditorPage() {
                   disabled={
                     operationRunning ||
                     documentState.objects.length <= 1 ||
-                    selected.asset_id === projectQuery.data?.source_asset_id
+                    !selectedObjects.some(
+                      (item) =>
+                        item.asset_id !== projectQuery.data?.source_asset_id,
+                    )
                   }
-                  onClick={removeSelectedObject}
+                  onClick={removeSelectedObjects}
                 >
                   <Trash2 size={15} />
                   移除图层
@@ -2418,6 +2701,45 @@ function isTypingTarget(target: EventTarget | null) {
     target instanceof HTMLSelectElement ||
     (target instanceof HTMLElement && target.isContentEditable)
   )
+}
+
+function translateObject(
+  object: EditorObject,
+  initial: EditorObject['transform'],
+  dx: number,
+  dy: number,
+): EditorObject {
+  return {
+    ...object,
+    transform: [
+      initial[0],
+      initial[1],
+      initial[2],
+      initial[3],
+      initial[4] + dx,
+      initial[5] + dy,
+    ],
+  }
+}
+
+function boundsFromPoints(
+  start: { x: number; y: number },
+  end: { x: number; y: number },
+) {
+  const left = Math.min(start.x, end.x)
+  const top = Math.min(start.y, end.y)
+  const right = Math.max(start.x, end.x)
+  const bottom = Math.max(start.y, end.y)
+  return {
+    left,
+    top,
+    right,
+    bottom,
+    centerX: (left + right) / 2,
+    centerY: (top + bottom) / 2,
+    width: right - left,
+    height: bottom - top,
+  }
 }
 
 function changeLayerOrder(

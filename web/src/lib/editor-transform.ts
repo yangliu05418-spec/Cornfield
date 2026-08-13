@@ -187,14 +187,38 @@ export function moveObjectCenter(
 
 export type SnapGuide = { axis: 'x' | 'y'; position: number }
 
-export function snapObjectTranslation(
-  transform: Affine,
-  width: number,
-  height: number,
+export function unionBounds(bounds: ObjectBounds[]): ObjectBounds | undefined {
+  if (!bounds.length) return undefined
+  const left = Math.min(...bounds.map((item) => item.left))
+  const top = Math.min(...bounds.map((item) => item.top))
+  const right = Math.max(...bounds.map((item) => item.right))
+  const bottom = Math.max(...bounds.map((item) => item.bottom))
+  return {
+    left,
+    top,
+    right,
+    bottom,
+    centerX: (left + right) / 2,
+    centerY: (top + bottom) / 2,
+    width: right - left,
+    height: bottom - top,
+  }
+}
+
+export function boundsIntersect(left: ObjectBounds, right: ObjectBounds) {
+  return !(
+    left.right < right.left ||
+    left.left > right.right ||
+    left.bottom < right.top ||
+    left.top > right.bottom
+  )
+}
+
+export function snapBoundsTranslation(
+  bounds: ObjectBounds,
   targets: ObjectBounds[],
   threshold: number,
 ) {
-  const bounds = objectBounds(transform, width, height)
   const xPoints = [bounds.left, bounds.centerX, bounds.right]
   const yPoints = [bounds.top, bounds.centerY, bounds.bottom]
   const xTargets = targets.flatMap((target) => [
@@ -217,6 +241,17 @@ export function snapObjectTranslation(
       ...(ySnap ? [{ axis: 'y' as const, position: ySnap.position }] : []),
     ],
   }
+}
+
+export function snapObjectTranslation(
+  transform: Affine,
+  width: number,
+  height: number,
+  targets: ObjectBounds[],
+  threshold: number,
+) {
+  const bounds = objectBounds(transform, width, height)
+  return snapBoundsTranslation(bounds, targets, threshold)
 }
 
 function nearestSnap(points: number[], targets: number[], threshold: number) {

@@ -16,7 +16,9 @@ import {
   Maximize,
   Redo2,
   Save,
+  SlidersHorizontal,
   Sparkles,
+  Trash2,
   Undo2,
   Unlock,
 } from 'lucide-react'
@@ -34,6 +36,7 @@ import {
   detachEditorMask,
   EditorCommandError,
   groupEditorNodes,
+  removeEditorNodes,
   ungroupEditorNode,
 } from './domain/authoring-v2'
 import type { EditorDocumentV2, EditorNodeV2 } from './domain/document-v2'
@@ -41,6 +44,7 @@ import {
   editorBlendModesV2,
   editorEffectDefinitionsV2,
   editorLayerSupportsEffects,
+  createEditorAdjustmentLayer,
   setEditorLayerBlendMode,
   setEditorLayerEffectEnabled,
   setEditorLayerEffectValue,
@@ -303,6 +307,35 @@ export function StructuredEditor({
     }
   }
 
+  function createAdjustmentLayer() {
+    if (activeNode?.type !== 'raster') return
+    const id = crypto.randomUUID()
+    const changed = runCommand(
+      () =>
+        createEditorAdjustmentLayer(documentRef.current, activeNode.id, {
+          id,
+          name: `${activeNode.name || '图层'}调整`,
+        }),
+      '已创建剪贴调整层',
+    )
+    if (changed) {
+      setSelectedIDs(new Set([id]))
+      setActiveID(id)
+    }
+  }
+
+  function removeSelection() {
+    if (selectedIDs.size === 0) return
+    const changed = runCommand(
+      () => removeEditorNodes(documentRef.current, [...selectedIDs]),
+      '已删除所选图层，可撤销恢复',
+    )
+    if (changed) {
+      setSelectedIDs(new Set())
+      setActiveID('')
+    }
+  }
+
   function attachMask() {
     if (selectedNodes.length !== 2 || !activeNode) return
     const mask = selectedNodes.find((node) => node.id !== activeNode.id)
@@ -521,6 +554,20 @@ export function StructuredEditor({
             </button>
           </div>
           <div className="editor-topbar-group structured-actions">
+            <button
+              type="button"
+              disabled={operations.running || activeNode?.type !== 'raster'}
+              onClick={createAdjustmentLayer}
+            >
+              <SlidersHorizontal size={16} /> 调整层
+            </button>
+            <button
+              type="button"
+              disabled={operations.running || selectedIDs.size === 0}
+              onClick={removeSelection}
+            >
+              <Trash2 size={16} /> 删除
+            </button>
             <button
               type="button"
               disabled={
@@ -772,6 +819,8 @@ export function StructuredEditor({
                       <span className="structured-layer-thumb">
                         {node.type === 'group' ? (
                           <Layers size={15} />
+                        ) : node.type === 'adjustment' ? (
+                          <SlidersHorizontal size={15} />
                         ) : asset ? (
                           <img src={asset.thumb_320_url} alt="" />
                         ) : null}
@@ -779,14 +828,20 @@ export function StructuredEditor({
                       <span>
                         <strong>
                           {node.name ||
-                            (node.type === 'group' ? '图层组' : '图层')}
+                            (node.type === 'group'
+                              ? '图层组'
+                              : node.type === 'adjustment'
+                                ? '调整层'
+                                : '图层')}
                         </strong>
                         <small>
                           {node.mask_id
                             ? '含蒙版'
                             : node.type === 'group'
                               ? '组'
-                              : '像素图层'}
+                              : node.type === 'adjustment'
+                                ? '剪贴调整图层'
+                                : '像素图层'}
                         </small>
                       </span>
                     </button>
@@ -852,7 +907,7 @@ export function StructuredEditor({
                   />
                 </label>
                 <label>
-                  透明度{' '}
+                  {activeNode.type === 'adjustment' ? '强度' : '透明度'}{' '}
                   <output>{Math.round(activeNode.opacity * 100)}%</output>
                   <input
                     type="range"
@@ -875,28 +930,31 @@ export function StructuredEditor({
                 </label>
                 {editorLayerSupportsEffects(document, activeNode.id) && (
                   <>
-                    <label>
-                      混合模式
-                      <select
-                        value={activeNode.blend_mode}
-                        disabled={operations.running}
-                        onChange={(event) =>
-                          applyDocument(
-                            setEditorLayerBlendMode(
-                              documentRef.current,
-                              activeNode.id,
-                              event.target.value as EditorNodeV2['blend_mode'],
-                            ),
-                          )
-                        }
-                      >
-                        {editorBlendModesV2.map((mode) => (
-                          <option key={mode.value} value={mode.value}>
-                            {mode.label}
-                          </option>
-                        ))}
-                      </select>
-                    </label>
+                    {activeNode.type === 'raster' && (
+                      <label>
+                        混合模式
+                        <select
+                          value={activeNode.blend_mode}
+                          disabled={operations.running}
+                          onChange={(event) =>
+                            applyDocument(
+                              setEditorLayerBlendMode(
+                                documentRef.current,
+                                activeNode.id,
+                                event.target
+                                  .value as EditorNodeV2['blend_mode'],
+                              ),
+                            )
+                          }
+                        >
+                          {editorBlendModesV2.map((mode) => (
+                            <option key={mode.value} value={mode.value}>
+                              {mode.label}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                    )}
                     <div className="structured-effects" aria-label="非破坏调整">
                       <div className="structured-effects-heading">
                         <span>调整</span>

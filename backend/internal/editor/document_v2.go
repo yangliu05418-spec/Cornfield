@@ -123,6 +123,7 @@ type NodeV2 struct {
 	AssetID   *uuid.UUID `json:"asset_id,omitempty"`
 	Crop      *Crop      `json:"crop,omitempty"`
 	Effects   []EffectV2 `json:"effects"`
+	TargetID  *string    `json:"target_id,omitempty"`
 }
 
 type EffectV2 struct {
@@ -232,14 +233,18 @@ func (d DocumentV2) Validate() error {
 			return ErrInvalidDocument
 		}
 		orderKeys[orderIdentity] = struct{}{}
-		if node.Type != "raster" && node.Type != "group" {
+		if node.Type != "raster" && node.Type != "group" && node.Type != "adjustment" {
 			return ErrInvalidDocument
 		}
 		if node.Type == "raster" {
-			if node.AssetID == nil || *node.AssetID == uuid.Nil || !validCrop(node.Crop) || !validEffects(node.Effects) {
+			if node.AssetID == nil || *node.AssetID == uuid.Nil || node.TargetID != nil || !validCrop(node.Crop) || !validEffects(node.Effects) {
 				return ErrInvalidDocument
 			}
-		} else if node.AssetID != nil || node.Crop != nil || len(node.Effects) != 0 {
+		} else if node.Type == "group" {
+			if node.AssetID != nil || node.Crop != nil || node.TargetID != nil || len(node.Effects) != 0 {
+				return ErrInvalidDocument
+			}
+		} else if node.AssetID != nil || node.Crop != nil || node.MaskID != nil || node.TargetID == nil || *node.TargetID == node.ID || node.Transform != [6]float64{1, 0, 0, 1, 0, 0} || node.BlendMode != "normal" || !validEffects(node.Effects) {
 			return ErrInvalidDocument
 		}
 		nodes[node.ID] = node
@@ -255,6 +260,17 @@ func (d DocumentV2) Validate() error {
 			mask, exists := nodes[*node.MaskID]
 			if !exists || mask.Type != "raster" || mask.ID == node.ID {
 				return ErrInvalidDocument
+			}
+		}
+		if node.Type == "adjustment" {
+			target, exists := nodes[*node.TargetID]
+			if !exists || target.Type != "raster" || target.ParentID == nil != (node.ParentID == nil) || (target.ParentID != nil && *target.ParentID != *node.ParentID) {
+				return ErrInvalidDocument
+			}
+			for _, candidate := range d.Nodes {
+				if candidate.MaskID != nil && *candidate.MaskID == target.ID {
+					return ErrInvalidDocument
+				}
 			}
 		}
 		if depth, ok := nodeDepth(node, nodes); !ok || depth > MaxNodeDepthV2 {

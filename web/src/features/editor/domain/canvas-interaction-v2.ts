@@ -103,9 +103,12 @@ export function translateEditorNodes(
     !Number.isFinite(worldDelta.y)
   )
     return document
-  const roots = editorSelectionRootIDs(document, selectedIDs)
-  const rootSet = new Set(roots)
   const byID = new Map(document.nodes.map((node) => [node.id, node]))
+  const roots = editorSelectionRootIDs(document, selectedIDs).filter(
+    (id) => byID.get(id)?.type !== 'adjustment',
+  )
+  if (roots.length === 0) return document
+  const rootSet = new Set(roots)
   for (const id of roots) {
     if (editorNodeWorldAppearance(byID, id).locked)
       throw new TypeError('Locked editor nodes cannot be moved')
@@ -153,9 +156,12 @@ export function transformEditorNodesAroundWorldPoint(
     (operation.type === 'rotate' && !Number.isFinite(operation.degrees))
   )
     return document
-  const roots = editorSelectionRootIDs(document, selectedIDs)
-  const rootSet = new Set(roots)
   const byID = new Map(document.nodes.map((node) => [node.id, node]))
+  const roots = editorSelectionRootIDs(document, selectedIDs).filter(
+    (id) => byID.get(id)?.type !== 'adjustment',
+  )
+  if (roots.length === 0) return document
+  const rootSet = new Set(roots)
   for (const id of roots) {
     if (editorNodeWorldAppearance(byID, id).locked)
       throw new TypeError('Locked editor nodes cannot be transformed')
@@ -251,7 +257,7 @@ function flattenRasterGeometry(document: EditorDocumentV2) {
       const locked = parentLocked || node.locked
       if (node.type === 'group') {
         visit(node.id, transform, visible, locked)
-      } else {
+      } else if (node.type === 'raster') {
         result.push({ node, transform, visible, locked, order })
         order += 1
       }

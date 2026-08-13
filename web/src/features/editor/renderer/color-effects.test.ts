@@ -4,6 +4,8 @@ import { readFileSync } from 'node:fs'
 import {
   applyEditorColorMatrixV1,
   compileEditorColorMatrixV1,
+  compileEditorColorMatrixWithStrengthV1,
+  composeEditorColorMatricesV1,
 } from './color-effects'
 
 describe('editor color effects V1', () => {
@@ -74,5 +76,34 @@ describe('editor color effects V1', () => {
     expect(channels[1]).toBeCloseTo(luma, 10)
     expect(channels[2]).toBeCloseTo(luma, 10)
     expect(channels[3]).toBe(1)
+  })
+
+  it('interpolates adjustment strength and composes ordered matrices', () => {
+    const exposure = compileEditorColorMatrixV1([
+      { type: 'exposure', version: 1, enabled: true, parameters: { stops: 1 } },
+    ])
+    const contrast = compileEditorColorMatrixWithStrengthV1(
+      [
+        {
+          type: 'contrast',
+          version: 1,
+          enabled: true,
+          parameters: { amount: 0.5 },
+        },
+      ],
+      0.5,
+    )
+    const input: [number, number, number, number] = [0.2, 0.3, 0.4, 1]
+    expect(
+      applyEditorColorMatrixV1(
+        composeEditorColorMatricesV1([exposure, contrast]),
+        input,
+      ),
+    ).toEqual(
+      applyEditorColorMatrixV1(
+        contrast,
+        applyEditorColorMatrixV1(exposure, input),
+      ),
+    )
   })
 })

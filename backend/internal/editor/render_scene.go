@@ -2,6 +2,7 @@ package editor
 
 import (
 	"fmt"
+	"math"
 	"sort"
 
 	"github.com/google/uuid"
@@ -18,17 +19,18 @@ type RenderScene struct {
 }
 
 type RenderNode struct {
-	ID         string
-	AssetID    uuid.UUID
-	Transform  [6]float64
-	Opacity    float64
-	Visible    bool
-	Order      int
-	Crop       *Crop
-	Role       string
-	MaskNodeID *string
-	BlendMode  string
-	Effects    []EffectV2
+	ID          string
+	AssetID     uuid.UUID
+	Transform   [6]float64
+	Opacity     float64
+	Visible     bool
+	Order       int
+	Crop        *Crop
+	Role        string
+	MaskNodeID  *string
+	BlendMode   string
+	Effects     []EffectV2
+	ColorMatrix ColorMatrixV1
 }
 
 func DecodeRenderScene(raw []byte) (RenderScene, error) {
@@ -67,7 +69,7 @@ func CompileV1RenderScene(document Document) (RenderScene, error) {
 		nodes[index] = RenderNode{
 			ID: object.ID, AssetID: object.AssetID, Transform: object.Transform,
 			Opacity: object.Opacity, Visible: object.Visible, Order: index,
-			Crop: cloneCrop(object.Crop), Role: RenderRoleContent, BlendMode: "normal",
+			Crop: cloneCrop(object.Crop), Role: RenderRoleContent, BlendMode: "normal", ColorMatrix: IdentityColorMatrixV1(),
 		}
 	}
 	return RenderScene{Canvas: document.Canvas, Nodes: nodes}, nil
@@ -80,12 +82,16 @@ func CompileV2RenderScene(document DocumentV2) (RenderScene, error) {
 	byID := make(map[string]NodeV2, len(document.Nodes))
 	children := make(map[string][]NodeV2, len(document.Nodes))
 	maskIDs := make(map[string]struct{})
+	adjustments := make(map[string][]NodeV2)
 	for _, node := range document.Nodes {
 		if node.Type == "group" && node.BlendMode != "normal" {
 			return RenderScene{}, ErrUnsupportedDocumentSemantics
 		}
 		if node.Type == "group" && node.MaskID != nil {
 			return RenderScene{}, ErrUnsupportedDocumentSemantics
+		}
+		if node.Type == "adjustment" {
+			adjustments[*node.TargetID] = append(adjustments[*node.TargetID], node)
 		}
 		byID[node.ID] = node
 		children[parentKey(node.ParentID)] = append(children[parentKey(node.ParentID)], node)
@@ -99,6 +105,14 @@ func CompileV2RenderScene(document DocumentV2) (RenderScene, error) {
 				return siblings[i].ID < siblings[j].ID
 			}
 			return siblings[i].OrderKey < siblings[j].OrderKey
+		})
+	}
+	for targetID := range adjustments {
+		sort.SliceStable(adjustments[targetID], func(i, j int) bool {
+			if adjustments[targetID][i].OrderKey == adjustments[targetID][j].OrderKey {
+				return adjustments[targetID][i].ID < adjustments[targetID][j].ID
+			}
+			return adjustments[targetID][i].OrderKey < adjustments[targetID][j].OrderKey
 		})
 	}
 	for maskID := range maskIDs {
@@ -119,15 +133,24 @@ func CompileV2RenderScene(document DocumentV2) (RenderScene, error) {
 				visit(node.ID, transform, opacity, visible)
 				continue
 			}
+			if node.Type == "adjustment" {
+				continue
+			}
 			role := RenderRoleContent
 			if _, isMask := maskIDs[node.ID]; isMask {
 				role = RenderRoleMask
+			}
+			matrices := []ColorMatrixV1{CompileColorMatrixV1(node.Effects)}
+			for _, adjustment := range adjustments[node.ID] {
+				if adjustment.Visible && adjustment.Opacity > 0 {
+					matrices = append(matrices, CompileColorMatrixWithStrengthV1(adjustment.Effects, adjustment.Opacity))
+				}
 			}
 			nodes = append(nodes, RenderNode{
 				ID: node.ID, AssetID: *node.AssetID, Transform: transform,
 				Opacity: opacity, Visible: visible, Order: len(nodes),
 				Crop: cloneCrop(node.Crop), Role: role, MaskNodeID: cloneString(node.MaskID),
-				BlendMode: node.BlendMode, Effects: cloneEffects(node.Effects),
+				BlendMode: node.BlendMode, Effects: cloneEffects(node.Effects), ColorMatrix: ComposeColorMatricesV1(matrices...),
 			})
 		}
 	}
@@ -153,7 +176,7 @@ func (s RenderScene) Validate() error {
 	nodesByID := make(map[string]RenderNode, len(s.Nodes))
 	for index, node := range s.Nodes {
 		if !validNodeID(node.ID) || node.AssetID == uuid.Nil || !validTransform(node.Transform) ||
-			!validOpacity(node.Opacity) || node.Order != index || !validCrop(node.Crop) || !validBlendMode(node.BlendMode) || !validEffects(node.Effects) ||
+			!validOpacity(node.Opacity) || node.Order != index || !validCrop(node.Crop) || !validBlendMode(node.BlendMode) || !validEffects(node.Effects) || !validColorMatrixV1(node.ColorMatrix) ||
 			(node.Role != RenderRoleContent && node.Role != RenderRoleMask) {
 			return ErrInvalidDocument
 		}
@@ -175,6 +198,15 @@ func (s RenderScene) Validate() error {
 		}
 	}
 	return nil
+}
+
+func validColorMatrixV1(matrix ColorMatrixV1) bool {
+	for _, value := range matrix {
+		if math.IsNaN(value) || math.IsInf(value, 0) || math.Abs(value) > 1_000_000 {
+			return false
+		}
+	}
+	return true
 }
 
 func parentKey(parent *string) string {

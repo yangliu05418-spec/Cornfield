@@ -62,6 +62,26 @@ export function groupEditorNodes(
       'Nodes must share a parent before grouping',
     )
   const selectedIDs = new Set(selected.map((node) => node.id))
+  for (const node of document.nodes) {
+    if (
+      node.type === 'adjustment' &&
+      node.target_id &&
+      selectedIDs.has(node.target_id)
+    )
+      selectedIDs.add(node.id)
+  }
+  if (
+    document.nodes.some(
+      (node) =>
+        node.type === 'adjustment' &&
+        selectedIDs.has(node.id) &&
+        (!node.target_id || !selectedIDs.has(node.target_id)),
+    )
+  )
+    throw commandError(
+      'INVALID_SELECTION',
+      'Group an adjustment layer together with its target',
+    )
   if (
     document.nodes.some(
       (node) =>
@@ -127,8 +147,14 @@ export function ungroupEditorNode(
         ? {
             ...node,
             parent_id: group.parent_id,
-            transform: multiplyTransforms(group.transform, node.transform),
-            opacity: group.opacity * node.opacity,
+            transform:
+              node.type === 'adjustment'
+                ? [...identity]
+                : multiplyTransforms(group.transform, node.transform),
+            opacity:
+              node.type === 'adjustment'
+                ? node.opacity
+                : group.opacity * node.opacity,
             visible: group.visible && node.visible,
             locked: group.locked || node.locked,
           }
@@ -196,6 +222,42 @@ export function detachEditorMask(
   return next
 }
 
+export function removeEditorNodes(
+  document: EditorDocumentV2,
+  nodeIDs: readonly string[],
+): EditorDocumentV2 {
+  assertValid(document)
+  const selected = uniqueNodes(document, nodeIDs)
+  if (selected.length < 1)
+    throw commandError('INVALID_SELECTION', 'Select at least one node')
+  const removed = new Set(selected.map((node) => node.id))
+  let changed = true
+  while (changed) {
+    changed = false
+    for (const node of document.nodes) {
+      if (
+        !removed.has(node.id) &&
+        ((node.parent_id !== null && removed.has(node.parent_id)) ||
+          (node.type === 'adjustment' &&
+            node.target_id !== undefined &&
+            removed.has(node.target_id)))
+      ) {
+        removed.add(node.id)
+        changed = true
+      }
+    }
+  }
+  const next = cloneDocument(document)
+  next.nodes = next.nodes
+    .filter((node) => !removed.has(node.id))
+    .map((node) =>
+      node.mask_id && removed.has(node.mask_id)
+        ? omitEditorMaskReference(node)
+        : node,
+    )
+  return normalizeEditorOrderKeys(next)
+}
+
 export function reparentEditorNodes(
   document: EditorDocumentV2,
   nodeIDs: readonly string[],
@@ -209,6 +271,14 @@ export function reparentEditorNodes(
   if (parentID !== null && requireNode(document, parentID).type !== 'group')
     throw commandError('INVALID_PARENT', 'Parent must be a group')
   const moving = new Set(selected.map((node) => node.id))
+  for (const node of document.nodes) {
+    if (
+      node.type === 'adjustment' &&
+      node.target_id &&
+      moving.has(node.target_id)
+    )
+      moving.add(node.id)
+  }
   for (const node of selected) {
     if (hasSelectedAncestor(document, node, moving))
       throw commandError(
@@ -235,6 +305,16 @@ export function reparentEditorNodes(
       )
     )
       throw commandError('INVALID_MASK', 'Move content and its mask together')
+    if (
+      node.type === 'adjustment' &&
+      node.target_id &&
+      parentID !== node.parent_id &&
+      !moving.has(node.target_id)
+    )
+      throw commandError(
+        'INVALID_SELECTION',
+        'Move an adjustment layer together with its target',
+      )
   }
 
   const parentWorld = parentID ? worldTransform(document, parentID) : identity
@@ -248,10 +328,11 @@ export function reparentEditorNodes(
     const world = worldTransform(document, node.id)
     const appearance = worldAppearance(document, node.id)
     if (
-      parentAppearance.opacity <= 0 ||
-      appearance.opacity / parentAppearance.opacity > 1 + 1e-9 ||
-      (appearance.visible && !parentAppearance.visible) ||
-      (!appearance.locked && parentAppearance.locked)
+      (node.type !== 'adjustment' && parentAppearance.opacity <= 0) ||
+      (node.type !== 'adjustment' &&
+        (appearance.opacity / parentAppearance.opacity > 1 + 1e-9 ||
+          (appearance.visible && !parentAppearance.visible) ||
+          (!appearance.locked && parentAppearance.locked)))
     )
       throw commandError(
         'INVALID_PARENT',
@@ -260,10 +341,16 @@ export function reparentEditorNodes(
     return {
       ...node,
       parent_id: parentID,
-      transform: multiplyTransforms(inverseParent, world),
-      opacity: Math.min(1, appearance.opacity / parentAppearance.opacity),
-      visible: appearance.visible,
-      locked: appearance.locked,
+      transform:
+        node.type === 'adjustment'
+          ? [...identity]
+          : multiplyTransforms(inverseParent, world),
+      opacity:
+        node.type === 'adjustment'
+          ? node.opacity
+          : Math.min(1, appearance.opacity / parentAppearance.opacity),
+      visible: node.type === 'adjustment' ? node.visible : appearance.visible,
+      locked: node.type === 'adjustment' ? node.locked : appearance.locked,
     }
   })
   const destination = siblings(next, parentID).filter(
@@ -276,7 +363,10 @@ export function reparentEditorNodes(
   destination.splice(
     insertAt,
     0,
-    ...selected.map((node) => requireNode(next, node.id)),
+    ...document.nodes
+      .filter((node) => moving.has(node.id))
+      .sort(compareNodes)
+      .map((node) => requireNode(next, node.id)),
   )
   return normalizeEditorOrderKeys(next, {
     parentID,
@@ -429,6 +519,11 @@ function compareNodes(left: EditorNodeV2, right: EditorNodeV2) {
     left.order_key.localeCompare(right.order_key) ||
     left.id.localeCompare(right.id)
   )
+}
+
+function omitEditorMaskReference(node: EditorNodeV2): EditorNodeV2 {
+  const { mask_id: _maskID, ...withoutMask } = node
+  return withoutMask
 }
 
 function orderKey(index: number) {

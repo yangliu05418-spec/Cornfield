@@ -16,7 +16,7 @@ import {
 import { ReferenceCountedResourceCache } from '../resources/resource-cache'
 import { planEditorSceneAssetVariants } from '../resources/variant-plan'
 import { compileEditorRenderScene } from './scene-compiler'
-import { compileEditorColorMatrixV1 } from './color-effects'
+import { isIdentityEditorColorMatrixV1 } from './color-effects'
 import type {
   EditorRenderDocument,
   EditorSceneRasterNode,
@@ -279,15 +279,14 @@ export class PixiEditorRenderer implements EditorRenderer {
   }
 
   #syncEffects(node: SceneNode, object: EditorSceneRasterNode) {
-    const effects = object.effects.filter((effect) => effect.enabled)
-    if (effects.length === 0) {
+    if (isIdentityEditorColorMatrixV1(object.colorMatrix)) {
       node.sprite.filters = null
       node.colorFilter?.destroy()
       node.colorFilter = undefined
       return
     }
     const filter = node.colorFilter ?? new ColorMatrixFilter()
-    filter.matrix = compileEditorColorMatrixV1(effects)
+    filter.matrix = object.colorMatrix
     node.colorFilter = filter
     node.sprite.filters = [filter]
   }

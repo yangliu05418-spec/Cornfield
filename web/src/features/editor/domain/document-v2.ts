@@ -14,7 +14,7 @@ export type EditorEffectV2 = {
 
 export type EditorNodeV2 = {
   id: string
-  type: 'raster' | 'group'
+  type: 'raster' | 'group' | 'adjustment'
   name?: string
   parent_id: string | null
   order_key: string
@@ -28,6 +28,7 @@ export type EditorNodeV2 = {
   asset_id?: string
   crop?: EditorCrop
   effects?: EditorEffectV2[]
+  target_id?: string
 }
 
 export type EditorDocumentV2 = {
@@ -82,6 +83,7 @@ export function compileEditorDocumentV2ToV1(
         node.type !== 'raster' ||
         node.parent_id !== null ||
         node.mask_id !== undefined ||
+        node.target_id !== undefined ||
         node.blend_mode !== 'normal' ||
         (node.effects?.length ?? 0) > 0 ||
         !node.asset_id,
@@ -156,20 +158,35 @@ export function validateEditorDocumentV2(document: EditorDocumentV2): string[] {
       ].includes(node.blend_mode)
     )
       errors.push(`geometry:${node.id}`)
-    if (
-      node.type === 'raster' &&
-      (!node.asset_id ||
+    if (node.type === 'raster') {
+      if (
+        !node.asset_id ||
+        node.target_id !== undefined ||
         !validCrop(node.crop) ||
-        !validEffects(node.effects ?? []))
-    )
-      errors.push(`asset:${node.id}`)
-    if (
-      node.type === 'group' &&
-      (node.asset_id !== undefined ||
+        !validEffects(node.effects ?? [])
+      )
+        errors.push(`asset:${node.id}`)
+    } else if (node.type === 'group') {
+      if (
+        node.asset_id !== undefined ||
         node.crop !== undefined ||
-        (node.effects?.length ?? 0) > 0)
+        node.target_id !== undefined ||
+        (node.effects?.length ?? 0) > 0
+      )
+        errors.push(`group:${node.id}`)
+    } else if (
+      node.asset_id !== undefined ||
+      node.crop !== undefined ||
+      node.mask_id !== undefined ||
+      node.target_id === undefined ||
+      node.target_id === node.id ||
+      node.blend_mode !== 'normal' ||
+      node.transform.some(
+        (value, index) => value !== [1, 0, 0, 1, 0, 0][index],
+      ) ||
+      !validEffects(node.effects ?? [])
     )
-      errors.push(`group:${node.id}`)
+      errors.push(`adjustment:${node.id}`)
     if (node.parent_id !== null && nodes.get(node.parent_id)?.type !== 'group')
       errors.push(`parent:${node.id}`)
     if (
@@ -177,6 +194,15 @@ export function validateEditorDocumentV2(document: EditorDocumentV2): string[] {
       nodes.get(node.mask_id)?.type !== 'raster'
     )
       errors.push(`mask:${node.id}`)
+    if (node.type === 'adjustment') {
+      const target = nodes.get(node.target_id!)
+      if (
+        target?.type !== 'raster' ||
+        target.parent_id !== node.parent_id ||
+        document.nodes.some((candidate) => candidate.mask_id === target.id)
+      )
+        errors.push(`target:${node.id}`)
+    }
     if (
       !validAncestry(node, nodes, 'parent_id', 32) ||
       !validAncestry(node, nodes, 'mask_id', 500)

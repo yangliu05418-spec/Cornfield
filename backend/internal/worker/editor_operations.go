@@ -478,7 +478,7 @@ func compositeEditorScene(ctx context.Context, scene studioEditor.RenderScene, l
 		if crop.Empty() {
 			continue
 		}
-		if node.MaskNodeID == nil && node.BlendMode == "normal" && !hasEnabledEditorEffects(node.Effects) {
+		if node.MaskNodeID == nil && node.BlendMode == "normal" && studioEditor.IsIdentityColorMatrixV1(node.ColorMatrix) {
 			drawEditorNode(canvas, node, source, crop)
 		} else {
 			var maskNode *studioEditor.RenderNode
@@ -521,7 +521,10 @@ func drawProcessedEditorNode(ctx context.Context, destination *image.RGBA, canva
 	if bounds.Empty() {
 		return nil
 	}
-	matrix := studioEditor.CompileColorMatrixV1(node.Effects)
+	matrix := node.ColorMatrix
+	if matrix == (studioEditor.ColorMatrixV1{}) {
+		matrix = studioEditor.CompileColorMatrixV1(node.Effects)
+	}
 	const tileSize = 512
 	for top := bounds.Min.Y; top < bounds.Max.Y; top += tileSize {
 		for left := bounds.Min.X; left < bounds.Max.X; left += tileSize {
@@ -621,15 +624,6 @@ func blendEditorChannel(mode string, backdrop, source float64) float64 {
 	default:
 		return source
 	}
-}
-
-func hasEnabledEditorEffects(effects []studioEditor.EffectV2) bool {
-	for _, effect := range effects {
-		if effect.Enabled {
-			return true
-		}
-	}
-	return false
 }
 
 func channelByte(value float64) uint8 {

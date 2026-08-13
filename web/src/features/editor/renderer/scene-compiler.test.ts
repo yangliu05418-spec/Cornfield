@@ -4,6 +4,11 @@ import { describe, expect, it } from 'vitest'
 import type { EditorDocumentV1, EditorTransform } from '../domain/document'
 import type { EditorDocumentV2 } from '../domain/document-v2'
 import {
+  compileEditorColorMatrixV1,
+  compileEditorColorMatrixWithStrengthV1,
+  composeEditorColorMatricesV1,
+} from './color-effects'
+import {
   compileEditorRenderScene,
   multiplyTransforms,
   UnsupportedEditorRenderSemanticsError,
@@ -124,6 +129,49 @@ describe('editor scene compiler', () => {
     })
     blend.effects[0].parameters.amount = 0.8
     expect(scene.nodes[0].effects[0].parameters.amount).toBe(0.2)
+  })
+
+  it('compiles clipped adjustment layers into one ordered target matrix', () => {
+    const target = raster('target', null, '00000001', identity, 1)
+    target.effects = [
+      {
+        type: 'exposure',
+        version: 1,
+        enabled: true,
+        parameters: { stops: 0.5 },
+      },
+    ]
+    const adjustment: EditorDocumentV2['nodes'][number] = {
+      id: 'adjustment',
+      type: 'adjustment',
+      target_id: target.id,
+      parent_id: null,
+      order_key: '00000002',
+      transform: [...identity],
+      opacity: 0.5,
+      blend_mode: 'normal',
+      visible: true,
+      locked: false,
+      effects: [
+        {
+          type: 'contrast',
+          version: 1,
+          enabled: true,
+          parameters: { amount: 0.4 },
+        },
+      ],
+    }
+    const scene = compileEditorRenderScene(v2([target, adjustment]))
+    expect(scene.nodes).toHaveLength(1)
+    expect(scene.nodes[0].colorMatrix).toEqual(
+      composeEditorColorMatricesV1([
+        compileEditorColorMatrixV1(target.effects),
+        compileEditorColorMatrixWithStrengthV1(
+          adjustment.effects ?? [],
+          adjustment.opacity,
+        ),
+      ]),
+    )
   })
 
   it('rejects group blend and unsupported mask semantics', () => {

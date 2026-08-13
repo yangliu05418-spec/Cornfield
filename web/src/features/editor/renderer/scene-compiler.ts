@@ -9,6 +9,12 @@ import type {
   EditorNodeV2,
 } from '../domain/document-v2'
 import { validateEditorDocumentV2 } from '../domain/document-v2'
+import {
+  compileEditorColorMatrixV1,
+  compileEditorColorMatrixWithStrengthV1,
+  composeEditorColorMatricesV1,
+} from './color-effects'
+import type { EditorColorMatrixV1 } from './color-effects'
 
 export type EditorRenderDocument = EditorDocumentV1 | EditorDocumentV2
 
@@ -24,6 +30,7 @@ export type EditorSceneRasterNode = {
   maskNodeID?: string
   blendMode: EditorNodeV2['blend_mode']
   effects: EditorEffectV2[]
+  colorMatrix: EditorColorMatrixV1
 }
 
 export type EditorRenderScene = {
@@ -61,6 +68,7 @@ function compileV1(document: EditorDocumentV1): EditorRenderScene {
         role: 'content',
         blendMode: 'normal',
         effects: [],
+        colorMatrix: compileEditorColorMatrixV1([]),
       })),
   }
 }
@@ -81,12 +89,19 @@ function compileV2(document: EditorDocumentV2): EditorRenderScene {
 
   const byID = new Map(document.nodes.map((node) => [node.id, node]))
   const children = new Map<string | null, EditorNodeV2[]>()
+  const adjustments = new Map<string, EditorNodeV2[]>()
   for (const node of document.nodes) {
     const siblings = children.get(node.parent_id) ?? []
     siblings.push(node)
     children.set(node.parent_id, siblings)
+    if (node.type === 'adjustment') {
+      const values = adjustments.get(node.target_id!) ?? []
+      values.push(node)
+      adjustments.set(node.target_id!, values)
+    }
   }
   for (const siblings of children.values()) siblings.sort(compareNodes)
+  for (const values of adjustments.values()) values.sort(compareNodes)
 
   const maskIDs = new Set(
     document.nodes.flatMap((node) => (node.mask_id ? [node.mask_id] : [])),
@@ -120,6 +135,22 @@ function compileV2(document: EditorDocumentV2): EditorRenderScene {
         visit(node.id, transform, opacity, visible)
         continue
       }
+      if (node.type === 'adjustment') continue
+      const effects = (node.effects ?? []).map((effect) => ({
+        ...effect,
+        parameters: { ...effect.parameters },
+      }))
+      const colorMatrix = composeEditorColorMatricesV1([
+        compileEditorColorMatrixV1(effects),
+        ...(adjustments.get(node.id) ?? [])
+          .filter((adjustment) => adjustment.visible && adjustment.opacity > 0)
+          .map((adjustment) =>
+            compileEditorColorMatrixWithStrengthV1(
+              adjustment.effects ?? [],
+              adjustment.opacity,
+            ),
+          ),
+      ])
       compiled.set(node.id, {
         id: node.id,
         assetID: node.asset_id!,
@@ -131,10 +162,8 @@ function compileV2(document: EditorDocumentV2): EditorRenderScene {
         role: maskIDs.has(node.id) ? 'mask' : 'content',
         maskNodeID: node.mask_id,
         blendMode: node.blend_mode,
-        effects: (node.effects ?? []).map((effect) => ({
-          ...effect,
-          parameters: { ...effect.parameters },
-        })),
+        effects,
+        colorMatrix,
       })
       order += 1
     }

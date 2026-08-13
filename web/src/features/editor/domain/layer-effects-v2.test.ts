@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest'
 import type { EditorDocumentV2 } from './document-v2'
 import {
   EditorLayerEffectError,
+  createEditorAdjustmentLayer,
   setEditorLayerBlendMode,
   setEditorLayerEffectEnabled,
   setEditorLayerEffectValue,
@@ -62,6 +63,24 @@ describe('V2 non-destructive layer effects', () => {
     expect(() =>
       setEditorLayerEffectEnabled(value, 'content', 'contrast', true),
     ).toThrow(EditorLayerEffectError)
+  })
+
+  it('creates a non-pixel adjustment immediately above its target', () => {
+    const value = createEditorAdjustmentLayer(document(), 'content', {
+      id: 'adjustment',
+    })
+    expect(value.nodes.find((node) => node.id === 'adjustment')).toMatchObject({
+      type: 'adjustment',
+      target_id: 'content',
+      transform: [1, 0, 0, 1, 0, 0],
+      blend_mode: 'normal',
+      effects: [],
+    })
+    expect(
+      [...value.nodes]
+        .sort((a, b) => a.order_key.localeCompare(b.order_key))
+        .map((node) => node.id),
+    ).toEqual(['content', 'adjustment'])
   })
 })
 

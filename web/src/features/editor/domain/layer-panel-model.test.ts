@@ -38,6 +38,27 @@ function group(id: string, orderKey: string): EditorNodeV2 {
   }
 }
 
+function adjustment(
+  id: string,
+  targetID: string,
+  orderKey: string,
+  parentID: string | null = null,
+): EditorNodeV2 {
+  return {
+    id,
+    type: 'adjustment',
+    target_id: targetID,
+    parent_id: parentID,
+    order_key: orderKey,
+    transform,
+    opacity: 1,
+    blend_mode: 'normal',
+    visible: true,
+    locked: false,
+    effects: [],
+  }
+}
+
 function document(nodes: EditorNodeV2[]): EditorDocumentV2 {
   return {
     schema_version: 2,
@@ -75,6 +96,27 @@ describe('structured layer panel model', () => {
     expect(canGroupEditorNodes([first, nested])).toBe(false)
     expect(canAttachEditorMask([first, second], first)).toBe(true)
     expect(canAttachEditorMask([first, nested], first)).toBe(false)
+    const clipped = adjustment('adjustment', first.id, '00000002')
+    expect(canGroupEditorNodes([clipped])).toBe(false)
+    expect(canGroupEditorNodes([first, clipped])).toBe(true)
+  })
+
+  it('moves a target together with its clipped adjustment', () => {
+    const target = raster('target', '00000000')
+    const clipped = adjustment('adjustment', target.id, '00000001')
+    const container = group('container', '00000002')
+    const moved = moveEditorNodesByDrop(
+      document([target, clipped, container]),
+      [target.id],
+      container.id,
+      'inside',
+    )
+    expect(moved.nodes.find((node) => node.id === target.id)?.parent_id).toBe(
+      container.id,
+    )
+    expect(moved.nodes.find((node) => node.id === clipped.id)?.parent_id).toBe(
+      container.id,
+    )
   })
 
   it('moves within siblings without crossing the parent boundary', () => {

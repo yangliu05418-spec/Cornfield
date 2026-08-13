@@ -11,6 +11,10 @@ func IdentityColorMatrixV1() ColorMatrixV1 {
 	return ColorMatrixV1{1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 1, 0}
 }
 
+func IsIdentityColorMatrixV1(matrix ColorMatrixV1) bool {
+	return matrix == IdentityColorMatrixV1()
+}
+
 func CompileColorMatrixV1(effects []EffectV2) ColorMatrixV1 {
 	result := IdentityColorMatrixV1()
 	for _, effect := range effects {
@@ -18,6 +22,27 @@ func CompileColorMatrixV1(effects []EffectV2) ColorMatrixV1 {
 			continue
 		}
 		result = multiplyColorMatrixV1(effectColorMatrixV1(effect), result)
+	}
+	return result
+}
+
+func CompileColorMatrixWithStrengthV1(effects []EffectV2, strength float64) ColorMatrixV1 {
+	return InterpolateColorMatrixV1(IdentityColorMatrixV1(), CompileColorMatrixV1(effects), strength)
+}
+
+func ComposeColorMatricesV1(matrices ...ColorMatrixV1) ColorMatrixV1 {
+	result := IdentityColorMatrixV1()
+	for _, matrix := range matrices {
+		result = multiplyColorMatrixV1(matrix, result)
+	}
+	return result
+}
+
+func InterpolateColorMatrixV1(from, to ColorMatrixV1, amount float64) ColorMatrixV1 {
+	amount = clampChannel(amount)
+	var result ColorMatrixV1
+	for index := range result {
+		result[index] = from[index] + (to[index]-from[index])*amount
 	}
 	return result
 }

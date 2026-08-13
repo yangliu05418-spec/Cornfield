@@ -316,6 +316,34 @@ func TestCompositeEditorSceneAppliesEffectsBeforeBlend(t *testing.T) {
 	}
 }
 
+func TestCompositeEditorScenePublishesCompiledAdjustmentPixels(t *testing.T) {
+	assetID := uuid.New()
+	targetID := "content"
+	document := studioEditor.DocumentV2{
+		SchemaVersion: 2, RendererSemanticsVersion: 1,
+		Canvas: studioEditor.Canvas{Width: 1, Height: 1},
+		Nodes: []studioEditor.NodeV2{
+			{ID: targetID, Type: "raster", OrderKey: "00000001", Transform: [6]float64{1, 0, 0, 1, 0, 0}, Opacity: 1, BlendMode: "normal", Visible: true, AssetID: &assetID},
+			{ID: "adjustment", Type: "adjustment", TargetID: &targetID, OrderKey: "00000002", Transform: [6]float64{1, 0, 0, 1, 0, 0}, Opacity: .5, BlendMode: "normal", Visible: true, Effects: []studioEditor.EffectV2{{Type: "exposure", Version: 1, Enabled: true, Parameters: map[string]float64{"stops": 1}}}},
+		},
+	}
+	scene, err := studioEditor.CompileV2RenderScene(document)
+	if err != nil {
+		t.Fatal(err)
+	}
+	canvas, err := compositeEditorScene(context.Background(), scene, func(uuid.UUID) (image.Image, error) {
+		return solidNRGBA(1, 1, color.NRGBA{R: 64, G: 32, B: 16, A: 255}), nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := color.NRGBAModel.Convert(canvas.At(0, 0)).(color.NRGBA)
+	// Half-strength one-stop exposure is a 1.5x matrix.
+	if got.R < 95 || got.R > 97 || got.G < 47 || got.G > 49 || got.B < 23 || got.B > 25 || got.A != 255 {
+		t.Fatalf("adjusted pixel = %#v", got)
+	}
+}
+
 func TestBlendEditorChannelModes(t *testing.T) {
 	tests := map[string]float64{
 		"normal": .25, "multiply": .1875, "screen": .8125,

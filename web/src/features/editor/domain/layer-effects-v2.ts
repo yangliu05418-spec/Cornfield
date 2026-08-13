@@ -3,6 +3,7 @@ import type {
   EditorEffectV2,
   EditorNodeV2,
 } from './document-v2'
+import { normalizeEditorOrderKeys } from './authoring-v2'
 
 export type EditorBlendModeV2 = EditorNodeV2['blend_mode']
 export type EditorEffectTypeV2 = EditorEffectV2['type']
@@ -83,8 +84,11 @@ export function setEditorLayerBlendMode(
   nodeID: string,
   blendMode: EditorBlendModeV2,
 ) {
-  return updateEffectNode(document, nodeID, (node) => ({
-    ...node,
+  const node = document.nodes.find((candidate) => candidate.id === nodeID)
+  if (node?.type !== 'raster')
+    throw new EditorLayerEffectError('只有像素图层支持混合模式')
+  return updateEffectNode(document, nodeID, (value) => ({
+    ...value,
     blend_mode: blendMode,
   }))
 }
@@ -144,9 +148,56 @@ export function editorLayerSupportsEffects(
 ) {
   const node = document.nodes.find((candidate) => candidate.id === nodeID)
   return (
-    node?.type === 'raster' &&
-    !document.nodes.some((candidate) => candidate.mask_id === nodeID)
+    node?.type === 'adjustment' ||
+    (node?.type === 'raster' &&
+      !document.nodes.some((candidate) => candidate.mask_id === nodeID))
   )
+}
+
+export function createEditorAdjustmentLayer(
+  document: EditorDocumentV2,
+  targetID: string,
+  options: { id: string; name?: string },
+) {
+  const target = document.nodes.find((node) => node.id === targetID)
+  if (
+    !target ||
+    target.type !== 'raster' ||
+    document.nodes.some((node) => node.id === options.id) ||
+    document.nodes.some((node) => node.mask_id === target.id)
+  )
+    throw new EditorLayerEffectError('请选择一个普通像素图层')
+  const siblings = document.nodes
+    .filter((node) => node.parent_id === target.parent_id)
+    .sort(
+      (left, right) =>
+        left.order_key.localeCompare(right.order_key) ||
+        left.id.localeCompare(right.id),
+    )
+  const targetIndex = siblings.findIndex((node) => node.id === target.id)
+  const adjustment: EditorNodeV2 = {
+    id: options.id,
+    type: 'adjustment',
+    name: options.name ?? '调整层',
+    parent_id: target.parent_id,
+    order_key: '0',
+    transform: [1, 0, 0, 1, 0, 0],
+    opacity: 1,
+    blend_mode: 'normal',
+    visible: true,
+    locked: false,
+    target_id: target.id,
+    effects: [],
+  }
+  const next: EditorDocumentV2 = {
+    ...document,
+    nodes: [...document.nodes, adjustment],
+  }
+  siblings.splice(targetIndex + 1, 0, adjustment)
+  return normalizeEditorOrderKeys(next, {
+    parentID: target.parent_id,
+    preferredOrder: siblings.map((node) => node.id),
+  })
 }
 
 function updateEffectNode(

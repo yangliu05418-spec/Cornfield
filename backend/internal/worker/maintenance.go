@@ -23,6 +23,11 @@ type Maintenance struct {
 	Generator *GenerateWorker
 }
 
+const blurBackfillQuery = `SELECT id,storage_key FROM assets
+		WHERE purged_at IS NULL AND purge_pending=false AND blur_data_url IS NULL
+		  AND media_type LIKE 'image/%'
+		ORDER BY created_at,id LIMIT $1`
+
 func (m *Maintenance) Run(ctx context.Context) {
 	m.cleanup(ctx)
 	m.backfillBlurData(ctx, 25)
@@ -46,9 +51,7 @@ func (m *Maintenance) backfillBlurData(ctx context.Context, limit int) {
 	if m.Generator == nil || limit < 1 {
 		return
 	}
-	rows, err := m.DB.Query(ctx, `SELECT id,storage_key FROM assets
-		WHERE purged_at IS NULL AND purge_pending=false AND blur_data_url IS NULL
-		ORDER BY created_at,id LIMIT $1`, limit)
+	rows, err := m.DB.Query(ctx, blurBackfillQuery, limit)
 	if err != nil {
 		m.Log.Warn("blur placeholder scan failed", "error", err)
 		return

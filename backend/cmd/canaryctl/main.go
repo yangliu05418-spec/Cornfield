@@ -1113,7 +1113,6 @@ func (c *apiClient) runLayerE2ECase(ctx context.Context, folderID uuid.UUID, ite
 	var created struct {
 		ID uuid.UUID `json:"id"`
 	}
-	operationStarted := time.Now()
 	if err = c.json(ctx, http.MethodPost, "/api/v1/editor-projects/"+project.ID.String()+"/layer-decompositions", map[string]any{
 		"expected_revision": project.Revision, "prompt": item.Prompt, "resolution": item.Size, "prompt_optimization_mode": item.Mode,
 	}, &created, uuid.NewString()); err != nil {
@@ -1124,7 +1123,7 @@ func (c *apiClient) runLayerE2ECase(ctx context.Context, folderID uuid.UUID, ite
 	operationCtx, cancel := context.WithTimeout(ctx, 15*time.Minute)
 	defer cancel()
 	go func() {
-		if latency, eventErr := c.waitForOperationEvent(operationCtx, created.ID, operationStarted); eventErr == nil {
+		if latency, eventErr := c.waitForOperationEvent(operationCtx, created.ID); eventErr == nil {
 			sse <- latency
 		}
 	}()
@@ -1260,7 +1259,7 @@ func (c *apiClient) waitForOperation(ctx context.Context, id uuid.UUID) (assetOp
 	}
 }
 
-func (c *apiClient) waitForOperationEvent(ctx context.Context, operationID uuid.UUID, started time.Time) (time.Duration, error) {
+func (c *apiClient) waitForOperationEvent(ctx context.Context, operationID uuid.UUID) (time.Duration, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.base.ResolveReference(&url.URL{Path: "/api/v1/events"}).String(), nil)
 	if err != nil {
 		return 0, err
@@ -1281,6 +1280,7 @@ func (c *apiClient) waitForOperationEvent(ctx context.Context, operationID uuid.
 			continue
 		}
 		var envelope struct {
+			CreatedAt time.Time `json:"created_at"`
 			Payload struct {
 				ID     uuid.UUID `json:"id"`
 				Status string    `json:"status"`
@@ -1290,7 +1290,14 @@ func (c *apiClient) waitForOperationEvent(ctx context.Context, operationID uuid.
 			continue
 		}
 		if envelope.Payload.Status == "succeeded" || envelope.Payload.Status == "failed" || envelope.Payload.Status == "submission_uncertain" || envelope.Payload.Status == "cancelled" {
-			return time.Since(started), nil
+			if envelope.CreatedAt.IsZero() {
+				return 0, errors.New("terminal SSE event is missing created_at")
+			}
+			latency := time.Since(envelope.CreatedAt)
+			if latency < 0 {
+				latency = 0
+			}
+			return latency, nil
 		}
 	}
 	return 0, scanner.Err()

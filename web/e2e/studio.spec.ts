@@ -619,6 +619,52 @@ test('image editor restores a source project and autosaves keyboard edits', asyn
   await expect.poll(() => backend.editorState().document.objects.length).toBe(2)
   await expect(page.locator('.editor-selection-box')).toBeVisible()
 
+  await expect
+    .poll(() => backend.editorState().document.objects[1].name)
+    .toBe('editor-layer')
+  const layerName = page.locator('.editor-layer-name input')
+  await layerName.fill('前景人物')
+  await layerName.blur()
+  await expect
+    .poll(() => backend.editorState().document.objects[1].name)
+    .toBe('前景人物')
+
+  const centerX = page.locator('.editor-geometry-grid input').nth(0)
+  const centerY = page.locator('.editor-geometry-grid input').nth(1)
+  await centerX.fill('600')
+  await centerY.fill('450')
+  await expect
+    .poll(() => {
+      const object = backend.editorState().document.objects[1]
+      return {
+        x:
+          object.transform[0] * 512 +
+          object.transform[2] * 512 +
+          object.transform[4],
+        y:
+          object.transform[1] * 512 +
+          object.transform[3] * 512 +
+          object.transform[5],
+      }
+    })
+    .toEqual({ x: 600, y: 450 })
+
+  await canvas.focus()
+  await page.keyboard.press('Control+d')
+  await expect.poll(() => backend.editorState().document.objects.length).toBe(3)
+  await page.keyboard.press('Control+z')
+  await expect.poll(() => backend.editorState().document.objects.length).toBe(2)
+
+  const worldBeforeWheel = await page
+    .locator('.editor-world')
+    .getAttribute('style')
+  await canvas.hover()
+  await page.mouse.wheel(30, 45)
+  await expect(page.locator('.editor-world')).not.toHaveAttribute(
+    'style',
+    worldBeforeWheel ?? '',
+  )
+
   await page.reload()
   await expect(page.getByRole('textbox', { name: '工程名称' })).toHaveValue(
     'Asset 0',
@@ -715,6 +761,7 @@ async function installStudioMocks(
     objects: [
       {
         id: 'source',
+        name: '源图',
         asset_id: 'asset-0',
         transform: [1, 0, 0, 1, 0, 0],
         opacity: 1,

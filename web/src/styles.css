@@ -781,6 +781,10 @@
 .editor-canvas-viewport[data-panning]:active {
   cursor: grabbing;
 }
+.editor-canvas-viewport[data-drag-over] {
+  outline: 1px solid var(--lime);
+  outline-offset: -1px;
+}
 .editor-canvas-viewport:focus-visible {
   outline: 1px solid color-mix(in srgb, var(--lime) 56%, transparent);
   outline-offset: -2px;
@@ -826,6 +830,41 @@
   color: var(--muted);
   font: 500 11px/1 var(--font-mono);
   letter-spacing: 0.04em;
+  pointer-events: none;
+}
+.editor-snap-guide {
+  position: absolute;
+  z-index: 1100;
+  display: block;
+  background: var(--lime);
+  box-shadow: 0 0 8px color-mix(in srgb, var(--lime) 36%, transparent);
+  pointer-events: none;
+}
+.editor-snap-guide.is-x {
+  top: -100000px;
+  width: max(1px, calc(1px / var(--editor-zoom, 1)));
+  height: 200000px;
+}
+.editor-snap-guide.is-y {
+  left: -100000px;
+  width: 200000px;
+  height: max(1px, calc(1px / var(--editor-zoom, 1)));
+}
+.editor-drop-overlay {
+  position: absolute;
+  z-index: 1200;
+  inset: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  color: var(--lime);
+  font-size: 13px;
+  letter-spacing: 0.02em;
+  border: 1px dashed color-mix(in srgb, var(--lime) 70%, transparent);
+  border-radius: 14px;
+  background: color-mix(in srgb, #0f1113 86%, transparent);
+  backdrop-filter: blur(8px);
   pointer-events: none;
 }
 .editor-canvas > img {
@@ -994,6 +1033,12 @@
   border-radius: 9px;
   background: transparent;
 }
+.editor-layer-list > button[draggable='true'] {
+  cursor: grab;
+}
+.editor-layer-list > button[draggable='true']:active {
+  cursor: grabbing;
+}
 .editor-layer-list > button:hover,
 .editor-layer-list > button.active {
   color: var(--text);
@@ -1028,6 +1073,55 @@
   gap: 9px;
   color: var(--muted);
   font-size: 11px;
+}
+.editor-properties .editor-layer-name {
+  grid-template-columns: 1fr;
+}
+.editor-layer-name input {
+  width: 100%;
+  height: 34px;
+  padding: 0 9px;
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-2);
+}
+.editor-geometry-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 9px;
+}
+.editor-geometry-grid label {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 4px;
+}
+.editor-geometry-grid input {
+  width: 100%;
+  height: 32px;
+  padding: 0 8px;
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-2);
+}
+.editor-align-actions {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 6px;
+}
+.editor-align-actions button {
+  display: grid;
+  min-height: 32px;
+  place-items: center;
+  color: var(--muted);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: transparent;
+}
+.editor-align-actions button:hover:not(:disabled) {
+  color: var(--lime);
+  border-color: color-mix(in srgb, var(--lime) 38%, var(--line));
 }
 .editor-properties input {
   grid-column: 1 / -1;

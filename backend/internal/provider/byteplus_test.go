@@ -244,3 +244,27 @@ func TestBytePlusLayerDecompositionRejectsInvalidMetadata(t *testing.T) {
 		}
 	}
 }
+
+func TestBytePlusLayerDecompositionUsesCallerDeadline(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		time.Sleep(250 * time.Millisecond)
+		_, _ = w.Write([]byte(`{"data":[]}`))
+	}))
+	defer server.Close()
+
+	adapter := NewBytePlus("test-key")
+	adapter.BaseURL = server.URL
+	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Millisecond)
+	defer cancel()
+	started := time.Now()
+	_, err := adapter.DecomposeLayers(ctx, LayerDecompositionRequest{
+		Model: bytePlusProbeModel, Image: "data:image/png;base64,cG5n",
+	})
+	providerErr, ok := err.(*Error)
+	if !ok || providerErr.Code != "SUBMISSION_UNCERTAIN" {
+		t.Fatalf("error = %#v", err)
+	}
+	if elapsed := time.Since(started); elapsed > 150*time.Millisecond {
+		t.Fatalf("caller deadline was not respected: %v", elapsed)
+	}
+}

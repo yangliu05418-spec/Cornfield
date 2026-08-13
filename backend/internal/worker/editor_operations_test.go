@@ -10,11 +10,36 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
 	studioEditor "internal-image-studio/internal/editor"
+	"internal-image-studio/internal/modelconfig"
 )
+
+func TestAssetOperationTimeoutsComeFromCatalog(t *testing.T) {
+	worker := &AssetOperationWorker{Catalog: &modelconfig.Catalog{Models: []modelconfig.Model{{
+		ID:      "byteplus-test",
+		Enabled: true,
+		Policy: modelconfig.Policy{
+			SubmitTimeoutSeconds:             300,
+			LayerDecompositionTimeoutSeconds: 600,
+		},
+	}}}}
+	modelID := "byteplus-test"
+	got, err := worker.layerOperationTimeout(assetOperationRecord{ModelID: &modelID})
+	if err != nil || got != 600*time.Second {
+		t.Fatalf("layer timeout = %v, %v", got, err)
+	}
+	if got = worker.operationRecoveryAge(); got != 630*time.Second {
+		t.Fatalf("recovery age = %v", got)
+	}
+	worker.Catalog = nil
+	if got = worker.operationRecoveryAge(); got != 0 {
+		t.Fatalf("missing catalog recovery age = %v", got)
+	}
+}
 
 func TestBytePlusLayerURLAllowlist(t *testing.T) {
 	tests := []struct {

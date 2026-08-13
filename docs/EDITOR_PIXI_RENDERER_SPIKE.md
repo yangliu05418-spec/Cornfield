@@ -22,18 +22,19 @@ The test runs in real Chromium and writes its machine-readable report to `web/ou
 
 ## Acceptance gates
 
-| Signal | Gate |
-|---|---:|
-| Initial 50-layer synchronization | < 2500 ms |
-| Retained render call p95 | < 8 ms |
-| Long tasks after warm-up | 0 |
-| Significant pixel mismatch | < 1% |
-| Mean absolute channel error | < 1 |
-| Texture budget at spike zoom | <= 50 × 640 × 640 × 4 bytes |
-| Forced context loss/restore | Both observed |
-| Resources after destroy | 0 nodes, textures and estimated bytes |
+| Signal                           |                                  Gate |
+| -------------------------------- | ------------------------------------: |
+| Initial 50-layer synchronization |                             < 2500 ms |
+| Retained render call p95         |                                < 8 ms |
+| Significant pixel mismatch       |                                  < 1% |
+| Mean absolute channel error      |                                   < 1 |
+| Texture budget at spike zoom     |           <= 50 × 640 × 640 × 4 bytes |
+| Forced context loss/restore      |                         Both observed |
+| Resources after destroy          | 0 nodes, textures and estimated bytes |
 
-The frame interval is recorded but is not a hard CI gate: headless Chromium can throttle `requestAnimationFrame` independently of renderer work. Render-call time and long tasks are the deterministic regression gates.
+Frame intervals and long tasks are always recorded but are not hard gates on shared GitHub runners: headless Chromium can use software WebGL and throttle `requestAnimationFrame` independently of renderer work. Pixel semantics, CPU submission time, texture budget, context recovery and cleanup remain deterministic CI gates.
+
+Fixed-device performance runs set `EDITOR_SPIKE_ENFORCE_DEVICE_TIMING=1`; those runs additionally require frame-interval p95 below 22.3 ms (45 fps) and zero long tasks after warm-up. Device class and browser/GPU details must accompany the report.
 
 ## Local baseline
 

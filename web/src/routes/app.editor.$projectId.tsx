@@ -3,6 +3,12 @@ import { useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   AlignCenterHorizontal,
   AlignCenterVertical,
+  AlignEndHorizontal,
+  AlignEndVertical,
+  AlignHorizontalDistributeCenter,
+  AlignStartHorizontal,
+  AlignStartVertical,
+  AlignVerticalDistributeCenter,
   ArrowDown,
   ArrowLeft,
   ArrowUp,
@@ -37,6 +43,8 @@ import { mergeAssetIntoCaches } from '#/lib/asset-cache'
 import {
   fitArtboard,
   flipAroundCenter,
+  alignmentOffset,
+  distributionOffsets,
   invertAffine,
   moveCrop,
   objectRotation,
@@ -57,7 +65,7 @@ import {
   boundsIntersect,
   zoomAtScreenPoint,
 } from '#/lib/editor-transform'
-import type { CropHandle, CropRect } from '#/lib/editor-transform'
+import type { Alignment, CropHandle, CropRect } from '#/lib/editor-transform'
 import type {
   Asset,
   AssetOperation,
@@ -1463,6 +1471,89 @@ function ImageEditorPage() {
     })
   }
 
+  function selectedObjectBounds() {
+    return selectedObjects.flatMap((object) => {
+      if (!object.visible) return []
+      const asset = objectAssets?.get(object.asset_id)
+      return asset
+        ? [
+            {
+              object,
+              bounds: objectBounds(object.transform, asset.width, asset.height),
+            },
+          ]
+        : []
+    })
+  }
+
+  function alignSelectedObjects(alignment: Alignment) {
+    const current = documentRef.current
+    const items = selectedObjectBounds()
+    if (!current || items.length < 2 || operationRunning) return
+    const movable = items.filter((item) => !item.object.locked)
+    const locked = items.filter((item) => item.object.locked)
+    const target = unionBounds(
+      (locked.length ? locked : items).map((item) => item.bounds),
+    )
+    if (!target || !movable.length) {
+      setNotice('所选图层均已锁定')
+      return
+    }
+    const updates = new Map(
+      movable.map(({ object, bounds }) => [
+        object.id,
+        alignmentOffset(bounds, target, alignment),
+      ]),
+    )
+    if (
+      ![...updates.values()].some(
+        ({ dx, dy }) => Math.abs(dx) > 1e-6 || Math.abs(dy) > 1e-6,
+      )
+    )
+      return
+    applyDocument({
+      ...current,
+      objects: current.objects.map((item) => {
+        const offset = updates.get(item.id)
+        return offset
+          ? translateObject(item, item.transform, offset.dx, offset.dy)
+          : item
+      }),
+    })
+  }
+
+  function distributeSelectedObjects(axis: 'x' | 'y') {
+    const current = documentRef.current
+    const items = selectedObjectBounds()
+    if (!current || operationRunning) return
+    if (items.length < 3) {
+      setNotice('至少选择 3 个可见图层才能等距分布')
+      return
+    }
+    if (items.some((item) => item.object.locked)) {
+      setNotice('请先解锁参与分布的图层')
+      return
+    }
+    const offsets = distributionOffsets(
+      items.map(({ object, bounds }) => ({ id: object.id, bounds })),
+      axis,
+    )
+    if (![...offsets.values()].some((offset) => Math.abs(offset) > 1e-6)) return
+    applyDocument({
+      ...current,
+      objects: current.objects.map((item) => {
+        const offset = offsets.get(item.id)
+        if (offset === undefined) return item
+        return translateObject(
+          item,
+          item.transform,
+          axis === 'x' ? offset : 0,
+          axis === 'y' ? offset : 0,
+        )
+      }),
+    })
+  }
+
   function resizeArtboard() {
     const current = documentRef.current
     const width = Math.round(canvasDraft.width)
@@ -2304,54 +2395,130 @@ function ImageEditorPage() {
               </span>
             </div>
             {selectedIDs.size > 1 && (
-              <div
-                className="editor-bulk-layer-actions"
-                aria-label="批量图层操作"
-              >
-                <button
-                  type="button"
-                  onClick={() =>
-                    updateSelectedObjects((item) => ({
-                      ...item,
-                      visible: false,
-                    }))
-                  }
+              <div className="editor-bulk-panel">
+                <div className="editor-bulk-align" aria-label="多选图层布局">
+                  <span>对齐</span>
+                  <div>
+                    <button
+                      type="button"
+                      title="左对齐"
+                      aria-label="左对齐所选图层"
+                      onClick={() => alignSelectedObjects('left')}
+                    >
+                      <AlignStartVertical size={14} />
+                    </button>
+                    <button
+                      type="button"
+                      title="水平居中"
+                      aria-label="水平居中对齐所选图层"
+                      onClick={() => alignSelectedObjects('horizontal-center')}
+                    >
+                      <AlignCenterVertical size={14} />
+                    </button>
+                    <button
+                      type="button"
+                      title="右对齐"
+                      aria-label="右对齐所选图层"
+                      onClick={() => alignSelectedObjects('right')}
+                    >
+                      <AlignEndVertical size={14} />
+                    </button>
+                    <button
+                      type="button"
+                      title="顶部对齐"
+                      aria-label="顶部对齐所选图层"
+                      onClick={() => alignSelectedObjects('top')}
+                    >
+                      <AlignStartHorizontal size={14} />
+                    </button>
+                    <button
+                      type="button"
+                      title="垂直居中"
+                      aria-label="垂直居中对齐所选图层"
+                      onClick={() => alignSelectedObjects('vertical-center')}
+                    >
+                      <AlignCenterHorizontal size={14} />
+                    </button>
+                    <button
+                      type="button"
+                      title="底部对齐"
+                      aria-label="底部对齐所选图层"
+                      onClick={() => alignSelectedObjects('bottom')}
+                    >
+                      <AlignEndHorizontal size={14} />
+                    </button>
+                    <button
+                      type="button"
+                      title="水平等距分布"
+                      aria-label="水平等距分布所选图层"
+                      disabled={selectedObjects.length < 3}
+                      onClick={() => distributeSelectedObjects('x')}
+                    >
+                      <AlignHorizontalDistributeCenter size={14} />
+                    </button>
+                    <button
+                      type="button"
+                      title="垂直等距分布"
+                      aria-label="垂直等距分布所选图层"
+                      disabled={selectedObjects.length < 3}
+                      onClick={() => distributeSelectedObjects('y')}
+                    >
+                      <AlignVerticalDistributeCenter size={14} />
+                    </button>
+                  </div>
+                </div>
+                <div
+                  className="editor-bulk-layer-actions"
+                  aria-label="批量图层操作"
                 >
-                  <EyeOff size={14} /> 隐藏
-                </button>
-                <button
-                  type="button"
-                  onClick={() =>
-                    updateSelectedObjects((item) => ({
-                      ...item,
-                      visible: true,
-                    }))
-                  }
-                >
-                  <Eye size={14} /> 显示
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    const lock = !selectedObjects.every((item) => item.locked)
-                    updateSelectedObjects((item) => ({ ...item, locked: lock }))
-                  }}
-                >
-                  {selectedObjects.every((item) => item.locked) ? (
-                    <Unlock size={14} />
-                  ) : (
-                    <Lock size={14} />
-                  )}
-                  {selectedObjects.every((item) => item.locked)
-                    ? '解锁'
-                    : '锁定'}
-                </button>
-                <button type="button" onClick={duplicateSelectedObjects}>
-                  <Copy size={14} /> 复制
-                </button>
-                <button type="button" onClick={removeSelectedObjects}>
-                  <Trash2 size={14} /> 删除
-                </button>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      updateSelectedObjects((item) => ({
+                        ...item,
+                        visible: false,
+                      }))
+                    }
+                  >
+                    <EyeOff size={14} /> 隐藏
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      updateSelectedObjects((item) => ({
+                        ...item,
+                        visible: true,
+                      }))
+                    }
+                  >
+                    <Eye size={14} /> 显示
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const lock = !selectedObjects.every((item) => item.locked)
+                      updateSelectedObjects((item) => ({
+                        ...item,
+                        locked: lock,
+                      }))
+                    }}
+                  >
+                    {selectedObjects.every((item) => item.locked) ? (
+                      <Unlock size={14} />
+                    ) : (
+                      <Lock size={14} />
+                    )}
+                    {selectedObjects.every((item) => item.locked)
+                      ? '解锁'
+                      : '锁定'}
+                  </button>
+                  <button type="button" onClick={duplicateSelectedObjects}>
+                    <Copy size={14} /> 复制
+                  </button>
+                  <button type="button" onClick={removeSelectedObjects}>
+                    <Trash2 size={14} /> 删除
+                  </button>
+                </div>
               </div>
             )}
             <div className="editor-artboard-settings">

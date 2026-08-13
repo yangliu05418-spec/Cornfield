@@ -1185,12 +1185,51 @@
   padding: 10px 12px;
   border-bottom: 1px solid var(--line);
 }
+.editor-bulk-panel {
+  border-bottom: 1px solid var(--line);
+}
+.editor-bulk-align {
+  display: grid;
+  grid-template-columns: 44px minmax(0, 1fr);
+  gap: 6px;
+  align-items: center;
+  padding: 8px 8px 4px;
+}
+.editor-bulk-align > span {
+  color: var(--muted);
+  font: 500 10px/1 var(--font-mono);
+  letter-spacing: 0.04em;
+}
+.editor-bulk-align > div {
+  display: grid;
+  grid-template-columns: repeat(8, minmax(0, 1fr));
+  gap: 3px;
+}
+.editor-bulk-align button {
+  display: inline-flex;
+  min-width: 0;
+  min-height: 28px;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  color: var(--muted);
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--surface-2);
+}
+.editor-bulk-align button:hover:not(:disabled),
+.editor-bulk-align button:focus-visible {
+  color: var(--lime);
+  border-color: color-mix(in srgb, var(--lime) 36%, var(--line));
+}
+.editor-bulk-align button:disabled {
+  opacity: 0.28;
+}
 .editor-bulk-layer-actions {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 4px;
-  padding: 8px;
-  border-bottom: 1px solid var(--line);
+  padding: 4px 8px 8px;
 }
 .editor-bulk-layer-actions button {
   display: inline-flex;

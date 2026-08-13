@@ -289,6 +289,51 @@ export function moveObjectCenter(
 }
 
 export type SnapGuide = { axis: 'x' | 'y'; position: number }
+export type Alignment =
+  'left' | 'horizontal-center' | 'right' | 'top' | 'vertical-center' | 'bottom'
+
+export function alignmentOffset(
+  bounds: ObjectBounds,
+  target: ObjectBounds,
+  alignment: Alignment,
+) {
+  switch (alignment) {
+    case 'left':
+      return { dx: target.left - bounds.left, dy: 0 }
+    case 'horizontal-center':
+      return { dx: target.centerX - bounds.centerX, dy: 0 }
+    case 'right':
+      return { dx: target.right - bounds.right, dy: 0 }
+    case 'top':
+      return { dx: 0, dy: target.top - bounds.top }
+    case 'vertical-center':
+      return { dx: 0, dy: target.centerY - bounds.centerY }
+    case 'bottom':
+      return { dx: 0, dy: target.bottom - bounds.bottom }
+  }
+}
+
+export function distributionOffsets(
+  items: { id: string; bounds: ObjectBounds }[],
+  axis: 'x' | 'y',
+) {
+  if (items.length < 3) return new Map<string, number>()
+  const center = (item: (typeof items)[number]) =>
+    axis === 'x' ? item.bounds.centerX : item.bounds.centerY
+  const ordered = [...items].sort(
+    (left, right) =>
+      center(left) - center(right) || left.id.localeCompare(right.id),
+  )
+  const first = center(ordered[0])
+  const last = center(ordered.at(-1)!)
+  const interval = (last - first) / (ordered.length - 1)
+  return new Map(
+    ordered.map((item, index) => [
+      item.id,
+      first + interval * index - center(item),
+    ]),
+  )
+}
 
 export function unionBounds(bounds: ObjectBounds[]): ObjectBounds | undefined {
   if (!bounds.length) return undefined

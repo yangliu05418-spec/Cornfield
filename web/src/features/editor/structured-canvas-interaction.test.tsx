@@ -121,6 +121,57 @@ describe('StructuredCanvasInteraction', () => {
     expect(onPreview).toHaveBeenLastCalledWith(initial)
     expect(onCommit).not.toHaveBeenCalled()
   })
+
+  it('scales and rotates through constant-size selection handles', () => {
+    const onPreview = vi.fn()
+    const onCommit = vi.fn()
+    render(
+      <StructuredCanvasInteraction
+        document={document()}
+        assets={new Map([[asset.id, asset]])}
+        view={{ zoom: 100, panX: -50, panY: -40 }}
+        selectedIDs={new Set(['layer'])}
+        onViewChange={vi.fn()}
+        onSelectionChange={vi.fn()}
+        onPreview={onPreview}
+        onCommit={onCommit}
+        onFit={vi.fn()}
+      />,
+    )
+    const canvas = screen.getByRole('region', { name: '专业图层画布' })
+    vi.spyOn(canvas, 'getBoundingClientRect').mockReturnValue(rect())
+
+    fireEvent.pointerDown(
+      screen.getByRole('button', { name: '等比缩放所选图层' }),
+      { button: 0, clientX: 150, clientY: 140 },
+    )
+    fireEvent.pointerMove(window, { clientX: 200, clientY: 180 })
+    fireEvent.pointerUp(window)
+    expect(onCommit).toHaveBeenCalledTimes(1)
+    expect(onCommit.mock.calls[0][1].nodes[0].transform).toEqual([
+      2, 0, 0, 2, -50, -40,
+    ])
+
+    fireEvent.pointerDown(
+      screen.getByRole('button', { name: '旋转所选图层' }),
+      { button: 0, clientX: 100, clientY: 50 },
+    )
+    fireEvent.pointerMove(window, {
+      clientX: 150,
+      clientY: 100,
+      shiftKey: true,
+    })
+    fireEvent.pointerUp(window)
+    expect(onCommit).toHaveBeenCalledTimes(2)
+    expect(onCommit.mock.calls[1][1].nodes[0].transform.map(round)).toEqual([
+      0, 1, -1, 0, 90, -10,
+    ])
+
+    fireEvent.keyDown(screen.getByRole('button', { name: '旋转所选图层' }), {
+      key: 'ArrowLeft',
+    })
+    expect(onCommit).toHaveBeenCalledTimes(3)
+  })
 })
 
 function document(): EditorDocumentV2 {
@@ -157,4 +208,8 @@ function rect(): DOMRect {
     height: 200,
     toJSON: () => ({}),
   }
+}
+
+function round(value: number) {
+  return Math.round(value * 1e9) / 1e9
 }

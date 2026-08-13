@@ -1615,7 +1615,6 @@
   left: 50%;
   width: 0;
   height: 0;
-  pointer-events: none;
   transform-origin: 0 0;
   will-change: transform;
 }
@@ -1623,6 +1622,7 @@
   outline: max(1px, calc(1px / var(--editor-zoom, 1))) solid
     color-mix(in srgb, var(--text) 42%, transparent);
   box-shadow: 0 24px 80px rgb(0 0 0 / 0.46);
+  pointer-events: none;
 }
 .structured-selection-outline {
   position: absolute;
@@ -1630,6 +1630,59 @@
   border: max(1px, calc(1px / var(--editor-zoom, 1))) solid var(--lime);
   box-shadow: 0 0 0 max(1px, calc(1px / var(--editor-zoom, 1)))
     rgb(15 17 19 / 0.5);
+  pointer-events: none;
+}
+.structured-transform-handle {
+  position: absolute;
+  width: calc(9px / var(--editor-zoom, 1));
+  height: calc(9px / var(--editor-zoom, 1));
+  padding: 0;
+  border: max(1px, calc(1px / var(--editor-zoom, 1))) solid #0f1113;
+  border-radius: 50%;
+  background: var(--lime);
+  pointer-events: auto;
+}
+.structured-transform-handle.is-nw,
+.structured-transform-handle.is-ne,
+.structured-transform-handle.is-se,
+.structured-transform-handle.is-sw {
+  translate: -50% -50%;
+  cursor: nwse-resize;
+}
+.structured-transform-handle.is-ne,
+.structured-transform-handle.is-sw {
+  cursor: nesw-resize;
+}
+.structured-transform-handle.is-nw {
+  top: 0;
+  left: 0;
+}
+.structured-transform-handle.is-ne {
+  top: 0;
+  left: 100%;
+}
+.structured-transform-handle.is-se {
+  top: 100%;
+  left: 100%;
+}
+.structured-transform-handle.is-sw {
+  top: 100%;
+  left: 0;
+}
+.structured-rotate-stem {
+  position: absolute;
+  bottom: 100%;
+  left: 50%;
+  width: max(1px, calc(1px / var(--editor-zoom, 1)));
+  height: calc(26px / var(--editor-zoom, 1));
+  background: var(--lime);
+  pointer-events: none;
+}
+.structured-transform-handle.is-rotate {
+  bottom: calc(100% + 26px / var(--editor-zoom, 1));
+  left: 50%;
+  translate: -50% 50%;
+  cursor: grab;
 }
 .structured-render-wait {
   position: absolute;
@@ -1739,6 +1792,26 @@
   content: '';
   border-radius: 2px;
   background: var(--lime);
+}
+.structured-layer-row[data-drop-position='before']::after,
+.structured-layer-row[data-drop-position='after']::after {
+  position: absolute;
+  right: 4px;
+  left: 4px;
+  height: 2px;
+  content: '';
+  border-radius: 2px;
+  background: var(--lime);
+}
+.structured-layer-row[data-drop-position='before']::after {
+  top: -2px;
+}
+.structured-layer-row[data-drop-position='after']::after {
+  bottom: -2px;
+}
+.structured-layer-row[data-drop-position='inside'] {
+  border-color: color-mix(in srgb, var(--lime) 62%, var(--line));
+  background: color-mix(in srgb, var(--lime) 9%, var(--surface-2));
 }
 .structured-layer-disclosure,
 .structured-layer-main,

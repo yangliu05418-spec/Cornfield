@@ -8,6 +8,7 @@ import {
   editorSelectionContainsNode,
   editorSelectionBounds,
   hitTestEditorDocument,
+  transformEditorNodesAroundWorldPoint,
   translateEditorNodes,
 } from './domain/canvas-interaction-v2'
 import type { EditorViewport } from './renderer/types'
@@ -168,6 +169,106 @@ export function StructuredCanvasInteraction({
     window.addEventListener('pointercancel', pointerCancel)
   }
 
+  function beginSelectionTransform(
+    event: ReactPointerEvent<HTMLButtonElement>,
+    kind: 'scale' | 'rotate',
+  ) {
+    const root = rootRef.current
+    if (!root || !selectionBounds || disabled || selectedIDs.size === 0) return
+    event.preventDefault()
+    event.stopPropagation()
+    root.focus({ preventScroll: true })
+    const initialDocument = document
+    const center = {
+      x: selectionBounds.centerX,
+      y: selectionBounds.centerY,
+    }
+    const rect = root.getBoundingClientRect()
+    const screenCenter = {
+      x: rect.left + rect.width / 2 + view.panX + center.x * scale,
+      y: rect.top + rect.height / 2 + view.panY + center.y * scale,
+    }
+    const startDistance = Math.max(
+      1,
+      Math.hypot(
+        event.clientX - screenCenter.x,
+        event.clientY - screenCenter.y,
+      ),
+    )
+    const startAngle = Math.atan2(
+      event.clientY - screenCenter.y,
+      event.clientX - screenCenter.x,
+    )
+    let finalDocument = document
+    let changed = false
+    const move = (moveEvent: PointerEvent) => {
+      try {
+        if (kind === 'scale') {
+          const distance = Math.hypot(
+            moveEvent.clientX - screenCenter.x,
+            moveEvent.clientY - screenCenter.y,
+          )
+          const factor = Math.min(50, Math.max(0.02, distance / startDistance))
+          changed = Math.abs(factor - 1) > 1e-6
+          finalDocument = transformEditorNodesAroundWorldPoint(
+            initialDocument,
+            selectedIDs,
+            center,
+            { type: 'scale', factor },
+          )
+        } else {
+          const angle = Math.atan2(
+            moveEvent.clientY - screenCenter.y,
+            moveEvent.clientX - screenCenter.x,
+          )
+          let degrees = ((angle - startAngle) * 180) / Math.PI
+          if (moveEvent.shiftKey) degrees = Math.round(degrees / 15) * 15
+          changed = Math.abs(degrees) > 1e-6
+          finalDocument = transformEditorNodesAroundWorldPoint(
+            initialDocument,
+            selectedIDs,
+            center,
+            { type: 'rotate', degrees },
+          )
+        }
+      } catch {
+        return
+      }
+      if (changed) onPreview(finalDocument)
+    }
+    const stop = (commit: boolean) => {
+      finish(move, pointerUp, pointerCancel)
+      cancelPointerSessionRef.current = () => undefined
+      if (!commit && changed) onPreview(initialDocument)
+      if (commit && changed) onCommit(initialDocument, finalDocument)
+    }
+    const pointerUp = () => stop(true)
+    const pointerCancel = () => stop(false)
+    cancelPointerSessionRef.current = () =>
+      finish(move, pointerUp, pointerCancel, { updateState: false })
+    window.addEventListener('pointermove', move)
+    window.addEventListener('pointerup', pointerUp)
+    window.addEventListener('pointercancel', pointerCancel)
+  }
+
+  function commitSelectionTransform(
+    operation:
+      { type: 'scale'; factor: number } | { type: 'rotate'; degrees: number },
+  ) {
+    if (!selectionBounds || disabled || selectedIDs.size === 0) return
+    try {
+      const next = transformEditorNodesAroundWorldPoint(
+        document,
+        selectedIDs,
+        { x: selectionBounds.centerX, y: selectionBounds.centerY },
+        operation,
+      )
+      onCommit(document, next)
+    } catch {
+      // Protocol limits and locked ancestors intentionally reject transforms.
+    }
+  }
+
   function finish(
     move: (event: PointerEvent) => void,
     pointerUp: () => void,
@@ -292,7 +393,6 @@ export function StructuredCanvasInteraction({
           style={{
             transform: `translate(${view.panX}px, ${view.panY}px) scale(${scale})`,
           }}
-          aria-hidden="true"
         >
           <div
             className="structured-selection-outline"
@@ -305,7 +405,62 @@ export function StructuredCanvasInteraction({
                 '--editor-zoom': scale,
               } as CSSProperties
             }
-          />
+          >
+            {(['nw', 'ne', 'se', 'sw'] as const).map((handle) => (
+              <button
+                key={handle}
+                type="button"
+                className={`structured-transform-handle is-${handle}`}
+                aria-label="等比缩放所选图层"
+                aria-hidden={handle !== 'se'}
+                tabIndex={handle === 'se' ? 0 : -1}
+                title={handle === 'se' ? '等比缩放（方向键微调）' : undefined}
+                onPointerDown={(event) =>
+                  beginSelectionTransform(event, 'scale')
+                }
+                onKeyDown={(event) => {
+                  if (
+                    ![
+                      'ArrowUp',
+                      'ArrowDown',
+                      'ArrowLeft',
+                      'ArrowRight',
+                    ].includes(event.key)
+                  )
+                    return
+                  event.preventDefault()
+                  event.stopPropagation()
+                  commitSelectionTransform({
+                    type: 'scale',
+                    factor:
+                      event.key === 'ArrowUp' || event.key === 'ArrowRight'
+                        ? 1.05
+                        : 0.95,
+                  })
+                }}
+              />
+            ))}
+            <span className="structured-rotate-stem" />
+            <button
+              type="button"
+              className="structured-transform-handle is-rotate"
+              aria-label="旋转所选图层"
+              title="旋转（左右方向键微调）"
+              onPointerDown={(event) =>
+                beginSelectionTransform(event, 'rotate')
+              }
+              onKeyDown={(event) => {
+                if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight')
+                  return
+                event.preventDefault()
+                event.stopPropagation()
+                commitSelectionTransform({
+                  type: 'rotate',
+                  degrees: event.key === 'ArrowLeft' ? -15 : 15,
+                })
+              }}
+            />
+          </div>
         </div>
       )}
     </div>

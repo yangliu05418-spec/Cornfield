@@ -1,6 +1,11 @@
-import { buildEditorLayerTree, reorderEditorNode } from './authoring-v2'
+import {
+  buildEditorLayerTree,
+  reparentEditorNodes,
+  reorderEditorNode,
+} from './authoring-v2'
 import type { EditorLayerTreeNode } from './authoring-v2'
 import type { EditorDocumentV2, EditorNodeV2 } from './document-v2'
+import { editorSelectionRootIDs } from './canvas-interaction-v2'
 
 export type EditorLayerRow = {
   entry: EditorLayerTreeNode
@@ -63,4 +68,40 @@ export function reorderEditorNodeRelative(
   return target === index
     ? document
     : reorderEditorNode(document, nodeID, target)
+}
+
+export type EditorLayerDropPosition = 'before' | 'inside' | 'after'
+
+export function moveEditorNodesByDrop(
+  document: EditorDocumentV2,
+  nodeIDs: readonly string[],
+  targetID: string,
+  position: EditorLayerDropPosition,
+) {
+  const roots = editorSelectionRootIDs(document, new Set(nodeIDs))
+  const moving = new Set(roots)
+  const target = document.nodes.find((node) => node.id === targetID)
+  if (!target || moving.has(target.id)) return document
+  if (position === 'inside') {
+    if (target.type !== 'group') return document
+    const childCount = document.nodes.filter(
+      (node) => node.parent_id === target.id && !moving.has(node.id),
+    ).length
+    return reparentEditorNodes(document, roots, target.id, childCount)
+  }
+  const siblings = document.nodes
+    .filter(
+      (node) => node.parent_id === target.parent_id && !moving.has(node.id),
+    )
+    .sort(
+      (left, right) =>
+        left.order_key.localeCompare(right.order_key) ||
+        left.id.localeCompare(right.id),
+    )
+  const targetIndex = siblings.findIndex((node) => node.id === target.id)
+  if (targetIndex < 0) return document
+  // The panel renders high order keys first. A visual drop before the row is
+  // therefore inserted after the target in the ascending document order.
+  const insertionIndex = position === 'before' ? targetIndex + 1 : targetIndex
+  return reparentEditorNodes(document, roots, target.parent_id, insertionIndex)
 }

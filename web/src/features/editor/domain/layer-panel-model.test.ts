@@ -5,6 +5,7 @@ import {
   buildVisibleEditorLayerRows,
   canAttachEditorMask,
   canGroupEditorNodes,
+  moveEditorNodesByDrop,
   reorderEditorNodeRelative,
 } from './layer-panel-model'
 
@@ -91,5 +92,44 @@ describe('structured layer panel model', () => {
         .map((node) => node.id),
     ).toEqual(['second', 'first', 'container'])
     expect(reorderEditorNodeRelative(moved, 'nested', 1)).toBe(moved)
+  })
+
+  it('maps visual drop positions to document order and group nesting', () => {
+    const value = document([
+      raster('bottom', '00000000'),
+      raster('middle', '00000001'),
+      group('container', '00000002'),
+      raster('top', '00000003'),
+    ])
+    const above = moveEditorNodesByDrop(value, ['bottom'], 'middle', 'before')
+    expect(
+      above.nodes
+        .filter((node) => node.parent_id === null)
+        .sort((a, b) => a.order_key.localeCompare(b.order_key))
+        .map((node) => node.id),
+    ).toEqual(['middle', 'bottom', 'container', 'top'])
+    const nested = moveEditorNodesByDrop(above, ['top'], 'container', 'inside')
+    expect(nested.nodes.find((node) => node.id === 'top')?.parent_id).toBe(
+      'container',
+    )
+    expect(moveEditorNodesByDrop(nested, ['top'], 'top', 'after')).toBe(nested)
+  })
+
+  it('moves only the selected root when its descendant is selected too', () => {
+    const container = group('container', '00000001')
+    const child = raster('child', '00000000', 'container')
+    const target = group('target', '00000002')
+    const moved = moveEditorNodesByDrop(
+      document([container, child, target]),
+      ['container', 'child'],
+      'target',
+      'inside',
+    )
+    expect(moved.nodes.find((node) => node.id === 'container')?.parent_id).toBe(
+      'target',
+    )
+    expect(moved.nodes.find((node) => node.id === 'child')?.parent_id).toBe(
+      'container',
+    )
   })
 })

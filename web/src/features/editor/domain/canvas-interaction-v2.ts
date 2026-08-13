@@ -49,7 +49,7 @@ export function editorSelectionBounds(
   assets: EditorAssetDimensions,
   selectedIDs: ReadonlySet<string>,
 ): ObjectBounds | undefined {
-  const selectedRoots = selectedRootIDs(document, selectedIDs)
+  const selectedRoots = editorSelectionRootIDs(document, selectedIDs)
   const geometry = flattenRasterGeometry(document)
   const geometryByID = new Map(geometry.map((entry) => [entry.node.id, entry]))
   const maskIDs = new Set(
@@ -103,14 +103,14 @@ export function translateEditorNodes(
     !Number.isFinite(worldDelta.y)
   )
     return document
-  const roots = selectedRootIDs(document, selectedIDs)
+  const roots = editorSelectionRootIDs(document, selectedIDs)
   const rootSet = new Set(roots)
   const byID = new Map(document.nodes.map((node) => [node.id, node]))
   for (const id of roots) {
     if (editorNodeWorldAppearance(byID, id).locked)
       throw new TypeError('Locked editor nodes cannot be moved')
   }
-  return {
+  const result: EditorDocumentV2 = {
     ...document,
     nodes: document.nodes.map((node) => {
       if (!rootSet.has(node.id)) return node
@@ -134,6 +134,68 @@ export function translateEditorNodes(
       }
     }),
   }
+  return result
+}
+
+export function transformEditorNodesAroundWorldPoint(
+  document: EditorDocumentV2,
+  selectedIDs: ReadonlySet<string>,
+  center: { x: number; y: number },
+  operation:
+    { type: 'scale'; factor: number } | { type: 'rotate'; degrees: number },
+): EditorDocumentV2 {
+  if (
+    selectedIDs.size === 0 ||
+    !Number.isFinite(center.x) ||
+    !Number.isFinite(center.y) ||
+    (operation.type === 'scale' &&
+      (!Number.isFinite(operation.factor) || operation.factor <= 0)) ||
+    (operation.type === 'rotate' && !Number.isFinite(operation.degrees))
+  )
+    return document
+  const roots = editorSelectionRootIDs(document, selectedIDs)
+  const rootSet = new Set(roots)
+  const byID = new Map(document.nodes.map((node) => [node.id, node]))
+  for (const id of roots) {
+    if (editorNodeWorldAppearance(byID, id).locked)
+      throw new TypeError('Locked editor nodes cannot be transformed')
+  }
+  const radians =
+    operation.type === 'rotate' ? (operation.degrees * Math.PI) / 180 : 0
+  const cosine = Math.cos(radians)
+  const sine = Math.sin(radians)
+  const worldOperation: EditorTransform =
+    operation.type === 'scale'
+      ? [operation.factor, 0, 0, operation.factor, 0, 0]
+      : [cosine, sine, -sine, cosine, 0, 0]
+  const aroundCenter = multiplyTransforms(
+    multiplyTransforms([1, 0, 0, 1, center.x, center.y], worldOperation),
+    [1, 0, 0, 1, -center.x, -center.y],
+  )
+  const result: EditorDocumentV2 = {
+    ...document,
+    nodes: document.nodes.map((node) => {
+      if (!rootSet.has(node.id)) return node
+      const parentTransform = node.parent_id
+        ? editorNodeWorldTransform(byID, node.parent_id)
+        : identity
+      const inverseParent = invertAffine(parentTransform)
+      if (!inverseParent)
+        throw new TypeError('Parent transform is not invertible')
+      const world = editorNodeWorldTransform(byID, node.id)
+      const transform = multiplyTransforms(
+        inverseParent,
+        multiplyTransforms(aroundCenter, world),
+      )
+      if (!validEditorTransform(transform))
+        throw new TypeError('Editor transform exceeds the document limits')
+      return {
+        ...node,
+        transform,
+      }
+    }),
+  }
+  return result
 }
 
 export function editorNodeWorldTransform(
@@ -260,7 +322,7 @@ function intersectBounds(left: ObjectBounds, right: ObjectBounds) {
   } satisfies ObjectBounds
 }
 
-function selectedRootIDs(
+export function editorSelectionRootIDs(
   document: EditorDocumentV2,
   selectedIDs: ReadonlySet<string>,
 ) {
@@ -296,5 +358,14 @@ function compareNodes(left: EditorNodeV2, right: EditorNodeV2) {
   return (
     left.order_key.localeCompare(right.order_key) ||
     left.id.localeCompare(right.id)
+  )
+}
+
+function validEditorTransform(transform: EditorTransform) {
+  return (
+    transform.every(
+      (value) => Number.isFinite(value) && Math.abs(value) <= 1_000_000,
+    ) &&
+    Math.abs(transform[0] * transform[3] - transform[1] * transform[2]) >= 1e-8
   )
 }

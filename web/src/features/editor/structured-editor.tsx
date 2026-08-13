@@ -21,7 +21,7 @@ import {
   Unlock,
 } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import type { CSSProperties } from 'react'
+import type { CSSProperties, DragEvent as ReactDragEvent } from 'react'
 
 import { AppShell } from '#/components/app-shell'
 import { ConfirmDialog } from '#/components/confirm-dialog'
@@ -42,8 +42,10 @@ import {
   buildVisibleEditorLayerRows,
   canAttachEditorMask,
   canGroupEditorNodes,
+  moveEditorNodesByDrop,
   reorderEditorNodeRelative,
 } from './domain/layer-panel-model'
+import type { EditorLayerDropPosition } from './domain/layer-panel-model'
 import { PixiSurface } from './renderer/pixi-surface'
 import { StructuredCanvasInteraction } from './structured-canvas-interaction'
 import { useEditorOperations } from './use-editor-operations'
@@ -76,6 +78,11 @@ export function StructuredEditor({
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [rerunConfirm, setRerunConfirm] = useState(false)
   const [pendingLayerSet, setPendingLayerSet] = useState<LayerSet>()
+  const draggedLayerIDsRef = useRef<string[]>([])
+  const [layerDrop, setLayerDrop] = useState<{
+    id: string
+    position: EditorLayerDropPosition
+  }>()
   const [settings, setSettings] = useState<LayerDecompositionSettings>({
     prompt: '',
     resolution: 'auto',
@@ -260,6 +267,16 @@ export function StructuredEditor({
     else next.add(id)
     setSelectedIDs(next)
     setActiveID(next.has(id) ? id : ([...next].at(-1) ?? ''))
+  }
+
+  function layerDropPosition(
+    event: ReactDragEvent<HTMLElement>,
+    node: EditorNodeV2,
+  ): EditorLayerDropPosition {
+    const bounds = event.currentTarget.getBoundingClientRect()
+    const ratio = (event.clientY - bounds.top) / Math.max(1, bounds.height)
+    if (node.type === 'group' && ratio >= 0.25 && ratio <= 0.75) return 'inside'
+    return ratio < 0.5 ? 'before' : 'after'
   }
 
   function groupSelection() {
@@ -654,10 +671,57 @@ export function StructuredEditor({
                   <div
                     key={node.id}
                     className={`structured-layer-row${selectedIDs.has(node.id) ? ' active' : ''}`}
+                    data-drop-position={
+                      layerDrop?.id === node.id ? layerDrop.position : undefined
+                    }
                     style={{ '--layer-depth': entry.depth } as CSSProperties}
                     role="treeitem"
                     aria-level={entry.depth + 1}
                     aria-selected={selectedIDs.has(node.id)}
+                    onDragOver={(event) => {
+                      if (!draggedLayerIDsRef.current.length) return
+                      event.preventDefault()
+                      event.dataTransfer.dropEffect = 'move'
+                      setLayerDrop({
+                        id: node.id,
+                        position: layerDropPosition(event, node),
+                      })
+                    }}
+                    onDragLeave={(event) => {
+                      if (
+                        event.currentTarget.contains(
+                          event.relatedTarget as Node,
+                        )
+                      )
+                        return
+                      setLayerDrop((current) =>
+                        current?.id === node.id ? undefined : current,
+                      )
+                    }}
+                    onDrop={(event) => {
+                      event.preventDefault()
+                      const position = layerDropPosition(event, node)
+                      const ids = draggedLayerIDsRef.current
+                      setLayerDrop(undefined)
+                      draggedLayerIDsRef.current = []
+                      if (!ids.length) return
+                      runCommand(
+                        () =>
+                          moveEditorNodesByDrop(
+                            documentRef.current,
+                            ids,
+                            node.id,
+                            position,
+                          ),
+                        position === 'inside'
+                          ? '已移入图层组'
+                          : '已调整图层顺序',
+                      )
+                    }}
+                    onDragEnd={() => {
+                      setLayerDrop(undefined)
+                      draggedLayerIDsRef.current = []
+                    }}
                   >
                     <button
                       className="structured-layer-disclosure"
@@ -679,6 +743,22 @@ export function StructuredEditor({
                     <button
                       className="structured-layer-main"
                       type="button"
+                      draggable={!operations.running}
+                      onDragStart={(event) => {
+                        const ids = selectedIDs.has(node.id)
+                          ? [...selectedIDs]
+                          : [node.id]
+                        draggedLayerIDsRef.current = ids
+                        if (!selectedIDs.has(node.id)) {
+                          setSelectedIDs(new Set(ids))
+                          setActiveID(node.id)
+                        }
+                        event.dataTransfer.effectAllowed = 'move'
+                        event.dataTransfer.setData(
+                          'application/x-cornfield-editor-layers',
+                          ids.join(','),
+                        )
+                      }}
                       onClick={(event) => selectNode(node.id, event.shiftKey)}
                     >
                       <span className="structured-layer-thumb">

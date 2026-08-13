@@ -572,11 +572,52 @@ test('image editor restores a source project and autosaves keyboard edits', asyn
   await expect(page).toHaveURL(/\/app\/editor\/editor-project-1$/)
   await expect(page.locator('.app-nav')).toHaveCount(0)
 
+  await expect(page.locator('.editor-artboard-label')).toContainText(
+    '1024 × 1024',
+  )
+  const surfaces = await page.evaluate(() => ({
+    workspace: getComputedStyle(
+      document.querySelector('.editor-canvas-viewport')!,
+    ).backgroundColor,
+    artboard: getComputedStyle(document.querySelector('.editor-artboard')!)
+      .backgroundColor,
+  }))
+  expect(surfaces.workspace).not.toBe(surfaces.artboard)
+
+  const artboardSettings = page.locator('.editor-artboard-settings')
+  await artboardSettings.locator('input').nth(0).fill('1200')
+  await artboardSettings.locator('input').nth(1).fill('900')
+  await artboardSettings.locator('button').click()
+  await expect.poll(() => backend.editorState().revision).toBe(1)
+  expect(backend.editorState().document.canvas).toEqual({
+    width: 1200,
+    height: 900,
+  })
+
   const canvas = page.getByRole('region', { name: '图片编辑画布' })
   await canvas.focus()
   await page.keyboard.press('ArrowRight')
-  await expect.poll(() => backend.editorState().revision).toBe(1)
+  await expect.poll(() => backend.editorState().revision).toBe(2)
   expect(backend.editorState().document.objects[0].transform[4]).toBe(1)
+
+  const beforeRotate = backend.editorState().document.objects[0].transform
+  await page.getByTitle('旋转 90°').click()
+  await expect.poll(() => backend.editorState().revision).toBe(3)
+  const afterRotate = backend.editorState().document.objects[0].transform
+  const center = (matrix: number[]) => ({
+    x: matrix[0] * 512 + matrix[2] * 512 + matrix[4],
+    y: matrix[1] * 512 + matrix[3] * 512 + matrix[5],
+  })
+  expect(center(afterRotate).x).toBeCloseTo(center(beforeRotate).x)
+  expect(center(afterRotate).y).toBeCloseTo(center(beforeRotate).y)
+
+  await page.locator('input[type="file"]').setInputFiles({
+    name: 'editor-layer.png',
+    mimeType: 'image/png',
+    buffer: Buffer.from('89504e470d0a1a0a', 'hex'),
+  })
+  await expect.poll(() => backend.editorState().document.objects.length).toBe(2)
+  await expect(page.locator('.editor-selection-box')).toBeVisible()
 
   await page.reload()
   await expect(page.getByRole('textbox', { name: '工程名称' })).toHaveValue(
@@ -667,6 +708,7 @@ async function installStudioMocks(
   let refineAttempts = 0
   const postKeys: string[] = []
   let editorRevision = 0
+  let editorUploadReady = false
   let editorDocument = {
     schema_version: 1 as const,
     canvas: { width: 1024, height: 1024 },
@@ -714,6 +756,42 @@ async function installStudioMocks(
     }
     if (pathname === '/api/v1/auth/logout' && request.method() === 'POST') {
       return route.fulfill({ status: 204 })
+    }
+    if (pathname === '/api/v1/uploads' && request.method() === 'POST') {
+      editorUploadReady = false
+      const uploaded = {
+        ...assets[0],
+        id: 'asset-editor-upload',
+        kind: 'upload',
+        original_filename: 'editor-layer.png',
+        created_at: new Date().toISOString(),
+      }
+      assets = [uploaded, ...assets]
+      return json(
+        route,
+        {
+          id: 'upload-editor',
+          status: 'created',
+          content_url: '/api/v1/uploads/upload-editor/content',
+        },
+        201,
+      )
+    }
+    if (
+      pathname === '/api/v1/uploads/upload-editor/content' &&
+      request.method() === 'PUT'
+    ) {
+      editorUploadReady = true
+      return route.fulfill({ status: 204 })
+    }
+    if (
+      pathname === '/api/v1/uploads/upload-editor' &&
+      request.method() === 'GET'
+    ) {
+      return json(route, {
+        status: editorUploadReady ? 'ready' : 'validating',
+        asset_id: editorUploadReady ? 'asset-editor-upload' : undefined,
+      })
     }
     if (pathname === '/api/v1/models') {
       return json(route, {

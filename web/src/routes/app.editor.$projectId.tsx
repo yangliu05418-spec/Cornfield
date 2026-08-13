@@ -11,22 +11,35 @@ import {
   FlipVertical2,
   Layers3,
   Lock,
+  Move,
   Maximize,
+  Plus,
   Redo2,
   RotateCcw,
   Save,
   Sparkles,
+  Trash2,
   Undo2,
   Unlock,
   X,
 } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import type { PointerEvent as ReactPointerEvent } from 'react'
+import type { CSSProperties, PointerEvent as ReactPointerEvent } from 'react'
 
 import { AppShell } from '#/components/app-shell'
 import { ConfirmDialog } from '#/components/confirm-dialog'
 import { api, APIError } from '#/lib/api'
 import { mergeAssetIntoCaches } from '#/lib/asset-cache'
+import {
+  fitArtboard,
+  flipAroundCenter,
+  objectRotation,
+  objectScale,
+  rotateAroundCenter,
+  scaleAroundCenter,
+  transformPoint,
+  zoomAtScreenPoint,
+} from '#/lib/editor-transform'
 import type {
   Asset,
   AssetOperation,
@@ -54,6 +67,9 @@ const terminalOperationStates = new Set([
   'cancelled',
   'submission_uncertain',
 ])
+const maxEditorObjects = 64
+const maxUploadBytes = 25 << 20
+const acceptedUploadTypes = new Set(['image/jpeg', 'image/png', 'image/webp'])
 
 function ImageEditorPage() {
   const { projectId } = Route.useParams()
@@ -73,7 +89,10 @@ function ImageEditorPage() {
     null,
   )
   const [selectedID, setSelectedID] = useState('')
-  const [zoom, setZoom] = useState(100)
+  const [view, setView] = useState({ zoom: 100, panX: 0, panY: 0 })
+  const [spacePressed, setSpacePressed] = useState(false)
+  const [uploading, setUploading] = useState(false)
+  const [canvasDraft, setCanvasDraft] = useState({ width: 1, height: 1 })
   const [saveState, setSaveState] = useState<SaveState>('saved')
   const [notice, setNotice] = useState('')
   const [leaveConfirm, setLeaveConfirm] = useState(false)
@@ -95,15 +114,61 @@ function ImageEditorPage() {
   const historyRef = useRef<EditorDocument[]>([])
   const futureRef = useRef<EditorDocument[]>([])
   const appliedLayerSetRef = useRef<string | undefined>(undefined)
+  const viewportRef = useRef<HTMLDivElement>(null)
+  const uploadInputRef = useRef<HTMLInputElement>(null)
+  const fittedRef = useRef(false)
+  const zoom = view.zoom
 
   useEffect(() => {
     if (!projectQuery.data || documentRef.current) return
     documentRef.current = projectQuery.data.document
     setDocumentState(projectQuery.data.document)
+    setCanvasDraft(projectQuery.data.document.canvas)
     revisionRef.current = projectQuery.data.revision
     setSelectedID(projectQuery.data.document.objects.at(-1)?.id ?? '')
     setOperationID(projectQuery.data.latest_operation_id)
   }, [projectQuery.data])
+
+  const fitCanvas = useCallback(() => {
+    const viewport = viewportRef.current
+    const document = documentRef.current
+    if (!viewport || !document) return
+    setView(
+      fitArtboard(
+        viewport.clientWidth,
+        viewport.clientHeight,
+        document.canvas.width,
+        document.canvas.height,
+      ),
+    )
+  }, [])
+
+  useEffect(() => {
+    if (!documentState || fittedRef.current) return
+    fittedRef.current = true
+    requestAnimationFrame(fitCanvas)
+  }, [documentState, fitCanvas])
+
+  useEffect(() => {
+    const down = (event: KeyboardEvent) => {
+      if (event.code === 'Space' && !isTypingTarget(event.target)) {
+        event.preventDefault()
+        setSpacePressed(true)
+      }
+    }
+    const up = (event: KeyboardEvent) => {
+      if (event.code === 'Space') setSpacePressed(false)
+    }
+    const blur = () => setSpacePressed(false)
+    window.addEventListener('keydown', down)
+    window.addEventListener('keyup', up)
+    window.addEventListener('blur', blur)
+    return () => {
+      window.removeEventListener('keydown', down)
+      window.removeEventListener('keyup', up)
+      window.removeEventListener('blur', blur)
+    }
+  }, [])
 
   const assetIDs = useMemo(
     () => [
@@ -309,7 +374,14 @@ function ImageEditorPage() {
   }
 
   function beginDrag(event: ReactPointerEvent, object: EditorObject) {
-    if (object.locked || operationRunning || !documentRef.current) return
+    if (
+      spacePressed ||
+      event.button === 1 ||
+      object.locked ||
+      operationRunning ||
+      !documentRef.current
+    )
+      return
     event.preventDefault()
     event.currentTarget.setPointerCapture(event.pointerId)
     const startX = event.clientX
@@ -350,6 +422,210 @@ function ImageEditorPage() {
     }
     window.addEventListener('pointermove', move)
     window.addEventListener('pointerup', up, { once: true })
+  }
+
+  function beginPan(event: ReactPointerEvent<HTMLDivElement>) {
+    if (!(spacePressed || event.button === 1)) return
+    event.preventDefault()
+    const startX = event.clientX
+    const startY = event.clientY
+    const initial = view
+    const move = (moveEvent: PointerEvent) =>
+      setView({
+        ...initial,
+        panX: initial.panX + moveEvent.clientX - startX,
+        panY: initial.panY + moveEvent.clientY - startY,
+      })
+    const up = () => {
+      window.removeEventListener('pointermove', move)
+      window.removeEventListener('pointerup', up)
+    }
+    window.addEventListener('pointermove', move)
+    window.addEventListener('pointerup', up, { once: true })
+  }
+
+  function beginObjectTransform(
+    event: ReactPointerEvent<HTMLButtonElement>,
+    object: EditorObject,
+    asset: Asset,
+    kind: 'scale' | 'rotate',
+  ) {
+    if (object.locked || operationRunning || !documentRef.current) return
+    event.preventDefault()
+    event.stopPropagation()
+    const viewport = viewportRef.current
+    if (!viewport) return
+    const initialDocument = structuredClone(documentRef.current)
+    const initialObject = structuredClone(object)
+    const center = transformPoint(
+      initialObject.transform,
+      asset.width / 2,
+      asset.height / 2,
+    )
+    const rect = viewport.getBoundingClientRect()
+    const screenCenter = {
+      x: rect.left + rect.width / 2 + view.panX + center.x * (view.zoom / 100),
+      y: rect.top + rect.height / 2 + view.panY + center.y * (view.zoom / 100),
+    }
+    const startDistance = Math.max(
+      1,
+      Math.hypot(
+        event.clientX - screenCenter.x,
+        event.clientY - screenCenter.y,
+      ),
+    )
+    const startAngle = Math.atan2(
+      event.clientY - screenCenter.y,
+      event.clientX - screenCenter.x,
+    )
+    const initialScale = objectScale(initialObject.transform)
+    const move = (moveEvent: PointerEvent) => {
+      const current = documentRef.current
+      if (!current) return
+      let transformed = initialObject
+      if (kind === 'scale') {
+        const distance = Math.hypot(
+          moveEvent.clientX - screenCenter.x,
+          moveEvent.clientY - screenCenter.y,
+        )
+        const target = Math.min(
+          8,
+          Math.max(0.05, initialScale * (distance / startDistance)),
+        )
+        transformed = scaleAroundCenter(
+          initialObject,
+          asset.width,
+          asset.height,
+          target,
+        )
+      } else {
+        const angle = Math.atan2(
+          moveEvent.clientY - screenCenter.y,
+          moveEvent.clientX - screenCenter.x,
+        )
+        transformed = rotateAroundCenter(
+          initialObject,
+          asset.width,
+          asset.height,
+          ((angle - startAngle) * 180) / Math.PI,
+        )
+      }
+      const next = {
+        ...current,
+        objects: current.objects.map((item) =>
+          item.id === object.id ? transformed : item,
+        ),
+      }
+      documentRef.current = next
+      setDocumentState(next)
+    }
+    const up = () => {
+      window.removeEventListener('pointermove', move)
+      window.removeEventListener('pointerup', up)
+      historyRef.current.push(initialDocument)
+      if (historyRef.current.length > 100) historyRef.current.shift()
+      futureRef.current = []
+      scheduleSave()
+    }
+    window.addEventListener('pointermove', move)
+    window.addEventListener('pointerup', up, { once: true })
+  }
+
+  function changeZoom(nextZoom: number) {
+    const viewport = viewportRef.current
+    if (!viewport) return
+    const rect = viewport.getBoundingClientRect()
+    setView((current) =>
+      zoomAtScreenPoint(
+        current,
+        Math.min(400, Math.max(10, nextZoom)),
+        rect.left + rect.width / 2,
+        rect.top + rect.height / 2,
+        rect,
+      ),
+    )
+  }
+
+  async function uploadEditorImage(file?: File) {
+    if (!file || operationRunning || !documentRef.current) return
+    if (!acceptedUploadTypes.has(file.type)) {
+      setNotice('仅支持 JPEG、PNG 或 WebP 图片')
+      return
+    }
+    if (file.size > maxUploadBytes) {
+      setNotice('图片不能超过 25 MiB')
+      return
+    }
+    if (documentRef.current.objects.length >= maxEditorObjects) {
+      setNotice('当前工程最多可放置 64 个图层')
+      return
+    }
+    setUploading(true)
+    try {
+      const session = await api<{ id: string; content_url: string }>(
+        '/api/v1/uploads',
+        {
+          method: 'POST',
+          body: JSON.stringify({
+            filename: file.name,
+            media_type: file.type,
+            size: file.size,
+          }),
+        },
+      )
+      await api(session.content_url, { method: 'PUT', body: file })
+      const deadline = Date.now() + 120_000
+      let assetID = ''
+      while (Date.now() < deadline) {
+        const state = await api<{
+          status: string
+          asset_id?: string
+          error_code?: string
+        }>(`/api/v1/uploads/${session.id}`)
+        if (state.status === 'ready' && state.asset_id) {
+          assetID = state.asset_id
+          break
+        }
+        if (state.status === 'failed')
+          throw new Error(
+            `图片验证失败：${state.error_code ?? 'IMAGE_INVALID'}`,
+          )
+        await new Promise((resolve) => window.setTimeout(resolve, 750))
+      }
+      if (!assetID) throw new Error('图片仍在验证，请稍后重试')
+      const asset = await api<Asset>(`/api/v1/assets/${assetID}`)
+      mergeAssetIntoCaches(queryClient, asset)
+      const current = documentRef.current
+      const scale = Math.min(
+        1,
+        (current.canvas.width * 0.72) / asset.width,
+        (current.canvas.height * 0.72) / asset.height,
+      )
+      const nextObject: EditorObject = {
+        id: crypto.randomUUID(),
+        asset_id: asset.id,
+        transform: [
+          scale,
+          0,
+          0,
+          scale,
+          (current.canvas.width - asset.width * scale) / 2,
+          (current.canvas.height - asset.height * scale) / 2,
+        ],
+        opacity: 1,
+        visible: true,
+        locked: false,
+        z_index: current.objects.length,
+      }
+      applyDocument({ ...current, objects: [...current.objects, nextObject] })
+      setSelectedID(nextObject.id)
+      setNotice('图片已置入画板')
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : '图片上传失败')
+    } finally {
+      setUploading(false)
+      if (uploadInputRef.current) uploadInputRef.current.value = ''
+    }
   }
 
   async function startDecomposition(confirmed = false) {
@@ -595,6 +871,49 @@ function ImageEditorPage() {
     (item) => item.id === selectedID,
   )
   const objectAssets = assetsQuery.data
+  const selectedAsset = selected
+    ? objectAssets?.get(selected.asset_id)
+    : undefined
+
+  function removeSelectedObject() {
+    const current = documentRef.current
+    if (!selected || !current || operationRunning) return
+    if (selected.asset_id === projectQuery.data?.source_asset_id) {
+      setNotice('源图是当前工程的锚点，可以隐藏，但不能移除')
+      return
+    }
+    if (current.objects.length === 1) {
+      setNotice('画板至少需要保留一个图层')
+      return
+    }
+    const remaining = current.objects
+      .filter((object) => object.id !== selected.id)
+      .map((object, index) => ({ ...object, z_index: index }))
+    applyDocument({ ...current, objects: remaining })
+    setSelectedID(remaining.at(-1)?.id ?? '')
+  }
+
+  function resizeArtboard() {
+    const current = documentRef.current
+    const width = Math.round(canvasDraft.width)
+    const height = Math.round(canvasDraft.height)
+    if (
+      !current ||
+      width < 1 ||
+      height < 1 ||
+      width > 8192 ||
+      height > 8192 ||
+      width * height > 36_000_000
+    ) {
+      setNotice('画板需在 8192px、3600万像素以内')
+      return
+    }
+    if (width === current.canvas.width && height === current.canvas.height)
+      return
+    applyDocument({ ...current, canvas: { width, height } })
+    setCanvasDraft({ width, height })
+    requestAnimationFrame(fitCanvas)
+  }
   const sortedObjects = useMemo(
     () =>
       [...(documentState?.objects ?? [])].sort((a, b) => b.z_index - a.z_index),
@@ -709,8 +1028,35 @@ function ImageEditorPage() {
 
         <section className="editor-body">
           <aside className="editor-tools" aria-label="基础编辑工具">
-            <button type="button" title="适应画布" onClick={() => setZoom(50)}>
+            <input
+              ref={uploadInputRef}
+              className="sr-only"
+              type="file"
+              accept="image/jpeg,image/png,image/webp"
+              onChange={(event) =>
+                void uploadEditorImage(event.currentTarget.files?.[0])
+              }
+            />
+            <button
+              type="button"
+              title="添加图片"
+              aria-label="添加图片"
+              disabled={uploading || operationRunning}
+              onClick={() => uploadInputRef.current?.click()}
+            >
+              <Plus size={17} />
+            </button>
+            <button type="button" title="适应画板" onClick={fitCanvas}>
               <Maximize size={17} />
+            </button>
+            <button
+              type="button"
+              title="按住空格拖动画布"
+              aria-label="画布平移工具"
+              className={spacePressed ? 'active' : ''}
+              onClick={() => setSpacePressed((current) => !current)}
+            >
+              <Move size={17} />
             </button>
             <button
               type="button"
@@ -718,7 +1064,15 @@ function ImageEditorPage() {
               disabled={!selected || operationRunning}
               onClick={() =>
                 selected &&
-                updateObject(selected.id, (object) => rotateObject(object, 90))
+                selectedAsset &&
+                updateObject(selected.id, (object) =>
+                  rotateAroundCenter(
+                    object,
+                    selectedAsset.width,
+                    selectedAsset.height,
+                    90,
+                  ),
+                )
               }
             >
               <RotateCcw size={17} />
@@ -729,17 +1083,15 @@ function ImageEditorPage() {
               disabled={!selected || operationRunning}
               onClick={() =>
                 selected &&
-                updateObject(selected.id, (object) => ({
-                  ...object,
-                  transform: [
-                    -object.transform[0],
-                    -object.transform[1],
-                    object.transform[2],
-                    object.transform[3],
-                    object.transform[4],
-                    object.transform[5],
-                  ],
-                }))
+                selectedAsset &&
+                updateObject(selected.id, (object) =>
+                  flipAroundCenter(
+                    object,
+                    selectedAsset.width,
+                    selectedAsset.height,
+                    'horizontal',
+                  ),
+                )
               }
             >
               <FlipHorizontal2 size={17} />
@@ -750,17 +1102,15 @@ function ImageEditorPage() {
               disabled={!selected || operationRunning}
               onClick={() =>
                 selected &&
-                updateObject(selected.id, (object) => ({
-                  ...object,
-                  transform: [
-                    object.transform[0],
-                    object.transform[1],
-                    -object.transform[2],
-                    -object.transform[3],
-                    object.transform[4],
-                    object.transform[5],
-                  ],
-                }))
+                selectedAsset &&
+                updateObject(selected.id, (object) =>
+                  flipAroundCenter(
+                    object,
+                    selectedAsset.width,
+                    selectedAsset.height,
+                    'vertical',
+                  ),
+                )
               }
             >
               <FlipVertical2 size={17} />
@@ -784,11 +1134,42 @@ function ImageEditorPage() {
           </aside>
 
           <div
+            ref={viewportRef}
             className="editor-canvas-viewport"
             role="region"
             tabIndex={0}
             aria-label="图片编辑画布"
+            data-panning={spacePressed || undefined}
+            onPointerDown={beginPan}
+            onWheel={(event) => {
+              if (!(event.ctrlKey || event.metaKey)) return
+              event.preventDefault()
+              const rect = event.currentTarget.getBoundingClientRect()
+              const nextZoom = Math.min(
+                400,
+                Math.max(10, view.zoom * Math.exp(-event.deltaY * 0.002)),
+              )
+              setView((current) =>
+                zoomAtScreenPoint(
+                  current,
+                  nextZoom,
+                  event.clientX,
+                  event.clientY,
+                  rect,
+                ),
+              )
+            }}
             onKeyDown={(event) => {
+              if (
+                selected &&
+                !selected.locked &&
+                !operationRunning &&
+                (event.key === 'Delete' || event.key === 'Backspace')
+              ) {
+                event.preventDefault()
+                removeSelectedObject()
+                return
+              }
               if (
                 !selected ||
                 selected.locked ||
@@ -826,19 +1207,24 @@ function ImageEditorPage() {
             }}
           >
             <div
-              className="editor-canvas-wrap"
+              className="editor-world"
               style={{
-                width: (documentState.canvas.width * zoom) / 100,
-                height: (documentState.canvas.height * zoom) / 100,
+                transform: `translate(${view.panX}px, ${view.panY}px) scale(${zoom / 100})`,
               }}
             >
+              <span className="editor-artboard-label">
+                画板 · {documentState.canvas.width} ×{' '}
+                {documentState.canvas.height}
+              </span>
               <div
-                className="editor-canvas"
-                style={{
-                  width: documentState.canvas.width,
-                  height: documentState.canvas.height,
-                  transform: `scale(${zoom / 100})`,
-                }}
+                className="editor-canvas editor-artboard"
+                style={
+                  {
+                    width: documentState.canvas.width,
+                    height: documentState.canvas.height,
+                    '--editor-zoom': zoom / 100,
+                  } as CSSProperties
+                }
               >
                 {documentState.objects.map((object) => {
                   const asset = objectAssets?.get(object.asset_id)
@@ -862,12 +1248,62 @@ function ImageEditorPage() {
                       }}
                       onPointerDown={(event) => {
                         setSelectedID(object.id)
+                        if (spacePressed || event.button === 1) return
                         beginDrag(event, object)
                       }}
                     />
                   )
                 })}
               </div>
+              {selected && selectedAsset && selected.visible && (
+                <div
+                  className="editor-selection-box"
+                  style={
+                    {
+                      width: selectedAsset.width,
+                      height: selectedAsset.height,
+                      transform: `matrix(${selected.transform.join(',')})`,
+                      '--editor-handle-size': `${12 / (zoom / 100) / Math.max(0.05, objectScale(selected.transform))}px`,
+                      '--editor-handle-distance': `${34 / (zoom / 100) / Math.max(0.05, objectScale(selected.transform))}px`,
+                    } as CSSProperties
+                  }
+                  aria-hidden={selected.locked || operationRunning}
+                >
+                  {!selected.locked && !operationRunning && (
+                    <>
+                      {['nw', 'ne', 'se', 'sw'].map((position) => (
+                        <button
+                          key={position}
+                          className={`editor-transform-handle is-${position}`}
+                          type="button"
+                          aria-label="缩放图层"
+                          onPointerDown={(event) =>
+                            beginObjectTransform(
+                              event,
+                              selected,
+                              selectedAsset,
+                              'scale',
+                            )
+                          }
+                        />
+                      ))}
+                      <button
+                        className="editor-rotate-handle"
+                        type="button"
+                        aria-label="旋转图层"
+                        onPointerDown={(event) =>
+                          beginObjectTransform(
+                            event,
+                            selected,
+                            selectedAsset,
+                            'rotate',
+                          )
+                        }
+                      />
+                    </>
+                  )}
+                </div>
+              )}
             </div>
             {operationRunning && (
               <DecompositionWaiting
@@ -892,7 +1328,52 @@ function ImageEditorPage() {
           <aside className="editor-inspector">
             <div className="editor-panel-tabs">
               <strong>图层</strong>
-              <span>{documentState.objects.length} / 17</span>
+              <span>{documentState.objects.length} / 64</span>
+            </div>
+            <div className="editor-artboard-settings">
+              <span>画板尺寸</span>
+              <label>
+                <small>宽</small>
+                <input
+                  aria-label="画板宽度"
+                  type="number"
+                  min="1"
+                  max="8192"
+                  value={canvasDraft.width}
+                  disabled={operationRunning}
+                  onChange={(event) =>
+                    setCanvasDraft((current) => ({
+                      ...current,
+                      width: Number(event.target.value),
+                    }))
+                  }
+                />
+              </label>
+              <i>×</i>
+              <label>
+                <small>高</small>
+                <input
+                  aria-label="画板高度"
+                  type="number"
+                  min="1"
+                  max="8192"
+                  value={canvasDraft.height}
+                  disabled={operationRunning}
+                  onChange={(event) =>
+                    setCanvasDraft((current) => ({
+                      ...current,
+                      height: Number(event.target.value),
+                    }))
+                  }
+                />
+              </label>
+              <button
+                type="button"
+                disabled={operationRunning}
+                onClick={resizeArtboard}
+              >
+                应用
+              </button>
             </div>
             <div className="editor-layer-list">
               {sortedObjects.map((object) => (
@@ -924,40 +1405,68 @@ function ImageEditorPage() {
               <div className="editor-properties">
                 <label>
                   等比缩放{' '}
-                  <output>{Math.round(objectScale(selected) * 100)}%</output>
+                  <output>
+                    {Math.round(objectScale(selected.transform) * 100)}%
+                  </output>
                   <input
                     aria-label="图层缩放"
                     type="range"
                     min="0.1"
                     max="4"
                     step="0.01"
-                    value={objectScale(selected)}
+                    value={objectScale(selected.transform)}
                     disabled={operationRunning || selected.locked}
-                    onChange={(event) =>
+                    onChange={(event) => {
+                      if (!selectedAsset) return
                       updateObject(selected.id, (object) =>
-                        scaleObject(object, Number(event.target.value)),
+                        scaleAroundCenter(
+                          object,
+                          selectedAsset.width,
+                          selectedAsset.height,
+                          Number(event.target.value),
+                        ),
                       )
-                    }
+                    }}
                   />
                 </label>
+                <button
+                  className="editor-remove-layer"
+                  type="button"
+                  disabled={
+                    operationRunning ||
+                    documentState.objects.length <= 1 ||
+                    selected.asset_id === projectQuery.data?.source_asset_id
+                  }
+                  onClick={removeSelectedObject}
+                >
+                  <Trash2 size={15} />
+                  移除图层
+                </button>
                 <label>
-                  旋转 <output>{Math.round(objectRotation(selected))}°</output>
+                  旋转{' '}
+                  <output>
+                    {Math.round(objectRotation(selected.transform))}°
+                  </output>
                   <input
                     aria-label="图层旋转"
                     type="range"
                     min="-180"
                     max="180"
                     step="1"
-                    value={objectRotation(selected)}
+                    value={objectRotation(selected.transform)}
                     disabled={operationRunning || selected.locked}
-                    onChange={(event) =>
+                    onChange={(event) => {
+                      if (!selectedAsset) return
                       updateObject(selected.id, (object) =>
-                        rotateObject(
+                        rotateAroundCenter(
                           object,
-                          Number(event.target.value) - objectRotation(object),
+                          selectedAsset.width,
+                          selectedAsset.height,
+                          Number(event.target.value) -
+                            objectRotation(object.transform),
                         ),
                       )
-                    }
+                    }}
                   />
                 </label>
                 <label>
@@ -1099,22 +1608,22 @@ function ImageEditorPage() {
             {documentState.canvas.width} × {documentState.canvas.height}
           </span>
           <div>
-            <button type="button" onClick={() => setZoom(50)}>
+            <button type="button" onClick={() => changeZoom(50)}>
               50%
             </button>
-            <button type="button" onClick={() => setZoom(100)}>
+            <button type="button" onClick={() => changeZoom(100)}>
               100%
             </button>
-            <button type="button" onClick={() => setZoom(200)}>
+            <button type="button" onClick={() => changeZoom(200)}>
               200%
             </button>
             <input
               aria-label="画布缩放"
               type="range"
-              min="25"
-              max="200"
+              min="10"
+              max="400"
               value={zoom}
-              onChange={(event) => setZoom(Number(event.target.value))}
+              onChange={(event) => changeZoom(Number(event.target.value))}
             />
           </div>
         </footer>
@@ -1305,42 +1814,13 @@ async function saveEditorDocument(
   }
 }
 
-function rotateObject(object: EditorObject, degrees: number): EditorObject {
-  const radians = (degrees * Math.PI) / 180
-  const [a, b, c, d, e, f] = object.transform
-  const cos = Math.cos(radians),
-    sin = Math.sin(radians)
-  return {
-    ...object,
-    transform: [
-      cos * a - sin * b,
-      sin * a + cos * b,
-      cos * c - sin * d,
-      sin * c + cos * d,
-      e,
-      f,
-    ],
-  }
-}
-
-function objectScale(object: EditorObject): number {
-  const [a, b, c, d] = object.transform
-  return Math.sqrt(Math.abs(a * d - b * c))
-}
-
-function scaleObject(object: EditorObject, target: number): EditorObject {
-  const current = objectScale(object)
-  if (!Number.isFinite(target) || current < 1e-8) return object
-  const factor = target / current
-  const [a, b, c, d, e, f] = object.transform
-  return {
-    ...object,
-    transform: [a * factor, b * factor, c * factor, d * factor, e, f],
-  }
-}
-
-function objectRotation(object: EditorObject): number {
-  return (Math.atan2(object.transform[1], object.transform[0]) * 180) / Math.PI
+function isTypingTarget(target: EventTarget | null) {
+  return (
+    target instanceof HTMLInputElement ||
+    target instanceof HTMLTextAreaElement ||
+    target instanceof HTMLSelectElement ||
+    (target instanceof HTMLElement && target.isContentEditable)
+  )
 }
 
 function changeLayerOrder(

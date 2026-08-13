@@ -13,9 +13,10 @@ import (
 )
 
 const (
-	MaxDocumentBytes = 256 << 10
-	MaxObjects       = 17
-	MaxCanvasPixels  = 36_000_000
+	MaxDocumentBytes  = 256 << 10
+	MaxObjects        = 64
+	MaxProviderLayers = 17
+	MaxCanvasPixels   = 36_000_000
 )
 
 var (

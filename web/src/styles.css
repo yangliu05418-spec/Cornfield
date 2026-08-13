@@ -700,6 +700,11 @@
   color: var(--lime);
   border-color: color-mix(in srgb, var(--lime) 42%, var(--line));
 }
+.editor-tools button.active {
+  color: #10130b;
+  border-color: var(--lime);
+  background: var(--lime);
+}
 .editor-topbar button:disabled,
 .editor-tools button:disabled {
   opacity: 0.38;
@@ -757,41 +762,71 @@
 }
 .editor-canvas-viewport {
   position: relative;
-  display: grid;
-  place-items: center;
   min-width: 0;
   min-height: 0;
-  padding: 48px;
-  overflow: auto;
-  background-color: #111315;
-  background-image:
-    linear-gradient(45deg, #17191b 25%, transparent 25%),
-    linear-gradient(-45deg, #17191b 25%, transparent 25%),
-    linear-gradient(45deg, transparent 75%, #17191b 75%),
-    linear-gradient(-45deg, transparent 75%, #17191b 75%);
-  background-position:
-    0 0,
-    0 8px,
-    8px -8px,
-    -8px 0;
-  background-size: 16px 16px;
+  overflow: hidden;
+  overscroll-behavior: none;
+  touch-action: none;
+  background-color: #0f1113;
+  background-image: radial-gradient(
+    circle,
+    color-mix(in srgb, var(--muted) 25%, transparent) 0.8px,
+    transparent 0.9px
+  );
+  background-size: 20px 20px;
+}
+.editor-canvas-viewport[data-panning] {
+  cursor: grab;
+}
+.editor-canvas-viewport[data-panning]:active {
+  cursor: grabbing;
 }
 .editor-canvas-viewport:focus-visible {
   outline: 1px solid color-mix(in srgb, var(--lime) 56%, transparent);
   outline-offset: -2px;
 }
-.editor-canvas-wrap {
-  position: relative;
-  flex: 0 0 auto;
-  box-shadow: 0 24px 80px rgb(0 0 0 / 0.46);
+.editor-world {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 0;
+  height: 0;
+  transform-origin: 0 0;
+  will-change: transform;
 }
 .editor-canvas {
   position: absolute;
   inset: 0 auto auto 0;
-  transform-origin: 0 0;
   overflow: hidden;
   background: transparent;
   touch-action: none;
+}
+.editor-artboard {
+  outline: max(1px, calc(1px / var(--editor-zoom, 1))) solid
+    color-mix(in srgb, var(--text) 44%, transparent);
+  box-shadow: 0 24px 80px rgb(0 0 0 / 0.46);
+  background-color: #25282a;
+  background-image:
+    linear-gradient(45deg, #303335 25%, transparent 25%),
+    linear-gradient(-45deg, #303335 25%, transparent 25%),
+    linear-gradient(45deg, transparent 75%, #303335 75%),
+    linear-gradient(-45deg, transparent 75%, #303335 75%);
+  background-position:
+    0 0,
+    0 12px,
+    12px -12px,
+    -12px 0;
+  background-size: 24px 24px;
+}
+.editor-artboard-label {
+  position: absolute;
+  bottom: calc(100% + 10px);
+  left: 0;
+  width: max-content;
+  color: var(--muted);
+  font: 500 11px/1 var(--font-mono);
+  letter-spacing: 0.04em;
+  pointer-events: none;
 }
 .editor-canvas > img {
   position: absolute;
@@ -801,6 +836,80 @@
   user-select: none;
   cursor: move;
   will-change: transform;
+}
+.editor-selection-box {
+  position: absolute;
+  inset: 0 auto auto 0;
+  z-index: 1000;
+  box-sizing: border-box;
+  border: 1px solid var(--lime);
+  pointer-events: none;
+  transform-origin: 0 0;
+}
+.editor-transform-handle,
+.editor-rotate-handle {
+  position: absolute;
+  width: var(--editor-handle-size, 12px);
+  height: var(--editor-handle-size, 12px);
+  padding: 0;
+  border: 2px solid #111315;
+  border-radius: 3px;
+  background: var(--lime);
+  box-shadow: 0 0 0 1px var(--lime);
+  pointer-events: auto;
+}
+.editor-transform-handle.is-nw {
+  top: calc(var(--editor-handle-size, 12px) / -2);
+  left: calc(var(--editor-handle-size, 12px) / -2);
+  cursor: nwse-resize;
+}
+.editor-transform-handle.is-ne {
+  top: calc(var(--editor-handle-size, 12px) / -2);
+  right: calc(var(--editor-handle-size, 12px) / -2);
+  cursor: nesw-resize;
+}
+.editor-transform-handle.is-se {
+  right: calc(var(--editor-handle-size, 12px) / -2);
+  bottom: calc(var(--editor-handle-size, 12px) / -2);
+  cursor: nwse-resize;
+}
+.editor-transform-handle.is-sw {
+  bottom: calc(var(--editor-handle-size, 12px) / -2);
+  left: calc(var(--editor-handle-size, 12px) / -2);
+  cursor: nesw-resize;
+}
+.editor-rotate-handle {
+  top: calc(var(--editor-handle-distance, 34px) * -1);
+  left: calc(50% - var(--editor-handle-size, 12px) / 2);
+  border-radius: 50%;
+  cursor: grab;
+}
+.editor-rotate-handle::after {
+  position: absolute;
+  top: 90%;
+  left: 50%;
+  width: 1px;
+  height: calc(
+    var(--editor-handle-distance, 34px) - var(--editor-handle-size, 12px)
+  );
+  content: '';
+  background: var(--lime);
+  pointer-events: none;
+}
+.editor-remove-layer {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  min-height: 34px;
+  color: var(--muted);
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: transparent;
+}
+.editor-remove-layer:hover:not(:disabled) {
+  color: #ffb8b8;
+  border-color: color-mix(in srgb, #ff6b6b 42%, var(--line));
 }
 .editor-canvas > img.is-selected {
   outline: max(1px, calc(1px / var(--editor-zoom, 1))) solid var(--lime);
@@ -823,6 +932,49 @@
 }
 .editor-panel-tabs span {
   color: var(--muted);
+}
+.editor-artboard-settings {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto minmax(0, 1fr) auto;
+  gap: 7px;
+  align-items: end;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--line);
+}
+.editor-artboard-settings > span {
+  grid-column: 1 / -1;
+  color: var(--muted);
+  font-size: 11px;
+}
+.editor-artboard-settings label {
+  display: grid;
+  gap: 4px;
+}
+.editor-artboard-settings small {
+  color: var(--muted);
+  font-size: 10px;
+}
+.editor-artboard-settings input {
+  width: 100%;
+  height: 32px;
+  padding: 0 7px;
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-2);
+}
+.editor-artboard-settings > i {
+  align-self: center;
+  color: var(--muted);
+  font-style: normal;
+}
+.editor-artboard-settings > button {
+  height: 32px;
+  padding: 0 10px;
+  color: #10130b;
+  border: 1px solid var(--lime);
+  border-radius: 8px;
+  background: var(--lime);
 }
 .editor-layer-list {
   display: grid;

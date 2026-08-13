@@ -520,7 +520,7 @@ func (w *AssetOperationWorker) persistLayerManifest(record assetOperationRecord,
 }
 
 func (w *AssetOperationWorker) ingestLayers(ctx context.Context, record assetOperationRecord, manifest stagedLayerManifest) error {
-	if len(manifest.Items) < 2 || len(manifest.Items) > 17 {
+	if len(manifest.Items) < 2 || len(manifest.Items) > studioEditor.MaxProviderLayers {
 		return w.failOperation(ctx, record, "LAYER_RESULT_INVALID", "智能分层没有返回可用图层")
 	}
 	prepared := make([]stagedLayerItem, len(manifest.Items))

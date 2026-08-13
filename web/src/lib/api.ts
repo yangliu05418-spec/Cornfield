@@ -58,6 +58,7 @@ export type Asset = {
 
 export type EditorObject = {
   id: string
+  name?: string
   asset_id: string
   transform: [number, number, number, number, number, number]
   opacity: number

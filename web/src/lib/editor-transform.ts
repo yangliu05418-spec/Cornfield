@@ -76,15 +76,20 @@ export function objectScale(transform: Affine): number {
   return Math.sqrt(Math.abs(a * d - b * c))
 }
 
-export function scaleAroundCenter(
+export function objectAxisScales(transform: Affine) {
+  return {
+    x: Math.hypot(transform[0], transform[1]),
+    y: Math.hypot(transform[2], transform[3]),
+  }
+}
+
+export function scaleByFactorAroundCenter(
   object: EditorObject,
   width: number,
   height: number,
-  target: number,
+  factor: number,
 ): EditorObject {
-  const current = objectScale(object.transform)
-  if (!Number.isFinite(target) || current < 1e-8) return object
-  const factor = target / current
+  if (!Number.isFinite(factor) || factor <= 0) return object
   return {
     ...object,
     transform: aroundObjectCenter(object.transform, width, height, [
@@ -98,6 +103,18 @@ export function scaleAroundCenter(
   }
 }
 
+export function scaleAroundCenter(
+  object: EditorObject,
+  width: number,
+  height: number,
+  target: number,
+): EditorObject {
+  const current = objectScale(object.transform)
+  if (!Number.isFinite(target) || current < 1e-8) return object
+  const factor = target / current
+  return scaleByFactorAroundCenter(object, width, height, factor)
+}
+
 export function objectRotation(transform: Affine): number {
   return (Math.atan2(transform[1], transform[0]) * 180) / Math.PI
 }
@@ -107,6 +124,114 @@ export function transformPoint(transform: Affine, x: number, y: number) {
     x: transform[0] * x + transform[2] * y + transform[4],
     y: transform[1] * x + transform[3] * y + transform[5],
   }
+}
+
+export type ObjectBounds = {
+  left: number
+  top: number
+  right: number
+  bottom: number
+  centerX: number
+  centerY: number
+  width: number
+  height: number
+}
+
+export function objectBounds(
+  transform: Affine,
+  width: number,
+  height: number,
+): ObjectBounds {
+  const corners = [
+    transformPoint(transform, 0, 0),
+    transformPoint(transform, width, 0),
+    transformPoint(transform, width, height),
+    transformPoint(transform, 0, height),
+  ]
+  const left = Math.min(...corners.map((point) => point.x))
+  const right = Math.max(...corners.map((point) => point.x))
+  const top = Math.min(...corners.map((point) => point.y))
+  const bottom = Math.max(...corners.map((point) => point.y))
+  return {
+    left,
+    top,
+    right,
+    bottom,
+    centerX: (left + right) / 2,
+    centerY: (top + bottom) / 2,
+    width: right - left,
+    height: bottom - top,
+  }
+}
+
+export function moveObjectCenter(
+  object: EditorObject,
+  width: number,
+  height: number,
+  x: number,
+  y: number,
+): EditorObject {
+  const center = transformPoint(object.transform, width / 2, height / 2)
+  return {
+    ...object,
+    transform: [
+      object.transform[0],
+      object.transform[1],
+      object.transform[2],
+      object.transform[3],
+      object.transform[4] + x - center.x,
+      object.transform[5] + y - center.y,
+    ],
+  }
+}
+
+export type SnapGuide = { axis: 'x' | 'y'; position: number }
+
+export function snapObjectTranslation(
+  transform: Affine,
+  width: number,
+  height: number,
+  targets: ObjectBounds[],
+  threshold: number,
+) {
+  const bounds = objectBounds(transform, width, height)
+  const xPoints = [bounds.left, bounds.centerX, bounds.right]
+  const yPoints = [bounds.top, bounds.centerY, bounds.bottom]
+  const xTargets = targets.flatMap((target) => [
+    target.left,
+    target.centerX,
+    target.right,
+  ])
+  const yTargets = targets.flatMap((target) => [
+    target.top,
+    target.centerY,
+    target.bottom,
+  ])
+  const xSnap = nearestSnap(xPoints, xTargets, threshold)
+  const ySnap = nearestSnap(yPoints, yTargets, threshold)
+  return {
+    dx: xSnap?.delta ?? 0,
+    dy: ySnap?.delta ?? 0,
+    guides: [
+      ...(xSnap ? [{ axis: 'x' as const, position: xSnap.position }] : []),
+      ...(ySnap ? [{ axis: 'y' as const, position: ySnap.position }] : []),
+    ],
+  }
+}
+
+function nearestSnap(points: number[], targets: number[], threshold: number) {
+  let best: { delta: number; position: number } | undefined
+  for (const point of points) {
+    for (const target of targets) {
+      const delta = target - point
+      if (
+        Math.abs(delta) <= threshold &&
+        (!best || Math.abs(delta) < Math.abs(best.delta))
+      )
+        best = { delta, position: target }
+    }
+  }
+  return best
 }
 
 export function screenPointToWorld(

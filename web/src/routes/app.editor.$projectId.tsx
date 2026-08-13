@@ -1,10 +1,13 @@
 import { createFileRoute, useNavigate } from '@tanstack/react-router'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import {
+  AlignCenterHorizontal,
+  AlignCenterVertical,
   ArrowDown,
   ArrowLeft,
   ArrowUp,
   Crop,
+  Copy,
   Eye,
   EyeOff,
   FlipHorizontal2,
@@ -35,8 +38,14 @@ import {
   flipAroundCenter,
   objectRotation,
   objectScale,
+  objectBounds,
+  objectAxisScales,
+  moveObjectCenter,
   rotateAroundCenter,
   scaleAroundCenter,
+  scaleByFactorAroundCenter,
+  screenPointToWorld,
+  snapObjectTranslation,
   transformPoint,
   zoomAtScreenPoint,
 } from '#/lib/editor-transform'
@@ -92,6 +101,10 @@ function ImageEditorPage() {
   const [view, setView] = useState({ zoom: 100, panX: 0, panY: 0 })
   const [spacePressed, setSpacePressed] = useState(false)
   const [uploading, setUploading] = useState(false)
+  const [dragOver, setDragOver] = useState(false)
+  const [snapGuides, setSnapGuides] = useState<
+    { axis: 'x' | 'y'; position: number }[]
+  >([])
   const [canvasDraft, setCanvasDraft] = useState({ width: 1, height: 1 })
   const [saveState, setSaveState] = useState<SaveState>('saved')
   const [notice, setNotice] = useState('')
@@ -114,8 +127,12 @@ function ImageEditorPage() {
   const historyRef = useRef<EditorDocument[]>([])
   const futureRef = useRef<EditorDocument[]>([])
   const appliedLayerSetRef = useRef<string | undefined>(undefined)
+  const continuousHistoryRef = useRef<EditorDocument | null>(null)
   const viewportRef = useRef<HTMLDivElement>(null)
   const uploadInputRef = useRef<HTMLInputElement>(null)
+  const uploadEditorImageRef = useRef<
+    (file?: File, position?: { x: number; y: number }) => void
+  >(() => undefined)
   const fittedRef = useRef(false)
   const zoom = view.zoom
 
@@ -308,14 +325,52 @@ function ImageEditorPage() {
   function updateObject(
     id: string,
     update: (object: EditorObject) => EditorObject,
+    remember = true,
   ) {
     if (!documentRef.current) return
+    applyDocument(
+      {
+        ...documentRef.current,
+        objects: documentRef.current.objects.map((object) =>
+          object.id === id ? update(object) : object,
+        ),
+      },
+      remember,
+    )
+  }
+
+  function beginContinuousEdit() {
+    if (!continuousHistoryRef.current && documentRef.current)
+      continuousHistoryRef.current = structuredClone(documentRef.current)
+  }
+
+  function finishContinuousEdit() {
+    const previous = continuousHistoryRef.current
+    continuousHistoryRef.current = null
+    if (
+      !previous ||
+      JSON.stringify(previous) === JSON.stringify(documentRef.current)
+    )
+      return
+    historyRef.current.push(previous)
+    if (historyRef.current.length > 100) historyRef.current.shift()
+    futureRef.current = []
+  }
+
+  function moveLayerTo(sourceID: string, targetID: string) {
+    const current = documentRef.current
+    if (!current || sourceID === targetID || operationRunning) return
+    const ordered = [...current.objects].sort((a, b) => a.z_index - b.z_index)
+    const sourceIndex = ordered.findIndex((item) => item.id === sourceID)
+    const targetIndex = ordered.findIndex((item) => item.id === targetID)
+    if (sourceIndex < 0 || targetIndex < 0) return
+    const [source] = ordered.splice(sourceIndex, 1)
+    ordered.splice(targetIndex, 0, source)
     applyDocument({
-      ...documentRef.current,
-      objects: documentRef.current.objects.map((object) =>
-        object.id === id ? update(object) : object,
-      ),
+      ...current,
+      objects: ordered.map((item, index) => ({ ...item, z_index: index })),
     })
+    setSelectedID(sourceID)
   }
 
   function undo() {
@@ -388,23 +443,62 @@ function ImageEditorPage() {
     const startY = event.clientY
     const initialDocument = structuredClone(documentRef.current)
     const initial = [...object.transform] as EditorObject['transform']
+    const asset = assetsQuery.data?.get(object.asset_id)
+    const snapTargets = [
+      {
+        left: 0,
+        top: 0,
+        right: initialDocument.canvas.width,
+        bottom: initialDocument.canvas.height,
+        centerX: initialDocument.canvas.width / 2,
+        centerY: initialDocument.canvas.height / 2,
+        width: initialDocument.canvas.width,
+        height: initialDocument.canvas.height,
+      },
+      ...initialDocument.objects.flatMap((item) => {
+        if (item.id === object.id || !item.visible) return []
+        const itemAsset = assetsQuery.data?.get(item.asset_id)
+        return itemAsset
+          ? [objectBounds(item.transform, itemAsset.width, itemAsset.height)]
+          : []
+      }),
+    ]
     const move = (moveEvent: PointerEvent) => {
       const current = documentRef.current
       if (!current) return
+      let transform: EditorObject['transform'] = [
+        initial[0],
+        initial[1],
+        initial[2],
+        initial[3],
+        initial[4] + (moveEvent.clientX - startX) / (zoom / 100),
+        initial[5] + (moveEvent.clientY - startY) / (zoom / 100),
+      ]
+      if (asset && !moveEvent.altKey) {
+        const snapped = snapObjectTranslation(
+          transform,
+          asset.width,
+          asset.height,
+          snapTargets,
+          8 / (zoom / 100),
+        )
+        transform = [
+          transform[0],
+          transform[1],
+          transform[2],
+          transform[3],
+          transform[4] + snapped.dx,
+          transform[5] + snapped.dy,
+        ]
+        setSnapGuides(snapped.guides)
+      } else setSnapGuides([])
       const next = {
         ...current,
         objects: current.objects.map((item) =>
           item.id === object.id
             ? {
                 ...item,
-                transform: [
-                  initial[0],
-                  initial[1],
-                  initial[2],
-                  initial[3],
-                  initial[4] + (moveEvent.clientX - startX) / (zoom / 100),
-                  initial[5] + (moveEvent.clientY - startY) / (zoom / 100),
-                ],
+                transform,
               }
             : item,
         ),
@@ -418,6 +512,7 @@ function ImageEditorPage() {
       historyRef.current.push(initialDocument)
       if (historyRef.current.length > 100) historyRef.current.shift()
       futureRef.current = []
+      setSnapGuides([])
       scheduleSave()
     }
     window.addEventListener('pointermove', move)
@@ -425,7 +520,12 @@ function ImageEditorPage() {
   }
 
   function beginPan(event: ReactPointerEvent<HTMLDivElement>) {
-    if (!(spacePressed || event.button === 1)) return
+    event.currentTarget.focus({ preventScroll: true })
+    if (!(spacePressed || event.button === 1)) {
+      if (event.button === 0 && event.target === event.currentTarget)
+        setSelectedID('')
+      return
+    }
     event.preventDefault()
     const startX = event.clientX
     const startY = event.clientY
@@ -451,6 +551,7 @@ function ImageEditorPage() {
     kind: 'scale' | 'rotate',
   ) {
     if (object.locked || operationRunning || !documentRef.current) return
+    viewportRef.current?.focus({ preventScroll: true })
     event.preventDefault()
     event.stopPropagation()
     const viewport = viewportRef.current
@@ -503,11 +604,12 @@ function ImageEditorPage() {
           moveEvent.clientY - screenCenter.y,
           moveEvent.clientX - screenCenter.x,
         )
+        const degrees = ((angle - startAngle) * 180) / Math.PI
         transformed = rotateAroundCenter(
           initialObject,
           asset.width,
           asset.height,
-          ((angle - startAngle) * 180) / Math.PI,
+          moveEvent.shiftKey ? Math.round(degrees / 15) * 15 : degrees,
         )
       }
       const next = {
@@ -546,7 +648,10 @@ function ImageEditorPage() {
     )
   }
 
-  async function uploadEditorImage(file?: File) {
+  async function uploadEditorImage(
+    file?: File,
+    position?: { x: number; y: number },
+  ) {
     if (!file || operationRunning || !documentRef.current) return
     if (!acceptedUploadTypes.has(file.type)) {
       setNotice('仅支持 JPEG、PNG 或 WebP 图片')
@@ -601,16 +706,21 @@ function ImageEditorPage() {
         (current.canvas.width * 0.72) / asset.width,
         (current.canvas.height * 0.72) / asset.height,
       )
+      const center = position ?? {
+        x: current.canvas.width / 2,
+        y: current.canvas.height / 2,
+      }
       const nextObject: EditorObject = {
         id: crypto.randomUUID(),
+        name: file.name.replace(/\.[^.]+$/, '').slice(0, 64) || '导入图片',
         asset_id: asset.id,
         transform: [
           scale,
           0,
           0,
           scale,
-          (current.canvas.width - asset.width * scale) / 2,
-          (current.canvas.height - asset.height * scale) / 2,
+          center.x - (asset.width * scale) / 2,
+          center.y - (asset.height * scale) / 2,
         ],
         opacity: 1,
         visible: true,
@@ -627,6 +737,78 @@ function ImageEditorPage() {
       if (uploadInputRef.current) uploadInputRef.current.value = ''
     }
   }
+
+  async function importFiles(
+    files: FileList | File[],
+    position?: { x: number; y: number },
+  ) {
+    const accepted = Array.from(files).filter((item) =>
+      acceptedUploadTypes.has(item.type),
+    )
+    if (!accepted.length) {
+      setNotice('拖入 JPEG、PNG 或 WebP 图片即可添加图层')
+      return
+    }
+    const remaining = Math.max(
+      0,
+      maxEditorObjects - (documentRef.current?.objects.length ?? 0),
+    )
+    if (!remaining) {
+      setNotice('当前工程最多可放置 64 个图层')
+      return
+    }
+    for (const [index, file] of accepted.slice(0, remaining).entries()) {
+      await uploadEditorImage(
+        file,
+        position
+          ? { x: position.x + index * 24, y: position.y + index * 24 }
+          : undefined,
+      )
+    }
+  }
+
+  function duplicateSelectedObject() {
+    const current = documentRef.current
+    if (!selected || !current || operationRunning) return
+    if (current.objects.length >= maxEditorObjects) {
+      setNotice('当前工程最多可放置 64 个图层')
+      return
+    }
+    const duplicate: EditorObject = {
+      ...structuredClone(selected),
+      id: crypto.randomUUID(),
+      name: `${selected.name || '图层'} 副本`.slice(0, 64),
+      z_index: current.objects.length,
+      transform: [
+        selected.transform[0],
+        selected.transform[1],
+        selected.transform[2],
+        selected.transform[3],
+        selected.transform[4] + 24,
+        selected.transform[5] + 24,
+      ],
+    }
+    applyDocument({ ...current, objects: [...current.objects, duplicate] })
+    setSelectedID(duplicate.id)
+    setNotice('已复制图层')
+  }
+
+  uploadEditorImageRef.current = (file, position) =>
+    void uploadEditorImage(file, position)
+
+  useEffect(() => {
+    const paste = (event: ClipboardEvent) => {
+      if (isTypingTarget(event.target)) return
+      const file = Array.from(event.clipboardData?.files ?? []).find((item) =>
+        acceptedUploadTypes.has(item.type),
+      )
+      if (!file) return
+      event.preventDefault()
+      uploadEditorImageRef.current(file)
+    }
+    window.addEventListener('paste', paste)
+    return () => window.removeEventListener('paste', paste)
+  }, [])
 
   async function startDecomposition(confirmed = false) {
     if (!canDecompose) {
@@ -665,6 +847,7 @@ function ImageEditorPage() {
     const objects: EditorObject[] = [
       {
         id: `base-${layerSet.id}`,
+        name: '背景',
         asset_id: layerSet.base_asset.id,
         transform: [1, 0, 0, 1, 0, 0],
         opacity: 1,
@@ -676,6 +859,7 @@ function ImageEditorPage() {
         const [left, top, right, bottom] = item.bounding_box_absolute
         return {
           id: item.id,
+          name: item.name || `图层 ${item.z_index}`,
           asset_id: item.asset.id,
           transform: [
             (right - left) / item.asset.width,
@@ -874,6 +1058,17 @@ function ImageEditorPage() {
   const selectedAsset = selected
     ? objectAssets?.get(selected.asset_id)
     : undefined
+  const selectedBounds =
+    selected && selectedAsset
+      ? objectBounds(
+          selected.transform,
+          selectedAsset.width,
+          selectedAsset.height,
+        )
+      : undefined
+  const selectedAxisScales = selected
+    ? objectAxisScales(selected.transform)
+    : undefined
 
   function removeSelectedObject() {
     const current = documentRef.current
@@ -913,6 +1108,65 @@ function ImageEditorPage() {
     applyDocument({ ...current, canvas: { width, height } })
     setCanvasDraft({ width, height })
     requestAnimationFrame(fitCanvas)
+  }
+
+  function updateSelectedCenter(
+    axis: 'x' | 'y',
+    value: number,
+    remember = true,
+  ) {
+    if (
+      !selected ||
+      !selectedAsset ||
+      !selectedBounds ||
+      !Number.isFinite(value)
+    )
+      return
+    updateObject(
+      selected.id,
+      (object) =>
+        moveObjectCenter(
+          object,
+          selectedAsset.width,
+          selectedAsset.height,
+          axis === 'x' ? value : selectedBounds.centerX,
+          axis === 'y' ? value : selectedBounds.centerY,
+        ),
+      remember,
+    )
+  }
+
+  function updateSelectedSize(
+    axis: 'width' | 'height',
+    value: number,
+    remember = true,
+  ) {
+    if (!selected || !selectedAsset || !Number.isFinite(value) || value <= 0)
+      return
+    const desiredScale = Math.min(
+      8,
+      Math.max(
+        0.05,
+        axis === 'width'
+          ? value / selectedAsset.width
+          : value / selectedAsset.height,
+      ),
+    )
+    const currentScale =
+      axis === 'width'
+        ? objectAxisScales(selected.transform).x
+        : objectAxisScales(selected.transform).y
+    updateObject(
+      selected.id,
+      (object) =>
+        scaleByFactorAroundCenter(
+          object,
+          selectedAsset.width,
+          selectedAsset.height,
+          desiredScale / currentScale,
+        ),
+      remember,
+    )
   }
   const sortedObjects = useMemo(
     () =>
@@ -1032,9 +1286,10 @@ function ImageEditorPage() {
               ref={uploadInputRef}
               className="sr-only"
               type="file"
+              multiple
               accept="image/jpeg,image/png,image/webp"
               onChange={(event) =>
-                void uploadEditorImage(event.currentTarget.files?.[0])
+                void importFiles(event.currentTarget.files ?? [])
               }
             />
             <button
@@ -1140,10 +1395,48 @@ function ImageEditorPage() {
             tabIndex={0}
             aria-label="图片编辑画布"
             data-panning={spacePressed || undefined}
+            data-drag-over={dragOver || undefined}
             onPointerDown={beginPan}
-            onWheel={(event) => {
-              if (!(event.ctrlKey || event.metaKey)) return
+            onDragEnter={(event) => {
+              if (!event.dataTransfer.types.includes('Files')) return
               event.preventDefault()
+              setDragOver(true)
+            }}
+            onDragOver={(event) => {
+              if (!event.dataTransfer.types.includes('Files')) return
+              event.preventDefault()
+              event.dataTransfer.dropEffect = 'copy'
+              setDragOver(true)
+            }}
+            onDragLeave={(event) => {
+              if (event.currentTarget.contains(event.relatedTarget as Node))
+                return
+              setDragOver(false)
+            }}
+            onDrop={(event) => {
+              event.preventDefault()
+              setDragOver(false)
+              const rect = event.currentTarget.getBoundingClientRect()
+              const position = screenPointToWorld(
+                event.clientX,
+                event.clientY,
+                rect,
+                view,
+              )
+              void importFiles(event.dataTransfer.files, position)
+            }}
+            onWheel={(event) => {
+              event.preventDefault()
+              if (!(event.ctrlKey || event.metaKey)) {
+                setView((current) => ({
+                  ...current,
+                  panX:
+                    current.panX -
+                    (event.shiftKey ? event.deltaY : event.deltaX),
+                  panY: current.panY - (event.shiftKey ? 0 : event.deltaY),
+                }))
+                return
+              }
               const rect = event.currentTarget.getBoundingClientRect()
               const nextZoom = Math.min(
                 400,
@@ -1160,6 +1453,38 @@ function ImageEditorPage() {
               )
             }}
             onKeyDown={(event) => {
+              if (
+                (event.ctrlKey || event.metaKey) &&
+                event.key.toLowerCase() === 'z'
+              ) {
+                event.preventDefault()
+                if (event.shiftKey) redo()
+                else undo()
+                return
+              }
+              if (
+                selected &&
+                (event.ctrlKey || event.metaKey) &&
+                event.key.toLowerCase() === 'd'
+              ) {
+                event.preventDefault()
+                duplicateSelectedObject()
+                return
+              }
+              if (event.key === 'Escape') {
+                setSelectedID('')
+                return
+              }
+              if (event.key === '0') {
+                event.preventDefault()
+                fitCanvas()
+                return
+              }
+              if (event.key === '1') {
+                event.preventDefault()
+                changeZoom(100)
+                return
+              }
               if (
                 selected &&
                 !selected.locked &&
@@ -1247,6 +1572,7 @@ function ImageEditorPage() {
                           : undefined,
                       }}
                       onPointerDown={(event) => {
+                        viewportRef.current?.focus({ preventScroll: true })
                         setSelectedID(object.id)
                         if (spacePressed || event.button === 1) return
                         beginDrag(event, object)
@@ -1304,7 +1630,24 @@ function ImageEditorPage() {
                   )}
                 </div>
               )}
+              {snapGuides.map((guide) => (
+                <span
+                  key={`${guide.axis}-${guide.position}`}
+                  className={`editor-snap-guide is-${guide.axis}`}
+                  style={
+                    guide.axis === 'x'
+                      ? { left: guide.position }
+                      : { top: guide.position }
+                  }
+                />
+              ))}
             </div>
+            {dragOver && (
+              <div className="editor-drop-overlay" aria-hidden="true">
+                <Plus size={22} />
+                松开以添加为新图层
+              </div>
+            )}
             {operationRunning && (
               <DecompositionWaiting
                 status={operation?.status}
@@ -1381,16 +1724,42 @@ function ImageEditorPage() {
                   key={object.id}
                   type="button"
                   className={object.id === selectedID ? 'active' : ''}
+                  draggable={!operationRunning}
                   onClick={() => setSelectedID(object.id)}
+                  onDragStart={(event) => {
+                    event.dataTransfer.effectAllowed = 'move'
+                    event.dataTransfer.setData(
+                      'application/x-cornfield-layer',
+                      object.id,
+                    )
+                  }}
+                  onDragOver={(event) => {
+                    if (
+                      event.dataTransfer.types.includes(
+                        'application/x-cornfield-layer',
+                      )
+                    )
+                      event.preventDefault()
+                  }}
+                  onDrop={(event) => {
+                    event.preventDefault()
+                    moveLayerTo(
+                      event.dataTransfer.getData(
+                        'application/x-cornfield-layer',
+                      ),
+                      object.id,
+                    )
+                  }}
                 >
                   <img
                     src={objectAssets?.get(object.asset_id)?.thumb_320_url}
                     alt=""
                   />
                   <span>
-                    {currentLayerSet?.items.find(
-                      (item) => item.id === object.id,
-                    )?.name ??
+                    {object.name ??
+                      currentLayerSet?.items.find(
+                        (item) => item.id === object.id,
+                      )?.name ??
                       (object.z_index === 0
                         ? '背景'
                         : `图层 ${object.z_index}`)}
@@ -1403,6 +1772,149 @@ function ImageEditorPage() {
             </div>
             {selected && (
               <div className="editor-properties">
+                <label className="editor-layer-name">
+                  图层名称
+                  <input
+                    aria-label="图层名称"
+                    type="text"
+                    maxLength={64}
+                    value={selected.name ?? ''}
+                    disabled={operationRunning}
+                    onFocus={beginContinuousEdit}
+                    onChange={(event) => {
+                      const name = event.target.value
+                      updateObject(
+                        selected.id,
+                        (object) => ({
+                          ...object,
+                          name,
+                        }),
+                        false,
+                      )
+                    }}
+                    onBlur={finishContinuousEdit}
+                  />
+                </label>
+                {selectedAsset && selectedBounds && (
+                  <div className="editor-geometry-grid">
+                    <label>
+                      <span>中心 X</span>
+                      <input
+                        aria-label="图层中心 X"
+                        type="number"
+                        step="1"
+                        value={Math.round(selectedBounds.centerX)}
+                        disabled={operationRunning || selected.locked}
+                        onChange={(event) =>
+                          updateSelectedCenter(
+                            'x',
+                            Number(event.target.value),
+                            false,
+                          )
+                        }
+                        onFocus={beginContinuousEdit}
+                        onBlur={finishContinuousEdit}
+                      />
+                    </label>
+                    <label>
+                      <span>中心 Y</span>
+                      <input
+                        aria-label="图层中心 Y"
+                        type="number"
+                        step="1"
+                        value={Math.round(selectedBounds.centerY)}
+                        disabled={operationRunning || selected.locked}
+                        onChange={(event) =>
+                          updateSelectedCenter(
+                            'y',
+                            Number(event.target.value),
+                            false,
+                          )
+                        }
+                        onFocus={beginContinuousEdit}
+                        onBlur={finishContinuousEdit}
+                      />
+                    </label>
+                    <label>
+                      <span>宽度</span>
+                      <input
+                        aria-label="图层宽度"
+                        type="number"
+                        min="1"
+                        step="1"
+                        value={Math.round(
+                          selectedAsset.width * (selectedAxisScales?.x ?? 1),
+                        )}
+                        disabled={operationRunning || selected.locked}
+                        onChange={(event) =>
+                          updateSelectedSize(
+                            'width',
+                            Number(event.target.value),
+                            false,
+                          )
+                        }
+                        onFocus={beginContinuousEdit}
+                        onBlur={finishContinuousEdit}
+                      />
+                    </label>
+                    <label>
+                      <span>高度</span>
+                      <input
+                        aria-label="图层高度"
+                        type="number"
+                        min="1"
+                        step="1"
+                        value={Math.round(
+                          selectedAsset.height * (selectedAxisScales?.y ?? 1),
+                        )}
+                        disabled={operationRunning || selected.locked}
+                        onChange={(event) =>
+                          updateSelectedSize(
+                            'height',
+                            Number(event.target.value),
+                            false,
+                          )
+                        }
+                        onFocus={beginContinuousEdit}
+                        onBlur={finishContinuousEdit}
+                      />
+                    </label>
+                  </div>
+                )}
+                <div className="editor-align-actions" aria-label="图层对齐">
+                  <button
+                    type="button"
+                    title="水平居中到画板"
+                    disabled={
+                      operationRunning || selected.locked || !selectedAsset
+                    }
+                    onClick={() =>
+                      updateSelectedCenter('x', documentState.canvas.width / 2)
+                    }
+                  >
+                    <AlignCenterVertical size={15} />
+                  </button>
+                  <button
+                    type="button"
+                    title="垂直居中到画板"
+                    disabled={
+                      operationRunning || selected.locked || !selectedAsset
+                    }
+                    onClick={() =>
+                      updateSelectedCenter('y', documentState.canvas.height / 2)
+                    }
+                  >
+                    <AlignCenterHorizontal size={15} />
+                  </button>
+                  <button
+                    type="button"
+                    title="复制图层"
+                    disabled={operationRunning}
+                    onClick={duplicateSelectedObject}
+                  >
+                    <Copy size={15} />
+                  </button>
+                </div>
                 <label>
                   等比缩放{' '}
                   <output>
@@ -1418,15 +1930,24 @@ function ImageEditorPage() {
                     disabled={operationRunning || selected.locked}
                     onChange={(event) => {
                       if (!selectedAsset) return
-                      updateObject(selected.id, (object) =>
-                        scaleAroundCenter(
-                          object,
-                          selectedAsset.width,
-                          selectedAsset.height,
-                          Number(event.target.value),
-                        ),
+                      updateObject(
+                        selected.id,
+                        (object) =>
+                          scaleAroundCenter(
+                            object,
+                            selectedAsset.width,
+                            selectedAsset.height,
+                            Number(event.target.value),
+                          ),
+                        false,
                       )
                     }}
+                    onPointerDown={beginContinuousEdit}
+                    onPointerUp={finishContinuousEdit}
+                    onPointerCancel={finishContinuousEdit}
+                    onKeyDown={beginContinuousEdit}
+                    onKeyUp={finishContinuousEdit}
+                    onBlur={finishContinuousEdit}
                   />
                 </label>
                 <button
@@ -1457,16 +1978,25 @@ function ImageEditorPage() {
                     disabled={operationRunning || selected.locked}
                     onChange={(event) => {
                       if (!selectedAsset) return
-                      updateObject(selected.id, (object) =>
-                        rotateAroundCenter(
-                          object,
-                          selectedAsset.width,
-                          selectedAsset.height,
-                          Number(event.target.value) -
-                            objectRotation(object.transform),
-                        ),
+                      updateObject(
+                        selected.id,
+                        (object) =>
+                          rotateAroundCenter(
+                            object,
+                            selectedAsset.width,
+                            selectedAsset.height,
+                            Number(event.target.value) -
+                              objectRotation(object.transform),
+                          ),
+                        false,
                       )
                     }}
+                    onPointerDown={beginContinuousEdit}
+                    onPointerUp={finishContinuousEdit}
+                    onPointerCancel={finishContinuousEdit}
+                    onKeyDown={beginContinuousEdit}
+                    onKeyUp={finishContinuousEdit}
+                    onBlur={finishContinuousEdit}
                   />
                 </label>
                 <label>
@@ -1479,11 +2009,21 @@ function ImageEditorPage() {
                     value={selected.opacity}
                     disabled={operationRunning}
                     onChange={(event) =>
-                      updateObject(selected.id, (object) => ({
-                        ...object,
-                        opacity: Number(event.target.value),
-                      }))
+                      updateObject(
+                        selected.id,
+                        (object) => ({
+                          ...object,
+                          opacity: Number(event.target.value),
+                        }),
+                        false,
+                      )
                     }
+                    onPointerDown={beginContinuousEdit}
+                    onPointerUp={finishContinuousEdit}
+                    onPointerCancel={finishContinuousEdit}
+                    onKeyDown={beginContinuousEdit}
+                    onKeyUp={finishContinuousEdit}
+                    onBlur={finishContinuousEdit}
                   />
                 </label>
                 {selected.crop && (
@@ -1500,16 +2040,26 @@ function ImageEditorPage() {
                       disabled={operationRunning || selected.locked}
                       onChange={(event) => {
                         const inset = Number(event.target.value)
-                        updateObject(selected.id, (object) => ({
-                          ...object,
-                          crop: {
-                            x: inset,
-                            y: inset,
-                            width: 1 - inset * 2,
-                            height: 1 - inset * 2,
-                          },
-                        }))
+                        updateObject(
+                          selected.id,
+                          (object) => ({
+                            ...object,
+                            crop: {
+                              x: inset,
+                              y: inset,
+                              width: 1 - inset * 2,
+                              height: 1 - inset * 2,
+                            },
+                          }),
+                          false,
+                        )
                       }}
+                      onPointerDown={beginContinuousEdit}
+                      onPointerUp={finishContinuousEdit}
+                      onPointerCancel={finishContinuousEdit}
+                      onKeyDown={beginContinuousEdit}
+                      onKeyUp={finishContinuousEdit}
+                      onBlur={finishContinuousEdit}
                     />
                   </label>
                 )}

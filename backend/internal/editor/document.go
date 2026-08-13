@@ -8,6 +8,7 @@ import (
 	"io"
 	"math"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 )
@@ -44,6 +45,7 @@ type Crop struct {
 
 type Object struct {
 	ID        string     `json:"id"`
+	Name      string     `json:"name,omitempty"`
 	AssetID   uuid.UUID  `json:"asset_id"`
 	Transform [6]float64 `json:"transform"`
 	Opacity   float64    `json:"opacity"`
@@ -58,7 +60,7 @@ func New(sourceAssetID uuid.UUID, width, height int) Document {
 		SchemaVersion: 1,
 		Canvas:        Canvas{Width: width, Height: height},
 		Objects: []Object{{
-			ID: "source", AssetID: sourceAssetID,
+			ID: "source", Name: "源图", AssetID: sourceAssetID,
 			Transform: [6]float64{1, 0, 0, 1, 0, 0},
 			Opacity:   1, Visible: true, Locked: false, ZIndex: 0,
 		}},
@@ -99,6 +101,9 @@ func (d Document) Validate() error {
 	zIndexes := make(map[int]struct{}, len(d.Objects))
 	for _, object := range d.Objects {
 		if object.AssetID == uuid.Nil || len(object.ID) < 1 || len(object.ID) > 64 || strings.TrimSpace(object.ID) != object.ID {
+			return ErrInvalidDocument
+		}
+		if len(object.Name) > 256 || !utf8.ValidString(object.Name) || utf8.RuneCountInString(object.Name) > 64 {
 			return ErrInvalidDocument
 		}
 		if _, exists := ids[object.ID]; exists {

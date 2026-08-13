@@ -3,6 +3,7 @@ package editor
 import (
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
@@ -68,5 +69,20 @@ func TestDocumentObjectLimitIsIndependentFromProviderLayerLimit(t *testing.T) {
 	}
 	if MaxProviderLayers >= MaxObjects {
 		t.Fatalf("provider layer limit %d must remain below editor object limit %d", MaxProviderLayers, MaxObjects)
+	}
+}
+
+func TestDocumentAcceptsNamesAndRejectsInvalidNames(t *testing.T) {
+	document := New(uuid.New(), 1024, 1024)
+	if document.Objects[0].Name != "源图" {
+		t.Fatalf("default layer name = %q", document.Objects[0].Name)
+	}
+	document.Objects[0].Name = "前景人物"
+	if err := document.Validate(); err != nil {
+		t.Fatalf("valid layer name rejected: %v", err)
+	}
+	document.Objects[0].Name = strings.Repeat("层", 65)
+	if err := document.Validate(); !errors.Is(err, ErrInvalidDocument) {
+		t.Fatalf("long name error = %v, want ErrInvalidDocument", err)
 	}
 }

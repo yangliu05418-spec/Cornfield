@@ -1,4 +1,4 @@
-import type { EditorObject } from './api'
+import type { EditorObject } from '#/features/editor/domain/document'
 
 export type Affine = EditorObject['transform']
 export type CropRect = NonNullable<EditorObject['crop']>

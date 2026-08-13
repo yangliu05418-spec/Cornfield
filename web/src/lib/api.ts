@@ -1,3 +1,5 @@
+import type { EditorDocument } from '#/features/editor/domain/document'
+
 export type User = {
   id: string
   username: string
@@ -56,23 +58,10 @@ export type Asset = {
   archived_at?: string
 }
 
-export type EditorObject = {
-  id: string
-  name?: string
-  asset_id: string
-  transform: [number, number, number, number, number, number]
-  opacity: number
-  visible: boolean
-  locked: boolean
-  z_index: number
-  crop?: { x: number; y: number; width: number; height: number }
-}
-
-export type EditorDocument = {
-  schema_version: 1
-  canvas: { width: number; height: number }
-  objects: EditorObject[]
-}
+export type {
+  EditorDocument,
+  EditorObject,
+} from '#/features/editor/domain/document'
 
 export type EditorProject = {
   id: string

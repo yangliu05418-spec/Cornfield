@@ -242,6 +242,18 @@ func TestMissingThumbnailDetectionIsBoundedAndSafe(t *testing.T) {
 	if keys, _, _ := findMissingThumbnailKeys(root, stagedOnly, 10, 10); len(keys) != 0 {
 		t.Fatalf("staged-only output scheduled thumbnail repair: %v", keys)
 	}
+	packageContent := []byte("zip")
+	packageDigest := digestFor(packageContent)
+	packageDir := filepath.Join(root, "assets", packageDigest[:2], packageDigest[2:4], packageDigest)
+	if err := os.MkdirAll(packageDir, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	writeOldFile(t, filepath.Join(packageDir, "original.zip"), packageContent, now)
+	packageKey := filepath.ToSlash(filepath.Join(packageDigest[:2], packageDigest[2:4], packageDigest, "original.zip"))
+	packageRefs := map[string]storageReference{packageDigest: {StorageKey: packageKey, ActiveAsset: true}}
+	if keys, scanned, unsafe := findMissingThumbnailKeys(root, packageRefs, 10, 10); len(keys) != 0 || scanned != 0 || unsafe != 0 {
+		t.Fatalf("package entered thumbnail repair: keys=%v scanned=%d unsafe=%d", keys, scanned, unsafe)
+	}
 }
 
 func createContentFixture(t *testing.T, root string, content []byte, modTime time.Time, completeThumbs bool) (string, string, string) {
@@ -291,5 +303,8 @@ func TestLayerPackageIsAValidMaintainedOriginal(t *testing.T) {
 	}
 	if got := maxMaintainedBytes("original.png"); got != maxMaintainedOriginalBytes {
 		t.Fatalf("image limit = %d, want %d", got, maxMaintainedOriginalBytes)
+	}
+	if isImageOriginalFilename("original.zip") {
+		t.Fatal("layer packages must not enter image thumbnail repair")
 	}
 }

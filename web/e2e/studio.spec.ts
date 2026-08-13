@@ -584,15 +584,25 @@ test('image editor restores a source project and autosaves keyboard edits', asyn
   }))
   expect(surfaces.workspace).not.toBe(surfaces.artboard)
 
+  const artboardSettings = page.locator('.editor-artboard-settings')
+  await artboardSettings.locator('input').nth(0).fill('1200')
+  await artboardSettings.locator('input').nth(1).fill('900')
+  await artboardSettings.locator('button').click()
+  await expect.poll(() => backend.editorState().revision).toBe(1)
+  expect(backend.editorState().document.canvas).toEqual({
+    width: 1200,
+    height: 900,
+  })
+
   const canvas = page.getByRole('region', { name: '图片编辑画布' })
   await canvas.focus()
   await page.keyboard.press('ArrowRight')
-  await expect.poll(() => backend.editorState().revision).toBe(1)
+  await expect.poll(() => backend.editorState().revision).toBe(2)
   expect(backend.editorState().document.objects[0].transform[4]).toBe(1)
 
   const beforeRotate = backend.editorState().document.objects[0].transform
   await page.getByTitle('旋转 90°').click()
-  await expect.poll(() => backend.editorState().revision).toBe(2)
+  await expect.poll(() => backend.editorState().revision).toBe(3)
   const afterRotate = backend.editorState().document.objects[0].transform
   const center = (matrix: number[]) => ({
     x: matrix[0] * 512 + matrix[2] * 512 + matrix[4],

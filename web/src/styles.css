@@ -933,6 +933,49 @@
 .editor-panel-tabs span {
   color: var(--muted);
 }
+.editor-artboard-settings {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto minmax(0, 1fr) auto;
+  gap: 7px;
+  align-items: end;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--line);
+}
+.editor-artboard-settings > span {
+  grid-column: 1 / -1;
+  color: var(--muted);
+  font-size: 11px;
+}
+.editor-artboard-settings label {
+  display: grid;
+  gap: 4px;
+}
+.editor-artboard-settings small {
+  color: var(--muted);
+  font-size: 10px;
+}
+.editor-artboard-settings input {
+  width: 100%;
+  height: 32px;
+  padding: 0 7px;
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-2);
+}
+.editor-artboard-settings > i {
+  align-self: center;
+  color: var(--muted);
+  font-style: normal;
+}
+.editor-artboard-settings > button {
+  height: 32px;
+  padding: 0 10px;
+  color: #10130b;
+  border: 1px solid var(--lime);
+  border-radius: 8px;
+  background: var(--lime);
+}
 .editor-layer-list {
   display: grid;
   gap: 4px;

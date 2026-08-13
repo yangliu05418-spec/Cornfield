@@ -92,6 +92,7 @@ function ImageEditorPage() {
   const [view, setView] = useState({ zoom: 100, panX: 0, panY: 0 })
   const [spacePressed, setSpacePressed] = useState(false)
   const [uploading, setUploading] = useState(false)
+  const [canvasDraft, setCanvasDraft] = useState({ width: 1, height: 1 })
   const [saveState, setSaveState] = useState<SaveState>('saved')
   const [notice, setNotice] = useState('')
   const [leaveConfirm, setLeaveConfirm] = useState(false)
@@ -122,6 +123,7 @@ function ImageEditorPage() {
     if (!projectQuery.data || documentRef.current) return
     documentRef.current = projectQuery.data.document
     setDocumentState(projectQuery.data.document)
+    setCanvasDraft(projectQuery.data.document.canvas)
     revisionRef.current = projectQuery.data.revision
     setSelectedID(projectQuery.data.document.objects.at(-1)?.id ?? '')
     setOperationID(projectQuery.data.latest_operation_id)
@@ -890,6 +892,28 @@ function ImageEditorPage() {
     applyDocument({ ...current, objects: remaining })
     setSelectedID(remaining.at(-1)?.id ?? '')
   }
+
+  function resizeArtboard() {
+    const current = documentRef.current
+    const width = Math.round(canvasDraft.width)
+    const height = Math.round(canvasDraft.height)
+    if (
+      !current ||
+      width < 1 ||
+      height < 1 ||
+      width > 8192 ||
+      height > 8192 ||
+      width * height > 36_000_000
+    ) {
+      setNotice('画板需在 8192px、3600万像素以内')
+      return
+    }
+    if (width === current.canvas.width && height === current.canvas.height)
+      return
+    applyDocument({ ...current, canvas: { width, height } })
+    setCanvasDraft({ width, height })
+    requestAnimationFrame(fitCanvas)
+  }
   const sortedObjects = useMemo(
     () =>
       [...(documentState?.objects ?? [])].sort((a, b) => b.z_index - a.z_index),
@@ -1305,6 +1329,51 @@ function ImageEditorPage() {
             <div className="editor-panel-tabs">
               <strong>图层</strong>
               <span>{documentState.objects.length} / 64</span>
+            </div>
+            <div className="editor-artboard-settings">
+              <span>画板尺寸</span>
+              <label>
+                <small>宽</small>
+                <input
+                  aria-label="画板宽度"
+                  type="number"
+                  min="1"
+                  max="8192"
+                  value={canvasDraft.width}
+                  disabled={operationRunning}
+                  onChange={(event) =>
+                    setCanvasDraft((current) => ({
+                      ...current,
+                      width: Number(event.target.value),
+                    }))
+                  }
+                />
+              </label>
+              <i>×</i>
+              <label>
+                <small>高</small>
+                <input
+                  aria-label="画板高度"
+                  type="number"
+                  min="1"
+                  max="8192"
+                  value={canvasDraft.height}
+                  disabled={operationRunning}
+                  onChange={(event) =>
+                    setCanvasDraft((current) => ({
+                      ...current,
+                      height: Number(event.target.value),
+                    }))
+                  }
+                />
+              </label>
+              <button
+                type="button"
+                disabled={operationRunning}
+                onClick={resizeArtboard}
+              >
+                应用
+              </button>
             </div>
             <div className="editor-layer-list">
               {sortedObjects.map((object) => (

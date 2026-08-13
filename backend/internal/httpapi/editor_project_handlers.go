@@ -191,14 +191,14 @@ func (s *Server) saveEditorProject(w http.ResponseWriter, r *http.Request) {
 		ExpectedRevision int64           `json:"expected_revision"`
 		Document         json.RawMessage `json:"document"`
 	}
-	if !decodeJSON(w, r, &input) {
+	if !decodeJSONLimited(w, r, &input, studioEditor.MaxDocumentV2Bytes+4096) {
 		return
 	}
-	if len(input.Document) > studioEditor.MaxDocumentBytes {
-		writeError(w, http.StatusRequestEntityTooLarge, "EDITOR_DOCUMENT_TOO_LARGE", "编辑工程不能超过 256 KiB", false, r)
+	document, err := studioEditor.DecodeAny(input.Document)
+	if errors.Is(err, studioEditor.ErrDocumentTooLarge) {
+		writeError(w, http.StatusRequestEntityTooLarge, "EDITOR_DOCUMENT_TOO_LARGE", "V1 编辑工程不能超过 256 KiB，V2 不能超过 2 MiB", false, r)
 		return
 	}
-	document, err := studioEditor.Decode(input.Document)
 	if err != nil || input.ExpectedRevision < 0 {
 		writeError(w, http.StatusUnprocessableEntity, "INVALID_EDITOR_DOCUMENT", "编辑工程结构无效，请撤销最近的修改", false, r)
 		return
@@ -416,13 +416,18 @@ func (s *Server) createLayerDecomposition(w http.ResponseWriter, r *http.Request
 		return
 	}
 	var currentRevision int64
-	err = tx.QueryRow(r.Context(), `SELECT revision FROM image_editor_projects WHERE id=$1 AND owner_user_id=$2 FOR UPDATE`, projectID, currentSession(r).UserID).Scan(&currentRevision)
+	var sourceDocument []byte
+	err = tx.QueryRow(r.Context(), `SELECT revision,document FROM image_editor_projects WHERE id=$1 AND owner_user_id=$2 FOR UPDATE`, projectID, currentSession(r).UserID).Scan(&currentRevision, &sourceDocument)
 	if errors.Is(err, pgx.ErrNoRows) {
 		writeError(w, http.StatusNotFound, "EDITOR_PROJECT_NOT_FOUND", "图片编辑工程不存在", false, r)
 		return
 	}
 	if err != nil || currentRevision != input.ExpectedRevision {
 		writeError(w, http.StatusConflict, "EDITOR_PROJECT_CONFLICT", "请先完成最新工程保存后再启动分层", false, r)
+		return
+	}
+	if _, err = studioEditor.DecodeRenderable(sourceDocument); err != nil {
+		writeError(w, http.StatusUnprocessableEntity, "EDITOR_DOCUMENT_SEMANTICS_UNSUPPORTED", "当前工程包含尚未支持导出的图层结构，请先简化图层后再智能分层", false, r)
 		return
 	}
 	if err = requireProviderAvailable(r.Context(), tx, model.Provider); err != nil {
@@ -745,11 +750,42 @@ func (s *Server) createSimpleEditorOperation(w http.ResponseWriter, r *http.Requ
 	}
 	defer tx.Rollback(r.Context())
 	var operationID uuid.UUID
+	var existingHash string
+	err = tx.QueryRow(r.Context(), `SELECT id,request_hash FROM asset_operations
+		WHERE owner_user_id=$1 AND idempotency_key=$2`, currentSession(r).UserID, key).Scan(&operationID, &existingHash)
+	if err == nil {
+		if existingHash != requestHash {
+			writeError(w, http.StatusConflict, "IDEMPOTENCY_CONFLICT", "Idempotency-Key 已用于其他操作", false, r)
+			return
+		}
+		if err = tx.Commit(r.Context()); err != nil {
+			writeError(w, http.StatusInternalServerError, "EDITOR_PUBLISH_FAILED", "无法读取图片发布任务", true, r)
+			return
+		}
+		writeJSON(w, http.StatusAccepted, map[string]any{"id": operationID, "status": "queued"})
+		return
+	}
+	if !errors.Is(err, pgx.ErrNoRows) {
+		writeError(w, http.StatusInternalServerError, "EDITOR_PUBLISH_FAILED", "无法读取图片发布任务", true, r)
+		return
+	}
+	var sourceDocument []byte
+	if err = tx.QueryRow(r.Context(), `SELECT document FROM image_editor_projects
+		WHERE id=$1 AND owner_user_id=$2 AND revision=$3 FOR SHARE`, projectID, currentSession(r).UserID, input.ExpectedRevision).Scan(&sourceDocument); errors.Is(err, pgx.ErrNoRows) {
+		writeError(w, http.StatusConflict, "EDITOR_PROJECT_CONFLICT", "请先完成最新工程保存后再发布", false, r)
+		return
+	} else if err != nil {
+		writeError(w, http.StatusInternalServerError, "EDITOR_PUBLISH_FAILED", "无法读取待发布工程", true, r)
+		return
+	}
+	if _, err = studioEditor.DecodeRenderable(sourceDocument); err != nil {
+		writeError(w, http.StatusUnprocessableEntity, "EDITOR_DOCUMENT_SEMANTICS_UNSUPPORTED", "当前工程包含尚未支持导出的图层结构，请先简化图层后再发布", false, r)
+		return
+	}
 	err = tx.QueryRow(r.Context(), `INSERT INTO asset_operations(owner_user_id,editor_project_id,operation_type,source_revision,source_document,request_hash,idempotency_key)
 		SELECT $1,p.id,$3,$4,p.document,$5,$6 FROM image_editor_projects p WHERE p.id=$2 AND p.owner_user_id=$1 AND p.revision=$4
 		ON CONFLICT(owner_user_id,idempotency_key) DO NOTHING RETURNING id`, currentSession(r).UserID, projectID, operationType, input.ExpectedRevision, requestHash, key).Scan(&operationID)
 	if errors.Is(err, pgx.ErrNoRows) {
-		var existingHash string
 		err = tx.QueryRow(r.Context(), `SELECT id,request_hash FROM asset_operations WHERE owner_user_id=$1 AND idempotency_key=$2`, currentSession(r).UserID, key).Scan(&operationID, &existingHash)
 		if errors.Is(err, pgx.ErrNoRows) {
 			writeError(w, http.StatusConflict, "EDITOR_PROJECT_CONFLICT", "请先完成最新工程保存后再发布", false, r)

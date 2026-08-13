@@ -144,11 +144,13 @@ func (s *Server) deleteAssetsBulk(w http.ResponseWriter, r *http.Request) {
 		SELECT target.id AS asset_id FROM unnest($1::uuid[]) AS target(id)
 		JOIN image_editor_projects p ON p.owner_user_id=$2 AND p.source_asset_id<>target.id
 		WHERE p.document @> jsonb_build_object('objects',jsonb_build_array(jsonb_build_object('asset_id',target.id::text)))
+			OR p.document @> jsonb_build_object('nodes',jsonb_build_array(jsonb_build_object('asset_id',target.id::text)))
 		UNION ALL
 		SELECT target.id FROM unnest($1::uuid[]) AS target(id)
 		JOIN image_editor_projects p ON p.owner_user_id=$2 AND p.source_asset_id<>target.id
 		JOIN asset_operations o ON o.editor_project_id=p.id AND o.status NOT IN ('succeeded','failed','cancelled','submission_uncertain')
 		WHERE o.source_document @> jsonb_build_object('objects',jsonb_build_array(jsonb_build_object('asset_id',target.id::text)))
+			OR o.source_document @> jsonb_build_object('nodes',jsonb_build_array(jsonb_build_object('asset_id',target.id::text)))
 	) ref`, assetIDs, sess.UserID).Scan(&editorReferences)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "ASSET_DELETE_FAILED", "删除资产失败", true, r)

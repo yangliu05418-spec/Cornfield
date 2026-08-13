@@ -885,6 +885,29 @@
   pointer-events: none;
   transform-origin: 0 0;
 }
+.editor-group-selection,
+.editor-marquee {
+  position: absolute;
+  z-index: 1001;
+  box-sizing: border-box;
+  border: max(1px, calc(1px / var(--editor-zoom, 1))) solid var(--lime);
+  pointer-events: none;
+}
+.editor-group-selection > span {
+  position: absolute;
+  right: 0;
+  bottom: calc(100% + 7px);
+  width: max-content;
+  padding: 4px 6px;
+  color: #10130b;
+  font: 600 10px/1 var(--font-mono);
+  border-radius: 5px;
+  background: var(--lime);
+}
+.editor-marquee {
+  border-style: dashed;
+  background: color-mix(in srgb, var(--lime) 7%, transparent);
+}
 .editor-transform-handle,
 .editor-rotate-handle {
   position: absolute;
@@ -979,6 +1002,32 @@
   align-items: end;
   padding: 10px 12px;
   border-bottom: 1px solid var(--line);
+}
+.editor-bulk-layer-actions {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 4px;
+  padding: 8px;
+  border-bottom: 1px solid var(--line);
+}
+.editor-bulk-layer-actions button {
+  display: inline-flex;
+  min-width: 0;
+  min-height: 32px;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  padding: 0 4px;
+  color: var(--muted);
+  font-size: 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-2);
+}
+.editor-bulk-layer-actions button:hover,
+.editor-bulk-layer-actions button:focus-visible {
+  color: var(--text);
+  border-color: color-mix(in srgb, var(--lime) 36%, var(--line));
 }
 .editor-artboard-settings > span {
   grid-column: 1 / -1;

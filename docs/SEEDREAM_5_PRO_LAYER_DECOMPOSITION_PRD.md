@@ -1,8 +1,8 @@
 # Cornfield 图片工作台与智能分层 PRD
 
-> 文档状态：Implementation baseline v1.0  
-> 日期：2026-08-13  
-> 产品名称：图片工作台（能力：智能分层）  
+> 文档状态：Implementation baseline v1.0<br>
+> 日期：2026-08-13<br>
+> 产品名称：图片工作台（能力：智能分层）<br>
 > 上游能力：BytePlus ModelArk / `dola-seedream-5-0-pro-260628`
 
 ## 1. 产品结论

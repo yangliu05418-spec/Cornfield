@@ -1,4 +1,4 @@
-import { createFileRoute } from '@tanstack/react-router'
+import { createFileRoute, useNavigate } from '@tanstack/react-router'
 import {
   useInfiniteQuery,
   useMutation,
@@ -42,6 +42,7 @@ type OrganizationChange = {
 
 function AssetsPage() {
   const queryClient = useQueryClient()
+  const navigate = useNavigate()
   const [search, setSearch] = useState('')
   const [searchQuery, setSearchQuery] = useState('')
   const [selected, setSelected] = useState<Set<string>>(new Set())
@@ -273,6 +274,22 @@ function AssetsPage() {
     }
   }
 
+  async function editAsset(asset: Asset) {
+    try {
+      const project = await api<{ id: string }>(
+        `/api/v1/assets/${asset.id}/editor-project`,
+        { method: 'POST' },
+      )
+      sessionStorage.setItem('cornfield:editor:return', '/app/assets')
+      await navigate({
+        to: '/app/editor/$projectId',
+        params: { projectId: project.id },
+      })
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : '无法打开图片工作台')
+    }
+  }
+
   return (
     <AppShell>
       <main className="library-page organized-library">
@@ -472,6 +489,13 @@ function AssetsPage() {
                       decoding="async"
                     />
                     <div className="asset-card-actions">
+                      <button
+                        type="button"
+                        aria-label="编辑图片"
+                        onClick={() => void editAsset(asset)}
+                      >
+                        <Pencil size={14} />
+                      </button>
                       <a href={`${asset.url}?download=1`} aria-label="下载">
                         <Download size={14} />
                       </a>
@@ -575,8 +599,8 @@ function AssetsPage() {
             confirm?.kind === 'folder'
               ? `文件夹“${confirm.folder.name}”会被删除，其中图片将移回未归档。`
               : confirm?.kind === 'bulk-delete'
-                ? `将永久删除已选的 ${selected.size} 张图片，此操作无法撤销。`
-                : '这张图片将被永久删除，此操作无法撤销。'
+                ? `将永久删除已选的 ${selected.size} 张图片及关联的未发布编辑工程，此操作无法撤销。`
+                : '这张图片及关联的未发布编辑工程将被永久删除，此操作无法撤销。'
           }
           confirmLabel="确认删除"
           dangerous

@@ -1,4 +1,4 @@
-import { createFileRoute } from '@tanstack/react-router'
+import { createFileRoute, useNavigate } from '@tanstack/react-router'
 import {
   useInfiniteQuery,
   useMutation,
@@ -239,6 +239,7 @@ function waitFor(ms: number, signal: AbortSignal): Promise<void> {
 
 function CreatePage() {
   const queryClient = useQueryClient()
+  const navigate = useNavigate()
   const wallRef = useRef<JustifiedWallHandle>(null)
   const promptRef = useRef<HTMLTextAreaElement>(null)
   const uploadControllers = useRef(new Set<AbortController>())
@@ -299,6 +300,22 @@ function CreatePage() {
     [],
   )
   const [notice, setNotice] = useState('')
+
+  async function editAsset(asset: Asset) {
+    try {
+      const project = await api<{ id: string }>(
+        `/api/v1/assets/${asset.id}/editor-project`,
+        { method: 'POST' },
+      )
+      sessionStorage.setItem('cornfield:editor:return', '/app/create')
+      await navigate({
+        to: '/app/editor/$projectId',
+        params: { projectId: project.id },
+      })
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : '无法打开图片工作台')
+    }
+  }
   const [refinerBusy, setRefinerBusy] = useState(false)
   const [refinerOpen, setRefinerOpen] = useState(false)
   const [refinerResult, setRefinerResult] =
@@ -785,7 +802,8 @@ function CreatePage() {
   function deleteAsset(asset: Asset) {
     setConfirm({
       title: '永久删除图片',
-      description: '图片及其缩略图将被永久删除，此操作无法撤销。',
+      description:
+        '图片、缩略图及关联的未发布编辑工程将被永久删除，此操作无法撤销。',
       label: '确认删除',
       dangerous: true,
       action: () => performDeleteAsset(asset),
@@ -1061,6 +1079,7 @@ function CreatePage() {
           onReference={addReference}
           onCancel={cancel}
           onDelete={(asset) => void deleteAsset(asset)}
+          onEdit={(asset) => void editAsset(asset)}
           onDismiss={(batchID, jobID) => void dismissJob(batchID, jobID)}
           onRetry={retryJob}
           onNotice={setNotice}

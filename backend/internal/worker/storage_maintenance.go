@@ -308,12 +308,15 @@ func findMissingThumbnailKeys(assetRoot string, references map[string]storageRef
 		if !reference.ActiveAsset {
 			continue
 		}
-		scanned++
 		parts, err := parseContentStorageKey(reference.StorageKey, digest)
 		if err != nil {
 			unsafe++
 			continue
 		}
+		if !isImageOriginalFilename(parts[3]) {
+			continue
+		}
+		scanned++
 		directory, err := safeContentDirectory(assetRoot, parts[:3])
 		if err != nil {
 			unsafe++
@@ -424,12 +427,11 @@ func isLowerHex(value string) bool {
 }
 
 func isOriginalFilename(name string) bool {
-	switch name {
-	case "original.jpg", "original.png", "original.webp", "original.zip":
-		return true
-	default:
-		return false
-	}
+	return isImageOriginalFilename(name) || name == "original.zip"
+}
+
+func isImageOriginalFilename(name string) bool {
+	return name == "original.jpg" || name == "original.png" || name == "original.webp"
 }
 
 func maxMaintainedBytes(name string) int64 {

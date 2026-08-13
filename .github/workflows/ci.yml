@@ -26,7 +26,7 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
-          go-version: "1.26.5"
+          go-version: "1.26.6"
           cache-dependency-path: backend/go.sum
       - name: Scan the full Git history for committed secrets
         run: go run github.com/zricethezav/gitleaks/v8@v8.30.1 git --redact --no-banner --log-level warn ..

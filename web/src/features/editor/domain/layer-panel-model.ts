@@ -30,9 +30,15 @@ export function buildVisibleEditorLayerRows(
 }
 
 export function canGroupEditorNodes(nodes: EditorNodeV2[]) {
+  const selected = new Set(nodes.map((node) => node.id))
   return (
     nodes.length > 0 &&
-    nodes.every((node) => node.parent_id === nodes[0]?.parent_id)
+    nodes.every(
+      (node) =>
+        node.parent_id === nodes[0]?.parent_id &&
+        (node.type !== 'adjustment' ||
+          (node.target_id !== undefined && selected.has(node.target_id))),
+    )
   )
 }
 
@@ -79,7 +85,8 @@ export function moveEditorNodesByDrop(
   position: EditorLayerDropPosition,
 ) {
   const roots = editorSelectionRootIDs(document, new Set(nodeIDs))
-  const moving = new Set(roots)
+  const expandedRoots = expandAdjustmentCompanions(document, roots)
+  const moving = new Set(expandedRoots)
   const target = document.nodes.find((node) => node.id === targetID)
   if (!target || moving.has(target.id)) return document
   if (position === 'inside') {
@@ -87,7 +94,7 @@ export function moveEditorNodesByDrop(
     const childCount = document.nodes.filter(
       (node) => node.parent_id === target.id && !moving.has(node.id),
     ).length
-    return reparentEditorNodes(document, roots, target.id, childCount)
+    return reparentEditorNodes(document, expandedRoots, target.id, childCount)
   }
   const siblings = document.nodes
     .filter(
@@ -103,5 +110,26 @@ export function moveEditorNodesByDrop(
   // The panel renders high order keys first. A visual drop before the row is
   // therefore inserted after the target in the ascending document order.
   const insertionIndex = position === 'before' ? targetIndex + 1 : targetIndex
-  return reparentEditorNodes(document, roots, target.parent_id, insertionIndex)
+  return reparentEditorNodes(
+    document,
+    expandedRoots,
+    target.parent_id,
+    insertionIndex,
+  )
+}
+
+function expandAdjustmentCompanions(
+  document: EditorDocumentV2,
+  nodeIDs: readonly string[],
+) {
+  const selected = new Set(nodeIDs)
+  for (const node of document.nodes) {
+    if (
+      node.type === 'adjustment' &&
+      node.target_id &&
+      selected.has(node.target_id)
+    )
+      selected.add(node.id)
+  }
+  return [...selected]
 }

@@ -27,6 +27,11 @@ export function identityEditorColorMatrixV1(): EditorColorMatrixV1 {
   return [1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 1, 0]
 }
 
+export function isIdentityEditorColorMatrixV1(matrix: EditorColorMatrixV1) {
+  const identity = identityEditorColorMatrixV1()
+  return matrix.every((value, index) => value === identity[index])
+}
+
 export function compileEditorColorMatrixV1(
   effects: readonly EditorEffectV2[],
 ): EditorColorMatrixV1 {
@@ -36,6 +41,37 @@ export function compileEditorColorMatrixV1(
     result = multiplyEditorColorMatricesV1(effectMatrix(effect), result)
   }
   return result
+}
+
+export function compileEditorColorMatrixWithStrengthV1(
+  effects: readonly EditorEffectV2[],
+  strength: number,
+) {
+  return interpolateEditorColorMatrixV1(
+    identityEditorColorMatrixV1(),
+    compileEditorColorMatrixV1(effects),
+    strength,
+  )
+}
+
+export function composeEditorColorMatricesV1(
+  matrices: readonly EditorColorMatrixV1[],
+) {
+  let result = identityEditorColorMatrixV1()
+  for (const matrix of matrices)
+    result = multiplyEditorColorMatricesV1(matrix, result)
+  return result
+}
+
+export function interpolateEditorColorMatrixV1(
+  from: EditorColorMatrixV1,
+  to: EditorColorMatrixV1,
+  amount: number,
+) {
+  const strength = clamp(amount)
+  return from.map(
+    (value, index) => value + (to[index] - value) * strength,
+  ) as EditorColorMatrixV1
 }
 
 export function applyEditorColorMatrixV1(

@@ -111,6 +111,23 @@ func TestDocumentV2ValidatesTreeEffectsAndExportSubset(t *testing.T) {
 	}
 }
 
+func TestDocumentV2ValidatesClippedAdjustmentTarget(t *testing.T) {
+	v2, err := MigrateV1ToV2(New(uuid.New(), 128, 128))
+	if err != nil {
+		t.Fatal(err)
+	}
+	targetID := v2.Nodes[0].ID
+	v2.Nodes = append(v2.Nodes, NodeV2{ID: "adjustment", Type: "adjustment", TargetID: &targetID, OrderKey: "00000002", Transform: [6]float64{1, 0, 0, 1, 0, 0}, Opacity: .5, BlendMode: "normal", Visible: true, Effects: []EffectV2{}})
+	if err = v2.Validate(); err != nil {
+		t.Fatalf("valid adjustment rejected: %v", err)
+	}
+	missing := "missing"
+	v2.Nodes[1].TargetID = &missing
+	if err = v2.Validate(); !errors.Is(err, ErrInvalidDocument) {
+		t.Fatalf("missing target error = %v", err)
+	}
+}
+
 func TestDecodeV2RejectsUnknownFieldsAndExcessiveDepth(t *testing.T) {
 	v2, err := MigrateV1ToV2(New(uuid.New(), 32, 32))
 	if err != nil {

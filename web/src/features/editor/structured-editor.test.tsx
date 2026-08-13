@@ -1,6 +1,12 @@
 // @vitest-environment jsdom
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { ReactNode } from 'react'
 
@@ -97,6 +103,7 @@ function project(): EditorProject & { document: EditorDocumentV2 } {
 }
 
 afterEach(() => {
+  cleanup()
   vi.useRealTimers()
   vi.clearAllMocks()
 })
@@ -200,6 +207,54 @@ describe('StructuredEditor', () => {
           },
         ],
       })
+    })
+  })
+
+  it('creates and persists a clipped adjustment layer without pixel geometry', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    apiMock.mockImplementation((path: string) => {
+      if (path === '/api/v1/assets/resolve')
+        return Promise.resolve({ items: [firstAsset, secondAsset] })
+      if (path === '/api/v1/models')
+        return Promise.resolve({ revision: 'test', models: [] })
+      return Promise.resolve({ revision: 2 })
+    })
+    render(
+      <QueryClientProvider
+        client={
+          new QueryClient({ defaultOptions: { queries: { retry: false } } })
+        }
+      >
+        <StructuredEditor
+          project={project()}
+          onBack={vi.fn()}
+          onProjectChange={vi.fn()}
+        />
+      </QueryClientProvider>,
+    )
+
+    fireEvent.click((await screen.findAllByText('人物'))[0])
+    fireEvent.click(screen.getByRole('button', { name: '调整层' }))
+    expect(screen.getByText('人物调整')).toBeTruthy()
+    expect(screen.getByText('剪贴调整图层')).toBeTruthy()
+    expect(screen.getByText('强度')).toBeTruthy()
+    expect(screen.queryByLabelText('混合模式')).toBeNull()
+
+    await vi.advanceTimersByTimeAsync(1_100)
+    await waitFor(() => {
+      const saveCall = apiMock.mock.calls.find(
+        ([path, init]) =>
+          String(path).endsWith('/document') &&
+          (init as RequestInit | undefined)?.method === 'PUT',
+      )
+      const body = JSON.parse((saveCall?.[1] as RequestInit).body as string)
+      expect(body.document.nodes).toContainEqual(
+        expect.objectContaining({
+          type: 'adjustment',
+          target_id: 'first',
+          transform: [1, 0, 0, 1, 0, 0],
+        }),
+      )
     })
   })
 })

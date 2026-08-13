@@ -50,4 +50,26 @@ describe('editor document V2', () => {
       UnsupportedEditorSemanticsError,
     )
   })
+
+  it('validates an explicit clipped adjustment target', () => {
+    const v2 = fixture('v2-flat.json') as EditorDocumentV2
+    const target = v2.nodes[0]
+    v2.nodes.push({
+      id: 'adjustment',
+      type: 'adjustment',
+      target_id: target.id,
+      parent_id: target.parent_id,
+      order_key: '00000003',
+      transform: [1, 0, 0, 1, 0, 0],
+      opacity: 0.5,
+      blend_mode: 'normal',
+      visible: true,
+      locked: false,
+      effects: [],
+    })
+    expect(validateEditorDocumentV2(v2)).toEqual([])
+
+    v2.nodes.at(-1)!.target_id = 'missing'
+    expect(validateEditorDocumentV2(v2)).toContain('target:adjustment')
+  })
 })

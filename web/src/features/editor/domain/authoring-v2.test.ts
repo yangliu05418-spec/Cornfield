@@ -8,6 +8,7 @@ import {
   EditorCommandError,
   groupEditorNodes,
   reparentEditorNodes,
+  removeEditorNodes,
   reorderEditorNode,
   ungroupEditorNode,
 } from './authoring-v2'
@@ -137,6 +138,37 @@ describe('editor V2 authoring commands', () => {
     expect(() =>
       reparentEditorNodes(document, ['nested', 'child'], null),
     ).toThrow(EditorCommandError)
+  })
+
+  it('removes adjustment dependents with a target and detaches deleted masks', () => {
+    const target = raster('target', null, 0)
+    const adjustment: EditorNodeV2 = {
+      id: 'adjustment',
+      type: 'adjustment',
+      target_id: target.id,
+      parent_id: null,
+      order_key: orderKey(1),
+      transform: [1, 0, 0, 1, 0, 0],
+      opacity: 1,
+      blend_mode: 'normal',
+      visible: true,
+      locked: false,
+      effects: [],
+    }
+    const mask = raster('mask', null, 2)
+    const content = raster('content', null, 3)
+    content.mask_id = mask.id
+    const document = v2([target, adjustment, mask, content])
+    const withoutTarget = removeEditorNodes(document, [target.id])
+    expect(withoutTarget.nodes.map((node) => node.id)).toEqual([
+      'mask',
+      'content',
+    ])
+    const withoutMask = removeEditorNodes(document, [mask.id])
+    expect(
+      withoutMask.nodes.find((node) => node.id === content.id)?.mask_id,
+    ).toBeUndefined()
+    expect(validateEditorDocumentV2(withoutMask)).toEqual([])
   })
 })
 

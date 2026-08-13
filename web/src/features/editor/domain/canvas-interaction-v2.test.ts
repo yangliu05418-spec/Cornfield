@@ -69,6 +69,30 @@ describe('V2 canvas interaction geometry', () => {
     ])
   })
 
+  it('keeps adjustment layers out of canvas geometry transforms', () => {
+    const target = raster('target', null, 'asset-a', 0)
+    const adjustment: EditorNodeV2 = {
+      id: 'adjustment',
+      type: 'adjustment',
+      target_id: target.id,
+      parent_id: null,
+      order_key: '00000001',
+      transform: [1, 0, 0, 1, 0, 0],
+      opacity: 1,
+      blend_mode: 'normal',
+      visible: true,
+      locked: false,
+      effects: [],
+    }
+    const document = v2([target, adjustment])
+    expect(
+      translateEditorNodes(document, new Set([adjustment.id]), { x: 10, y: 5 }),
+    ).toBe(document)
+    expect(
+      editorSelectionBounds(document, assets, new Set([adjustment.id])),
+    ).toBe(undefined)
+  })
+
   it('keeps group selection when a descendant raster is hit', () => {
     const group = groupNode('group', null, 0)
     const child = raster('child', 'group', 'asset-b', 0)

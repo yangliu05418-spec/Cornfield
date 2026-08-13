@@ -80,6 +80,28 @@ func TestCompileV2RenderSceneCarriesRasterBlendAndEffects(t *testing.T) {
 	}
 }
 
+func TestCompileV2RenderSceneCollapsesClippedAdjustmentsIntoTargetMatrix(t *testing.T) {
+	asset := uuid.New()
+	targetID := "content"
+	targetEffects := []EffectV2{{Type: "exposure", Version: 1, Enabled: true, Parameters: map[string]float64{"stops": .5}}}
+	adjustmentEffects := []EffectV2{{Type: "contrast", Version: 1, Enabled: true, Parameters: map[string]float64{"amount": .4}}}
+	document := DocumentV2{SchemaVersion: 2, RendererSemanticsVersion: 1, Canvas: Canvas{Width: 10, Height: 10}, Nodes: []NodeV2{
+		{ID: targetID, Type: "raster", OrderKey: "00000001", Transform: [6]float64{1, 0, 0, 1, 0, 0}, Opacity: 1, BlendMode: "normal", Visible: true, AssetID: &asset, Effects: targetEffects},
+		{ID: "adjustment", Type: "adjustment", TargetID: &targetID, OrderKey: "00000002", Transform: [6]float64{1, 0, 0, 1, 0, 0}, Opacity: .5, BlendMode: "normal", Visible: true, Effects: adjustmentEffects},
+	}}
+	scene, err := CompileV2RenderScene(document)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(scene.Nodes) != 1 {
+		t.Fatalf("node count = %d", len(scene.Nodes))
+	}
+	want := ComposeColorMatricesV1(CompileColorMatrixV1(targetEffects), CompileColorMatrixWithStrengthV1(adjustmentEffects, .5))
+	if scene.Nodes[0].ColorMatrix != want {
+		t.Fatalf("color matrix = %#v, want %#v", scene.Nodes[0].ColorMatrix, want)
+	}
+}
+
 func TestCompileV2RenderSceneRejectsGroupBlend(t *testing.T) {
 	group := NodeV2{ID: "group", Type: "group", OrderKey: "00000001", Transform: [6]float64{1, 0, 0, 1, 0, 0}, Opacity: 1, BlendMode: "multiply", Visible: true}
 	_, err := CompileV2RenderScene(DocumentV2{SchemaVersion: 2, RendererSemanticsVersion: 1, Canvas: Canvas{Width: 10, Height: 10}, Nodes: []NodeV2{group}})

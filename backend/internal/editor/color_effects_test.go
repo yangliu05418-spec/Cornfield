@@ -45,6 +45,19 @@ func TestCompileColorMatrixV1TemperatureAndDesaturation(t *testing.T) {
 	assertChannels(t, [4]float64{red, green, blue, alpha}, [4]float64{warmedLuma, warmedLuma, warmedLuma, 1}, .000001)
 }
 
+func TestColorMatrixV1StrengthAndComposition(t *testing.T) {
+	exposure := CompileColorMatrixV1([]EffectV2{{Type: "exposure", Version: 1, Enabled: true, Parameters: map[string]float64{"stops": 1}}})
+	contrast := CompileColorMatrixWithStrengthV1([]EffectV2{{Type: "contrast", Version: 1, Enabled: true, Parameters: map[string]float64{"amount": .5}}}, .5)
+	input := [4]float64{.2, .3, .4, 1}
+	first := [4]float64{}
+	first[0], first[1], first[2], first[3] = ApplyColorMatrixV1(exposure, input[0], input[1], input[2], input[3])
+	want := [4]float64{}
+	want[0], want[1], want[2], want[3] = ApplyColorMatrixV1(contrast, first[0], first[1], first[2], first[3])
+	got := [4]float64{}
+	got[0], got[1], got[2], got[3] = ApplyColorMatrixV1(ComposeColorMatricesV1(exposure, contrast), input[0], input[1], input[2], input[3])
+	assertChannels(t, got, want, .000000000001)
+}
+
 func assertChannels(t *testing.T, got, want [4]float64, tolerance float64) {
 	t.Helper()
 	for index := range got {

@@ -4,12 +4,15 @@ import {
   fitArtboard,
   flipAroundCenter,
   boundsIntersect,
+  invertAffine,
+  moveCrop,
   moveObjectCenter,
   multiplyAffine,
   objectAxisScales,
   objectBounds,
   rotateAroundCenter,
   rotateAroundWorldPoint,
+  resizeCrop,
   scaleAroundCenter,
   scaleByFactorAroundCenter,
   scaleAroundWorldPoint,
@@ -110,6 +113,37 @@ describe('editor affine transforms', () => {
     expect(transformPoint([0, 2, -2, 0, 30, 40], 4, 6)).toEqual({
       x: 18,
       y: 48,
+    })
+  })
+
+  it('inverts translated, rotated, and scaled affine coordinates', () => {
+    const matrix = [0, 2, -3, 0, 30, 40] as EditorObject['transform']
+    const inverse = invertAffine(matrix)
+    expect(inverse).toBeDefined()
+    const world = transformPoint(matrix, 4, 6)
+    expect(transformPoint(inverse!, world.x, world.y).x).toBeCloseTo(4)
+    expect(transformPoint(inverse!, world.x, world.y).y).toBeCloseTo(6)
+    expect(invertAffine([0, 0, 0, 0, 0, 0])).toBeUndefined()
+  })
+
+  it('moves and resizes normalized crop bounds without escaping the image', () => {
+    const crop = { x: 0.2, y: 0.25, width: 0.5, height: 0.4 }
+    expect(moveCrop(crop, 0.7, -0.5)).toEqual({
+      x: 0.5,
+      y: 0,
+      width: 0.5,
+      height: 0.4,
+    })
+    const northWest = resizeCrop(crop, 'nw', -0.4, 0.3, 0.1, 0.1)
+    expect(northWest.x).toBe(0)
+    expect(northWest.y).toBeCloseTo(0.55)
+    expect(northWest.width).toBeCloseTo(0.7)
+    expect(northWest.height).toBeCloseTo(0.1)
+    expect(resizeCrop(crop, 'se', 0.5, 0.7, 0.1, 0.1)).toEqual({
+      x: 0.2,
+      y: 0.25,
+      width: 0.8,
+      height: 0.75,
     })
   })
 

@@ -6,6 +6,7 @@ import {
   ArrowDown,
   ArrowLeft,
   ArrowUp,
+  Check,
   Crop,
   Copy,
   Eye,
@@ -36,6 +37,8 @@ import { mergeAssetIntoCaches } from '#/lib/asset-cache'
 import {
   fitArtboard,
   flipAroundCenter,
+  invertAffine,
+  moveCrop,
   objectRotation,
   objectScale,
   objectBounds,
@@ -43,6 +46,7 @@ import {
   moveObjectCenter,
   rotateAroundCenter,
   rotateAroundWorldPoint,
+  resizeCrop,
   scaleAroundCenter,
   scaleByFactorAroundCenter,
   scaleAroundWorldPoint,
@@ -53,6 +57,7 @@ import {
   boundsIntersect,
   zoomAtScreenPoint,
 } from '#/lib/editor-transform'
+import type { CropHandle, CropRect } from '#/lib/editor-transform'
 import type {
   Asset,
   AssetOperation,
@@ -103,6 +108,11 @@ function ImageEditorPage() {
   )
   const [selectedID, setSelectedID] = useState('')
   const [selectedIDs, setSelectedIDs] = useState<Set<string>>(new Set())
+  const [cropSession, setCropSession] = useState<{
+    objectID: string
+    original?: CropRect
+    draft: CropRect
+  }>()
   const [marquee, setMarquee] = useState<{
     left: number
     top: number
@@ -356,11 +366,13 @@ function ImageEditorPage() {
   }
 
   function selectOnly(id = '') {
+    if (cropSession && id !== cropSession.objectID) return
     setSelectedID(id)
     setSelectedIDs(new Set(id ? [id] : []))
   }
 
   function toggleSelection(id: string) {
+    if (cropSession) return
     setSelectedIDs((current) => {
       const next = new Set(current)
       if (next.has(id)) next.delete(id)
@@ -442,6 +454,10 @@ function ImageEditorPage() {
   }
 
   async function leaveEditor() {
+    if (cropSession) {
+      setNotice('请先应用或取消当前裁切')
+      return
+    }
     try {
       await Promise.race([
         saveNow(),
@@ -585,6 +601,7 @@ function ImageEditorPage() {
   function beginPan(event: ReactPointerEvent<HTMLDivElement>) {
     event.currentTarget.focus({ preventScroll: true })
     if (!(spacePressed || event.button === 1)) {
+      if (cropSession) return
       if (event.button !== 0 || operationRunning) return
       if (
         event.target instanceof Element &&
@@ -750,6 +767,101 @@ function ImageEditorPage() {
       if (historyRef.current.length > 100) historyRef.current.shift()
       futureRef.current = []
       scheduleSave()
+    }
+    window.addEventListener('pointermove', move)
+    window.addEventListener('pointerup', up, { once: true })
+  }
+
+  function startCrop() {
+    if (
+      !selected ||
+      !selectedAsset ||
+      selected.locked ||
+      !selected.visible ||
+      selectedIDs.size !== 1 ||
+      operationRunning
+    )
+      return
+    setSettingsOpen(false)
+    setCropSession({
+      objectID: selected.id,
+      original: selected.crop ? { ...selected.crop } : undefined,
+      draft: selected.crop
+        ? { ...selected.crop }
+        : { x: 0, y: 0, width: 1, height: 1 },
+    })
+    setNotice('拖动边缘或角点调整裁切区域')
+  }
+
+  function cancelCrop() {
+    setCropSession(undefined)
+    setNotice('已取消裁切')
+  }
+
+  function applyCrop() {
+    if (!cropSession || !selected || selected.id !== cropSession.objectID)
+      return
+    const crop = roundedCrop(cropSession.draft)
+    const nextCrop = isFullCrop(crop) ? undefined : crop
+    if (sameCrop(cropSession.original, nextCrop)) {
+      setCropSession(undefined)
+      return
+    }
+    setCropSession(undefined)
+    updateObject(selected.id, (object) => ({ ...object, crop: nextCrop }))
+    setNotice(nextCrop ? '裁切已应用' : '已恢复完整图片')
+  }
+
+  function beginCropTransform(
+    event: ReactPointerEvent<HTMLElement>,
+    handle: CropHandle,
+  ) {
+    if (
+      !cropSession ||
+      !selected ||
+      !selectedAsset ||
+      selected.id !== cropSession.objectID
+    )
+      return
+    const viewport = viewportRef.current
+    const inverse = invertAffine(selected.transform)
+    if (!viewport || !inverse) return
+    event.preventDefault()
+    event.stopPropagation()
+    event.currentTarget.setPointerCapture(event.pointerId)
+    const initial = { ...cropSession.draft }
+    const rect = viewport.getBoundingClientRect()
+    const localPoint = (clientX: number, clientY: number) => {
+      const world = screenPointToWorld(clientX, clientY, rect, view)
+      const local = transformPoint(inverse, world.x, world.y)
+      return {
+        x: local.x / selectedAsset.width,
+        y: local.y / selectedAsset.height,
+      }
+    }
+    const start = localPoint(event.clientX, event.clientY)
+    const move = (moveEvent: PointerEvent) => {
+      const point = localPoint(moveEvent.clientX, moveEvent.clientY)
+      const dx = point.x - start.x
+      const dy = point.y - start.y
+      const draft =
+        handle === 'move'
+          ? moveCrop(initial, dx, dy)
+          : resizeCrop(
+              initial,
+              handle,
+              dx,
+              dy,
+              Math.min(1, 32 / selectedAsset.width),
+              Math.min(1, 32 / selectedAsset.height),
+            )
+      setCropSession((current) =>
+        current?.objectID === selected.id ? { ...current, draft } : current,
+      )
+    }
+    const up = () => {
+      window.removeEventListener('pointermove', move)
+      window.removeEventListener('pointerup', up)
     }
     window.addEventListener('pointermove', move)
     window.addEventListener('pointerup', up, { once: true })
@@ -1494,7 +1606,11 @@ function ImageEditorPage() {
             <button
               type="button"
               aria-label="撤销"
-              disabled={!historyRef.current.length || operationRunning}
+              disabled={
+                !historyRef.current.length ||
+                operationRunning ||
+                Boolean(cropSession)
+              }
               onClick={undo}
             >
               <Undo2 size={16} />
@@ -1502,7 +1618,11 @@ function ImageEditorPage() {
             <button
               type="button"
               aria-label="重做"
-              disabled={!futureRef.current.length || operationRunning}
+              disabled={
+                !futureRef.current.length ||
+                operationRunning ||
+                Boolean(cropSession)
+              }
               onClick={redo}
             >
               <Redo2 size={16} />
@@ -1513,6 +1633,7 @@ function ImageEditorPage() {
               type="button"
               className="editor-layer-settings"
               aria-label="智能分层设置"
+              disabled={Boolean(cropSession)}
               onClick={() => setSettingsOpen((value) => !value)}
             >
               <Layers3 size={16} />
@@ -1520,7 +1641,9 @@ function ImageEditorPage() {
             <button
               type="button"
               className="editor-decompose"
-              disabled={operationRunning || !canDecompose}
+              disabled={
+                operationRunning || !canDecompose || Boolean(cropSession)
+              }
               title={
                 canDecompose
                   ? '智能分层'
@@ -1534,7 +1657,7 @@ function ImageEditorPage() {
             <button
               type="button"
               className="editor-publish"
-              disabled={operationRunning}
+              disabled={operationRunning || Boolean(cropSession)}
               onClick={() => void publish()}
             >
               <Save size={16} />
@@ -1543,7 +1666,10 @@ function ImageEditorPage() {
           </div>
         </header>
 
-        <section className="editor-body">
+        <section
+          className="editor-body"
+          data-cropping={cropSession ? true : undefined}
+        >
           <aside className="editor-tools" aria-label="基础编辑工具">
             <input
               ref={uploadInputRef}
@@ -1559,7 +1685,7 @@ function ImageEditorPage() {
               type="button"
               title="添加图片"
               aria-label="添加图片"
-              disabled={uploading || operationRunning}
+              disabled={uploading || operationRunning || Boolean(cropSession)}
               onClick={() => uploadInputRef.current?.click()}
             >
               <Plus size={17} />
@@ -1579,7 +1705,12 @@ function ImageEditorPage() {
             <button
               type="button"
               title="旋转 90°"
-              disabled={!selected || selectedIDs.size !== 1 || operationRunning}
+              disabled={
+                !selected ||
+                selectedIDs.size !== 1 ||
+                operationRunning ||
+                Boolean(cropSession)
+              }
               onClick={() =>
                 selected &&
                 selectedAsset &&
@@ -1598,7 +1729,12 @@ function ImageEditorPage() {
             <button
               type="button"
               title="水平翻转"
-              disabled={!selected || selectedIDs.size !== 1 || operationRunning}
+              disabled={
+                !selected ||
+                selectedIDs.size !== 1 ||
+                operationRunning ||
+                Boolean(cropSession)
+              }
               onClick={() =>
                 selected &&
                 selectedAsset &&
@@ -1617,7 +1753,12 @@ function ImageEditorPage() {
             <button
               type="button"
               title="垂直翻转"
-              disabled={!selected || selectedIDs.size !== 1 || operationRunning}
+              disabled={
+                !selected ||
+                selectedIDs.size !== 1 ||
+                operationRunning ||
+                Boolean(cropSession)
+              }
               onClick={() =>
                 selected &&
                 selectedAsset &&
@@ -1635,17 +1776,18 @@ function ImageEditorPage() {
             </button>
             <button
               type="button"
-              title="裁切边缘"
-              disabled={!selected || selectedIDs.size !== 1 || operationRunning}
-              onClick={() =>
-                selected &&
-                updateObject(selected.id, (object) => ({
-                  ...object,
-                  crop: object.crop
-                    ? undefined
-                    : { x: 0.05, y: 0.05, width: 0.9, height: 0.9 },
-                }))
+              title="裁切图层"
+              aria-label="裁切图层"
+              className={cropSession ? 'active' : ''}
+              disabled={
+                !selected ||
+                selected.locked ||
+                !selected.visible ||
+                selectedIDs.size !== 1 ||
+                operationRunning ||
+                Boolean(cropSession)
               }
+              onClick={startCrop}
             >
               <Crop size={17} />
             </button>
@@ -1716,6 +1858,55 @@ function ImageEditorPage() {
               )
             }}
             onKeyDown={(event) => {
+              if (cropSession) {
+                if (event.key === '0') {
+                  event.preventDefault()
+                  fitCanvas()
+                  return
+                }
+                if (event.key === '1') {
+                  event.preventDefault()
+                  changeZoom(100)
+                  return
+                }
+                if (event.key === 'Escape') {
+                  event.preventDefault()
+                  cancelCrop()
+                  return
+                }
+                if (event.key === 'Enter') {
+                  event.preventDefault()
+                  applyCrop()
+                  return
+                }
+                if (
+                  selectedAsset &&
+                  ['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(
+                    event.key,
+                  )
+                ) {
+                  event.preventDefault()
+                  const distance = event.shiftKey ? 10 : 1
+                  const dx =
+                    event.key === 'ArrowLeft'
+                      ? -distance / selectedAsset.width
+                      : event.key === 'ArrowRight'
+                        ? distance / selectedAsset.width
+                        : 0
+                  const dy =
+                    event.key === 'ArrowUp'
+                      ? -distance / selectedAsset.height
+                      : event.key === 'ArrowDown'
+                        ? distance / selectedAsset.height
+                        : 0
+                  setCropSession((current) =>
+                    current
+                      ? { ...current, draft: moveCrop(current.draft, dx, dy) }
+                      : current,
+                  )
+                }
+                return
+              }
               if (
                 (event.ctrlKey || event.metaKey) &&
                 event.key.toLowerCase() === 'a'
@@ -1833,11 +2024,17 @@ function ImageEditorPage() {
                 {documentState.objects.map((object) => {
                   const asset = objectAssets?.get(object.asset_id)
                   if (!asset || !object.visible) return null
+                  const visibleCrop =
+                    cropSession?.objectID === object.id
+                      ? undefined
+                      : object.crop
                   return (
                     <img
                       key={object.id}
                       className={
-                        selectedIDs.size === 1 && selectedIDs.has(object.id)
+                        !cropSession &&
+                        selectedIDs.size === 1 &&
+                        selectedIDs.has(object.id)
                           ? 'is-selected'
                           : ''
                       }
@@ -1850,11 +2047,12 @@ function ImageEditorPage() {
                         opacity: object.opacity,
                         zIndex: object.z_index,
                         transform: `matrix(${object.transform.join(',')})`,
-                        clipPath: object.crop
-                          ? `inset(${object.crop.y * 100}% ${(1 - object.crop.x - object.crop.width) * 100}% ${(1 - object.crop.y - object.crop.height) * 100}% ${object.crop.x * 100}%)`
+                        clipPath: visibleCrop
+                          ? `inset(${visibleCrop.y * 100}% ${(1 - visibleCrop.x - visibleCrop.width) * 100}% ${(1 - visibleCrop.y - visibleCrop.height) * 100}% ${visibleCrop.x * 100}%)`
                           : undefined,
                       }}
                       onPointerDown={(event) => {
+                        if (cropSession) return
                         viewportRef.current?.focus({ preventScroll: true })
                         const nextSelection =
                           event.shiftKey || selectedIDs.has(object.id)
@@ -1882,6 +2080,7 @@ function ImageEditorPage() {
               {selected &&
                 selectedAsset &&
                 selected.visible &&
+                !cropSession &&
                 selectedIDs.size === 1 && (
                   <div
                     className="editor-selection-box"
@@ -1890,6 +2089,7 @@ function ImageEditorPage() {
                         width: selectedAsset.width,
                         height: selectedAsset.height,
                         transform: `matrix(${selected.transform.join(',')})`,
+                        '--editor-zoom': zoom / 100,
                         '--editor-handle-size': `${12 / (zoom / 100) / Math.max(0.05, objectScale(selected.transform))}px`,
                         '--editor-handle-distance': `${34 / (zoom / 100) / Math.max(0.05, objectScale(selected.transform))}px`,
                       } as CSSProperties
@@ -1929,6 +2129,58 @@ function ImageEditorPage() {
                         />
                       </>
                     )}
+                  </div>
+                )}
+              {cropSession &&
+                selected &&
+                selectedAsset &&
+                selected.id === cropSession.objectID && (
+                  <div
+                    className="editor-crop-overlay"
+                    style={
+                      {
+                        width: selectedAsset.width,
+                        height: selectedAsset.height,
+                        transform: `matrix(${selected.transform.join(',')})`,
+                        '--editor-handle-size': `${12 / (zoom / 100) / Math.max(0.05, objectScale(selected.transform))}px`,
+                      } as CSSProperties
+                    }
+                  >
+                    <div
+                      className="editor-crop-frame"
+                      style={{
+                        left: cropSession.draft.x * selectedAsset.width,
+                        top: cropSession.draft.y * selectedAsset.height,
+                        width: cropSession.draft.width * selectedAsset.width,
+                        height: cropSession.draft.height * selectedAsset.height,
+                      }}
+                    >
+                      <button
+                        className="editor-crop-move"
+                        type="button"
+                        aria-label="移动裁切区域"
+                        onPointerDown={(event) =>
+                          beginCropTransform(event, 'move')
+                        }
+                      />
+                      <span className="editor-crop-grid is-x-one" />
+                      <span className="editor-crop-grid is-x-two" />
+                      <span className="editor-crop-grid is-y-one" />
+                      <span className="editor-crop-grid is-y-two" />
+                      {['n', 'ne', 'e', 'se', 's', 'sw', 'w', 'nw'].map(
+                        (handle) => (
+                          <button
+                            key={handle}
+                            className={`editor-crop-handle is-${handle}`}
+                            type="button"
+                            aria-label={`调整裁切区域 ${handle}`}
+                            onPointerDown={(event) =>
+                              beginCropTransform(event, handle as CropHandle)
+                            }
+                          />
+                        ),
+                      )}
+                    </div>
                   </div>
                 )}
               {selectedIDs.size > 1 && groupBounds && (
@@ -2001,6 +2253,21 @@ function ImageEditorPage() {
                 />
               ))}
             </div>
+            {cropSession && (
+              <div
+                className="editor-crop-actions"
+                role="toolbar"
+                aria-label="裁切操作"
+              >
+                <span>裁切图层</span>
+                <button type="button" onClick={cancelCrop}>
+                  <X size={14} /> 取消
+                </button>
+                <button className="primary" type="button" onClick={applyCrop}>
+                  <Check size={14} /> 应用裁切
+                </button>
+              </div>
+            )}
             {dragOver && (
               <div className="editor-drop-overlay" aria-hidden="true">
                 <Plus size={22} />
@@ -2486,41 +2753,27 @@ function ImageEditorPage() {
                   />
                 </label>
                 {selected.crop && (
-                  <label>
-                    裁切边距{' '}
-                    <output>{Math.round(selected.crop.x * 100)}%</output>
-                    <input
-                      aria-label="图层裁切边距"
-                      type="range"
-                      min="0"
-                      max="0.45"
-                      step="0.01"
-                      value={selected.crop.x}
+                  <div className="editor-crop-summary">
+                    <span>
+                      裁切区域{' '}
+                      <strong>
+                        {Math.round(selected.crop.width * 100)} ×{' '}
+                        {Math.round(selected.crop.height * 100)}%
+                      </strong>
+                    </span>
+                    <button
+                      type="button"
                       disabled={operationRunning || selected.locked}
-                      onChange={(event) => {
-                        const inset = Number(event.target.value)
-                        updateObject(
-                          selected.id,
-                          (object) => ({
-                            ...object,
-                            crop: {
-                              x: inset,
-                              y: inset,
-                              width: 1 - inset * 2,
-                              height: 1 - inset * 2,
-                            },
-                          }),
-                          false,
-                        )
-                      }}
-                      onPointerDown={beginContinuousEdit}
-                      onPointerUp={finishContinuousEdit}
-                      onPointerCancel={finishContinuousEdit}
-                      onKeyDown={beginContinuousEdit}
-                      onKeyUp={finishContinuousEdit}
-                      onBlur={finishContinuousEdit}
-                    />
-                  </label>
+                      onClick={() =>
+                        updateObject(selected.id, (object) => ({
+                          ...object,
+                          crop: undefined,
+                        }))
+                      }
+                    >
+                      清除裁切
+                    </button>
+                  </div>
                 )}
                 <div className="editor-property-actions">
                   <button
@@ -2849,6 +3102,34 @@ function translateObject(
       initial[5] + dy,
     ],
   }
+}
+
+function roundedCrop(crop: CropRect): CropRect {
+  return {
+    x: Math.round(crop.x * 100_000) / 100_000,
+    y: Math.round(crop.y * 100_000) / 100_000,
+    width: Math.round(crop.width * 100_000) / 100_000,
+    height: Math.round(crop.height * 100_000) / 100_000,
+  }
+}
+
+function isFullCrop(crop: CropRect) {
+  return (
+    Math.abs(crop.x) < 1e-5 &&
+    Math.abs(crop.y) < 1e-5 &&
+    Math.abs(crop.width - 1) < 1e-5 &&
+    Math.abs(crop.height - 1) < 1e-5
+  )
+}
+
+function sameCrop(left?: CropRect, right?: CropRect) {
+  if (!left || !right) return left === right
+  return (
+    Math.abs(left.x - right.x) < 1e-5 &&
+    Math.abs(left.y - right.y) < 1e-5 &&
+    Math.abs(left.width - right.width) < 1e-5 &&
+    Math.abs(left.height - right.height) < 1e-5
+  )
 }
 
 function boundsFromPoints(

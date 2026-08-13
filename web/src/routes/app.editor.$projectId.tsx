@@ -38,6 +38,7 @@ import type { CSSProperties, PointerEvent as ReactPointerEvent } from 'react'
 
 import { AppShell } from '#/components/app-shell'
 import { ConfirmDialog } from '#/components/confirm-dialog'
+import { StructuredEditor } from '#/features/editor/structured-editor'
 import { EditorHistory } from '#/features/editor/domain/history'
 import {
   applyFlatEditorViewToV2,
@@ -123,6 +124,10 @@ function ImageEditorPage() {
     null,
   )
   const [documentUnsupported, setDocumentUnsupported] = useState(false)
+  const [structuredProject, setStructuredProject] = useState<
+    (EditorProject & { document: EditorDocumentV2 }) | null
+  >(null)
+  const [enteringStructured, setEnteringStructured] = useState(false)
   const [, setHistoryRevision] = useState(0)
   const [selectedID, setSelectedID] = useState('')
   const [selectedIDs, setSelectedIDs] = useState<Set<string>>(new Set())
@@ -161,6 +166,7 @@ function ImageEditorPage() {
   const [packageOperationID, setPackageOperationID] = useState<string>()
   const [elapsed, setElapsed] = useState(0)
   const revisionRef = useRef(0)
+  const serverDocumentVersionRef = useRef<1 | 2>(1)
   const dirtyRef = useRef(false)
   const saveTimerRef = useRef<number | undefined>(undefined)
   const savePromiseRef = useRef<Promise<void> | null>(null)
@@ -186,12 +192,19 @@ function ImageEditorPage() {
 
   useEffect(() => {
     if (!projectQuery.data || documentRef.current) return
+    serverDocumentVersionRef.current = projectQuery.data.document.schema_version
+    if (projectQuery.data.document.schema_version === 2) {
+      setStructuredProject({
+        ...projectQuery.data,
+        document: structuredClone(projectQuery.data.document),
+      })
+      return
+    }
     const requestedV2 =
       new URLSearchParams(window.location.search).get('document') === 'v2'
-    const persisted =
-      projectQuery.data.document.schema_version === 1 && requestedV2
-        ? migrateEditorDocumentV1ToV2(projectQuery.data.document)
-        : projectQuery.data.document
+    const persisted = requestedV2
+      ? migrateEditorDocumentV1ToV2(projectQuery.data.document)
+      : projectQuery.data.document
     let projectedDocument: EditorDocument
     try {
       projectedDocument =
@@ -343,6 +356,7 @@ function ImageEditorPage() {
     )
       .then((result) => {
         revisionRef.current = result.revision
+        serverDocumentVersionRef.current = documentToSave.schema_version
         if (JSON.stringify(persistedDocumentRef.current) === signature) {
           dirtyRef.current = false
           setSaveState('saved')
@@ -517,6 +531,49 @@ function ImageEditorPage() {
       return
     }
     await returnToWorkspace()
+  }
+
+  async function enterStructuredEditor() {
+    if (!documentRef.current || !persistedDocumentRef.current) return
+    if (cropSession || operationRunning) {
+      setNotice('请先完成当前裁切或智能分层任务')
+      return
+    }
+    setEnteringStructured(true)
+    try {
+      await saveNow()
+      const current = persistedDocumentRef.current
+      const next =
+        current.schema_version === 2
+          ? structuredClone(current)
+          : migrateEditorDocumentV1ToV2(documentRef.current)
+      if (serverDocumentVersionRef.current !== 2) {
+        const saved = await saveEditorDocument(
+          `/api/v1/editor-projects/${projectId}/document`,
+          revisionRef.current,
+          next,
+        )
+        revisionRef.current = saved.revision
+        serverDocumentVersionRef.current = 2
+      }
+      const base = projectQuery.data
+      if (!base) return
+      const project = {
+        ...base,
+        document: next,
+        revision: revisionRef.current,
+      }
+      persistedDocumentRef.current = next
+      dirtyRef.current = false
+      queryClient.setQueryData(['editor-project', projectId], project)
+      setStructuredProject(project)
+    } catch (error) {
+      setNotice(
+        error instanceof APIError ? error.message : '无法进入专业图层，请重试',
+      )
+    } finally {
+      setEnteringStructured(false)
+    }
   }
 
   async function returnToWorkspace() {
@@ -1684,6 +1741,19 @@ function ImageEditorPage() {
         <main className="editor-loading">图片编辑工程无法打开</main>
       </AppShell>
     )
+  if (structuredProject)
+    return (
+      <StructuredEditor
+        project={structuredProject}
+        onBack={() => void returnToWorkspace()}
+        onProjectChange={(project) => {
+          if (project.document.schema_version !== 2) return
+          const next = { ...project, document: project.document }
+          setStructuredProject(next)
+          queryClient.setQueryData(['editor-project', projectId], next)
+        }}
+      />
+    )
   if (documentUnsupported)
     return (
       <AppShell immersive>
@@ -1768,6 +1838,17 @@ function ImageEditorPage() {
             </button>
           </div>
           <div className="editor-topbar-group editor-primary-actions">
+            <button
+              type="button"
+              className="editor-structured-entry"
+              disabled={
+                enteringStructured || operationRunning || Boolean(cropSession)
+              }
+              onClick={() => void enterStructuredEditor()}
+            >
+              <Layers3 size={16} />
+              {enteringStructured ? '正在切换' : '专业图层'}
+            </button>
             <button
               type="button"
               className="editor-layer-settings"

@@ -22,7 +22,6 @@ const (
 	bytePlusMaxReferences = 10
 	bytePlusMaxBodyBytes  = 160 << 20
 	bytePlusProbeInterval = 5 * time.Minute
-	bytePlusLayerTimeout  = 10 * time.Minute
 	bytePlusMaxLayers     = 16
 )
 
@@ -48,8 +47,10 @@ func NewBytePlusWithSubmitTimeout(apiKey string, submitTimeout time.Duration) *B
 	}
 	return &BytePlus{
 		APIKey: apiKey, BaseURL: bytePlusBaseURL,
-		Client:        newHTTPClient(submitTimeout+20*time.Second, submitTimeout+10*time.Second),
-		LayerClient:   newHTTPClient(bytePlusLayerTimeout+20*time.Second, bytePlusLayerTimeout+10*time.Second),
+		Client: newHTTPClient(submitTimeout+20*time.Second, submitTimeout+10*time.Second),
+		// Layer decomposition owns no independent timeout. Its business deadline is
+		// supplied by the model catalog through the request context.
+		LayerClient:   newHTTPClient(0, 0),
 		ProbeInterval: bytePlusProbeInterval,
 	}
 }
@@ -125,7 +126,7 @@ func (b *BytePlus) DecomposeLayers(ctx context.Context, input LayerDecomposition
 	}))
 	client := b.LayerClient
 	if client == nil {
-		client = newHTTPClient(bytePlusLayerTimeout+20*time.Second, bytePlusLayerTimeout+10*time.Second)
+		client = newHTTPClient(0, 0)
 	}
 	res, err := client.Do(req)
 	if err != nil {

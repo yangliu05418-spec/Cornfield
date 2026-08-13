@@ -1135,6 +1135,10 @@ func (w *AssetOperationWorker) RunSubmissionRecovery(ctx context.Context) {
 
 func (w *AssetOperationWorker) recoverStaleSubmissions(ctx context.Context) {
 	recoveryAge := w.operationRecoveryAge()
+	if recoveryAge <= 0 {
+		w.Log.Error("asset operation recovery disabled because the model timeout is unavailable")
+		return
+	}
 	rows, err := w.DB.Query(ctx, `SELECT DISTINCT o.id FROM asset_operations o
 		JOIN provider_attempts a ON a.asset_operation_id=o.id
 		WHERE o.operation_type='layer_decomposition' AND o.status='submitting'
@@ -1180,9 +1184,9 @@ func (w *AssetOperationWorker) layerOperationTimeout(record assetOperationRecord
 
 func (w *AssetOperationWorker) operationRecoveryAge() time.Duration {
 	if w.Catalog == nil || w.Catalog.MaxOperationTimeout() <= 0 {
-		return 11 * time.Minute
+		return 0
 	}
-	return w.Catalog.MaxOperationTimeout() + time.Minute
+	return w.Catalog.MaxOperationTimeout() + 30*time.Second
 }
 
 func (w *AssetOperationWorker) retryOperation(ctx context.Context, record assetOperationRecord, providerErr *provider.Error) error {

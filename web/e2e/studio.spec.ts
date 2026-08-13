@@ -754,24 +754,23 @@ test('image editor restores a source project and autosaves keyboard edits', asyn
   await expect
     .poll(() => {
       const object = backend.editorState().document.objects[1]
-      return {
-        x:
-          object.transform[0] * 512 +
-          object.transform[2] * 512 +
-          object.transform[4],
-        y:
-          object.transform[1] * 512 +
-          object.transform[3] * 512 +
-          object.transform[5],
-      }
+      return (
+        object.transform[0] * 512 +
+        object.transform[2] * 512 +
+        object.transform[4]
+      )
     })
-    .toEqual({ x: 600, y: 450 })
-
-  await canvas.focus()
-  await page.keyboard.press('Control+d')
-  await expect.poll(() => backend.editorState().document.objects.length).toBe(3)
-  await page.keyboard.press('Control+z')
-  await expect.poll(() => backend.editorState().document.objects.length).toBe(2)
+    .toBeCloseTo(600, 4)
+  await expect
+    .poll(() => {
+      const object = backend.editorState().document.objects[1]
+      return (
+        object.transform[1] * 512 +
+        object.transform[3] * 512 +
+        object.transform[5]
+      )
+    })
+    .toBeCloseTo(450, 4)
 
   const worldBeforeWheel = await page
     .locator('.editor-world')

@@ -21,6 +21,15 @@ Each circular dab computes coverage at pixel centres. The hard inner radius is `
 
 The pure TypeScript tile engine is the first authoritative implementation. Worker and server goldens must use the same fixtures before persistence or publishing is enabled.
 
+## Pixi preview boundary
+
+- Every non-default mask tile is uploaded as one `r8unorm` `BufferImageSource`; updating a dirty tile replaces its byte resource and reuses the existing texture and sprite.
+- Raster content is split into 256px display tiles that share the selected source texture. At the 8000×4500 limit this is 576 lightweight sprites, not a 36MP render texture.
+- Only content tiles with non-default alpha receive a red-channel `MaskFilter`. Default opaque tiles have no filter, and default transparent tiles are not materialized.
+- Mask sprites live in a non-rendering transform root under the content surface so offset tiles and parent transforms remain aligned. The root itself must never be used as a Pixi container mask because that invokes geometric masking instead of composing child alpha textures.
+- Content sprites are individually cullable. Texture frames map document pixels onto the active display variant, so preview resolution can change without changing mask coordinates or mask bytes.
+- Chromium pixel tests cover source updates, non-origin tile coordinates, default-tile release and the 36MP sprite-count gate.
+
 ## Persistence boundary
 
 The next persistence increment will introduce project-owned mask resources and immutable versions. Each version is a manifest from tile coordinate to a derived immutable asset. Updating a mask creates a new version by committing changed tiles with an expected resource revision; it never mutates an existing version.

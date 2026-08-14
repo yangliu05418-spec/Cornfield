@@ -42,8 +42,8 @@ test('Pixi renderer meets the Stage A correctness and resource gate', async ({
   )
   expect(result.syncMs).toBeLessThan(2_500)
   expect(result.burstSyncMs).toBeLessThan(2_500)
-  expect(result.statsBeforeDestroy.coalescedSyncs).toBeGreaterThanOrEqual(18)
-  expect(result.statsBeforeDestroy.syncPasses).toBeLessThanOrEqual(3)
+  expect(result.burstCoalescedSyncs).toBeGreaterThanOrEqual(18)
+  expect(result.burstSyncPasses).toBeLessThanOrEqual(2)
   expect(result.renderP95Ms).toBeLessThan(8)
   expect(result.longTasks).toBeGreaterThanOrEqual(0)
   if (timingGateEnforced) {
@@ -68,6 +68,17 @@ test('Pixi renderer meets the Stage A correctness and resource gate', async ({
     2048 * 2048 * 4,
     640 * 640 * 4,
   ])
+  expect(result.rasterMaskWorker.createMs).toBeLessThan(1_000)
+  expect(result.rasterMaskWorker.strokeMs).toBeLessThan(2_500)
+  expect(result.rasterMaskWorker.previewTiles).toBeGreaterThan(1)
+  expect(result.rasterMaskWorker.changedPixels).toBeGreaterThan(1_000)
+  expect(result.rasterMaskWorker.retainedHistoryBytes).toBeLessThanOrEqual(
+    64 << 20,
+  )
+  expect(result.rasterMaskWorker.undoTiles).toBeGreaterThan(1)
+  expect(result.rasterMaskWorker.redoTiles).toBe(
+    result.rasterMaskWorker.undoTiles,
+  )
   expect(result.contextLossSupported).toBe(true)
   expect(result.contextLostObserved).toBe(true)
   expect(result.contextRestoredObserved).toBe(true)
@@ -106,6 +117,8 @@ declare global {
       initMs: number
       syncMs: number
       burstSyncMs: number
+      burstSyncPasses: number
+      burstCoalescedSyncs: number
       renderP50Ms: number
       renderP95Ms: number
       frameIntervalP95Ms: number
@@ -129,6 +142,15 @@ declare global {
         bottom: number
       }
       resolutionTransitionBytes: number[]
+      rasterMaskWorker: {
+        createMs: number
+        strokeMs: number
+        previewTiles: number
+        changedPixels: number
+        retainedHistoryBytes: number
+        undoTiles: number
+        redoTiles: number
+      }
       contextLossSupported: boolean
       contextLostObserved: boolean
       contextRestoredObserved: boolean

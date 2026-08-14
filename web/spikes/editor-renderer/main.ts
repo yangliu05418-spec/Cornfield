@@ -3,6 +3,7 @@ import type { EditorDocument } from '../../src/features/editor/domain/document'
 import type { EditorDocumentV2 } from '../../src/features/editor/domain/document-v2'
 import type { EditorRenderAsset } from '../../src/features/editor/renderer/types'
 import { compileEditorRenderScene } from '../../src/features/editor/renderer/scene-compiler'
+import { createRasterMaskWorkerClient } from '../../src/features/editor/tools/raster-mask/worker-client'
 
 declare global {
   interface Window {
@@ -16,6 +17,8 @@ type SpikeResult = {
   initMs: number
   syncMs: number
   burstSyncMs: number
+  burstSyncPasses: number
+  burstCoalescedSyncs: number
   renderP50Ms: number
   renderP95Ms: number
   frameIntervalP95Ms: number
@@ -29,6 +32,7 @@ type SpikeResult = {
   v2ActualBounds?: PixelBounds
   v2ExpectedBounds?: PixelBounds
   resolutionTransitionBytes: number[]
+  rasterMaskWorker: RasterMaskWorkerSpike
   contextLossSupported: boolean
   contextLostObserved: boolean
   contextRestoredObserved: boolean
@@ -52,6 +56,16 @@ type SpikeEnvironment = {
 
 type PixelBounds = { left: number; top: number; right: number; bottom: number }
 
+type RasterMaskWorkerSpike = {
+  createMs: number
+  strokeMs: number
+  previewTiles: number
+  changedPixels: number
+  retainedHistoryBytes: number
+  undoTiles: number
+  redoTiles: number
+}
+
 const output = document.querySelector('output')!
 const canvas = document.querySelector<HTMLCanvasElement>('#performance')!
 const correctnessCanvas =
@@ -65,6 +79,8 @@ void run().catch((error: unknown) => {
     initMs: 0,
     syncMs: 0,
     burstSyncMs: 0,
+    burstSyncPasses: 0,
+    burstCoalescedSyncs: 0,
     renderP50Ms: 0,
     renderP95Ms: 0,
     frameIntervalP95Ms: 0,
@@ -76,6 +92,7 @@ void run().catch((error: unknown) => {
     v2MaskRemovalMeanAbsoluteError: Number.POSITIVE_INFINITY,
     v2MaskRemovalMismatchRatio: 1,
     resolutionTransitionBytes: [],
+    rasterMaskWorker: emptyRasterMaskWorkerSpike(),
     contextLossSupported: false,
     contextLostObserved: false,
     contextRestoredObserved: false,
@@ -89,6 +106,7 @@ void run().catch((error: unknown) => {
 })
 
 async function run() {
+  const rasterMaskWorker = await runRasterMaskWorkerFixture()
   const pixelComparison = await runPixelCorrectnessFixture(correctnessCanvas)
   const v2PixelComparison =
     await runV2PixelCorrectnessFixture(v2CorrectnessCanvas)
@@ -113,6 +131,7 @@ async function run() {
   const syncStarted = performance.now()
   await renderer.sync(document, assets)
   const syncMs = performance.now() - syncStarted
+  const beforeBurst = renderer.stats()
   const burstStarted = performance.now()
   await Promise.all(
     Array.from({ length: 20 }, (_, index) =>
@@ -120,6 +139,10 @@ async function run() {
     ),
   )
   const burstSyncMs = performance.now() - burstStarted
+  const afterBurst = renderer.stats()
+  const burstSyncPasses = afterBurst.syncPasses - beforeBurst.syncPasses
+  const burstCoalescedSyncs =
+    afterBurst.coalescedSyncs - beforeBurst.coalescedSyncs
   for (let index = 0; index < 30; index += 1) {
     await nextFrame()
     renderer.setViewport({
@@ -176,6 +199,8 @@ async function run() {
     initMs,
     syncMs,
     burstSyncMs,
+    burstSyncPasses,
+    burstCoalescedSyncs,
     renderP50Ms: percentile(renderTimes, 0.5),
     renderP95Ms: percentile(renderTimes, 0.95),
     frameIntervalP95Ms: percentile(frameIntervals, 0.95),
@@ -190,6 +215,7 @@ async function run() {
     v2ActualBounds: v2PixelComparison.actualBounds,
     v2ExpectedBounds: v2PixelComparison.expectedBounds,
     resolutionTransitionBytes,
+    rasterMaskWorker,
     contextLossSupported,
     contextLostObserved,
     contextRestoredObserved,
@@ -199,6 +225,64 @@ async function run() {
   }
   window.__EDITOR_SPIKE__ = result
   output.value = JSON.stringify(result, null, 2)
+}
+
+async function runRasterMaskWorkerFixture(): Promise<RasterMaskWorkerSpike> {
+  const client = createRasterMaskWorkerClient()
+  try {
+    const createStarted = performance.now()
+    await client.create(8_000, 4_500)
+    const createMs = performance.now() - createStarted
+    const strokeStarted = performance.now()
+    const first = await client.beginStroke(
+      'spike-stroke',
+      {
+        size: 96,
+        hardness: 0.65,
+        opacity: 0.8,
+        spacing: 0.08,
+        mode: 'erase',
+        pressureSize: 0.7,
+        pressureOpacity: 0.5,
+      },
+      { x: 120, y: 120, pressure: 0.25 },
+    )
+    const preview = await client.addPoints(
+      'spike-stroke',
+      Array.from({ length: 120 }, (_, index) => ({
+        x: 120 + index * 24,
+        y: 120 + Math.sin(index / 8) * 160,
+        pressure: 0.25 + (index / 119) * 0.75,
+      })),
+    )
+    const committed = await client.commitStroke('spike-stroke')
+    const strokeMs = performance.now() - strokeStarted
+    const undone = await client.undo()
+    const redone = await client.redo()
+    return {
+      createMs,
+      strokeMs,
+      previewTiles: first.tiles.length + preview.tiles.length,
+      changedPixels: committed.changedPixels,
+      retainedHistoryBytes: committed.retainedHistoryBytes,
+      undoTiles: undone.tiles.length,
+      redoTiles: redone.tiles.length,
+    }
+  } finally {
+    client.close()
+  }
+}
+
+function emptyRasterMaskWorkerSpike(): RasterMaskWorkerSpike {
+  return {
+    createMs: 0,
+    strokeMs: 0,
+    previewTiles: 0,
+    changedPixels: 0,
+    retainedHistoryBytes: 0,
+    undoTiles: 0,
+    redoTiles: 0,
+  }
 }
 
 async function runV2PixelCorrectnessFixture(targetCanvas: HTMLCanvasElement) {

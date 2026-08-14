@@ -14,7 +14,7 @@ const brush: RasterMaskBrush = {
 }
 
 describe('RasterMaskSession', () => {
-  it('commits one gesture and returns only dirty tile snapshots', () => {
+  it('commits one gesture and returns its complete dirty tile set', () => {
     const session = new RasterMaskSession(1024, 1024)
     const first = session.beginStroke('pointer-1', brush, { x: 100, y: 100 })
     const preview = session.addPoints('pointer-1', [
@@ -32,11 +32,26 @@ describe('RasterMaskSession', () => {
       height: 256,
     })
     expect(preview.tiles[0].alpha).toHaveLength(256 * 256)
-    expect(mutation.tiles).toHaveLength(0)
+    expect(mutation.tiles).toHaveLength(1)
     expect(mutation.changedPixels).toBeGreaterThan(0)
     expect(mutation.canUndo).toBe(true)
     expect(mutation.canRedo).toBe(false)
     expect(session.buffer.allocatedBytes).toBe(256 * 256)
+  })
+
+  it('hydrates an immutable sparse version and clears local history', () => {
+    const session = new RasterMaskSession(512, 512)
+    session.beginStroke('old', brush, { x: 10, y: 10 })
+    session.commitStroke('old')
+    const alpha = new Uint8Array(256 * 256)
+    alpha.fill(64)
+    const hydrated = session.hydrate([
+      { tileX: 1, tileY: 0, width: 256, height: 256, alpha },
+    ])
+    expect(hydrated.tiles).toHaveLength(1)
+    expect(hydrated.canUndo).toBe(false)
+    expect(session.buffer.readAlpha(10, 10)).toBe(255)
+    expect(session.buffer.readAlpha(300, 10)).toBe(64)
   })
 
   it('keeps patch ownership in the session across undo and redo', () => {

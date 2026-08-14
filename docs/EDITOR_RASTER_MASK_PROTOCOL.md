@@ -1,6 +1,6 @@
 # Editor raster-mask protocol
 
-Status: implementation baseline. This document defines the pixel semantics that the browser worker, Pixi preview and server export must share before the brush is exposed in the product.
+Status: implemented. This document defines the pixel semantics shared by the browser worker, Pixi preview, immutable persistence and server export.
 
 ## Invariants
 
@@ -42,3 +42,13 @@ The pure TypeScript tile engine is the first authoritative implementation. Worke
 - Project and user deletion remove manifests through database cascades. The conservative content sweeper deletes bytes only after the SHA reference recheck proves that no version or active write lease still references them.
 
 The generic upload endpoint is not used for mask tiles, and mask bytes never appear as user-library assets.
+
+## Product interaction and save coordination
+
+- The editor exposes selection, mask brush and mask eraser in the existing Cornfield tool rail. Brush size, hardness, flow and pressure remain contextual canvas controls rather than permanent inspector noise.
+- Entering a mask tool flushes the ordinary project document first. Creating the first mask atomically attaches version `0` to the selected raster and advances the project revision.
+- Existing immutable manifests load with bounded concurrency before Pixi presents the masked node. A missing manifest never falls back to showing the unmasked source.
+- Pointer samples are coalesced into one Worker gesture. Preview mutations update only dirty tiles; pointer-up stages the gesture's complete dirty-tile set for persistence.
+- Mask persistence is debounced and serialized. A successful commit advances both the immutable mask version and project revision; later strokes remain queued against the new version.
+- Selecting another tool or leaving the workspace waits for pending mask and document saves. Revision conflicts and invalid manifests stop autosave with a Chinese actionable message instead of retrying indefinitely.
+- Mask undo/redo is session-local and uses the bounded tile history. Reloading restores the latest saved pixels but intentionally starts a fresh local history.

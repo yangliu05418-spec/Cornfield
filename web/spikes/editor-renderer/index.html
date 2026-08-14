@@ -43,12 +43,19 @@
         width: 256px;
         height: 256px;
       }
+      #raster-mask-correctness {
+        position: fixed;
+        left: -9999px;
+        width: 256px;
+        height: 64px;
+      }
     </style>
   </head>
   <body>
     <main><canvas id="performance" width="1280" height="720"></canvas></main>
     <canvas id="correctness" width="256" height="256"></canvas>
     <canvas id="v2-correctness" width="256" height="256"></canvas>
+    <canvas id="raster-mask-correctness" width="256" height="64"></canvas>
     <output>running</output>
     <script type="module" src="./main.ts"></script>
   </body>

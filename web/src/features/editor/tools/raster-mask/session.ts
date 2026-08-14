@@ -53,11 +53,17 @@ export class RasterMaskSession {
 
   commitStroke(id: string) {
     const stroke = this.#requireStroke(id)
-    const tiles = stroke.takeDirtyTiles()
+    stroke.takeDirtyTiles()
     this.#stroke = undefined
     const patch = stroke.commit()
     const undoRetained = this.history.commit(patch)
-    return this.#status(tiles, patch.changedPixels, undoRetained)
+    return this.#status(
+      this.buffer.snapshotTiles(
+        patch.tiles.map(({ tileX, tileY }) => ({ tileX, tileY })),
+      ),
+      patch.changedPixels,
+      undoRetained,
+    )
   }
 
   cancelStroke(id: string) {
@@ -82,6 +88,13 @@ export class RasterMaskSession {
 
   snapshot(coordinates: ReadonlyArray<{ tileX: number; tileY: number }>) {
     return this.buffer.snapshotTiles(coordinates)
+  }
+
+  hydrate(tiles: readonly RasterMaskTileSnapshot[]) {
+    this.#requireIdle()
+    this.buffer.replaceAllTiles(tiles)
+    this.history.clear()
+    return this.#status(this.buffer.snapshotTiles(tiles))
   }
 
   #mutation(patch: RasterMaskPatch, undoRetained: boolean) {

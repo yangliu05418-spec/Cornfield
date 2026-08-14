@@ -1,4 +1,8 @@
-import type { RasterMaskBrush, RasterMaskPoint } from './tile-mask'
+import type {
+  RasterMaskBrush,
+  RasterMaskPoint,
+  RasterMaskTileSnapshot,
+} from './tile-mask'
 import type {
   RasterMaskWorkerCreated,
   RasterMaskWorkerRequest,
@@ -129,6 +133,10 @@ export class RasterMaskWorkerClient {
 
   redo(): Promise<RasterMaskMutation> {
     return this.#request<RasterMaskMutation>({ type: 'redo' })
+  }
+
+  hydrate(tiles: RasterMaskTileSnapshot[]): Promise<RasterMaskMutation> {
+    return this.#request<RasterMaskMutation>({ type: 'hydrate', tiles })
   }
 
   snapshot(

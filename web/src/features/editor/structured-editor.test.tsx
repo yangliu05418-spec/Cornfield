@@ -110,6 +110,37 @@ afterEach(() => {
 })
 
 describe('StructuredEditor', () => {
+  it('exposes a focused mask tool rail only for an editable raster layer', async () => {
+    apiMock.mockImplementation((path: string) => {
+      if (path === '/api/v1/assets/resolve')
+        return Promise.resolve({ items: [firstAsset, secondAsset] })
+      if (path === '/api/v1/models')
+        return Promise.resolve({ revision: 'test', models: [] })
+      return Promise.resolve({})
+    })
+    render(
+      <QueryClientProvider
+        client={
+          new QueryClient({ defaultOptions: { queries: { retry: false } } })
+        }
+      >
+        <StructuredEditor
+          project={project()}
+          onBack={vi.fn()}
+          onProjectChange={vi.fn()}
+        />
+      </QueryClientProvider>,
+    )
+
+    const brush = screen.getByRole('button', { name: '蒙版画笔' })
+    const eraser = screen.getByRole('button', { name: '蒙版橡皮擦' })
+    expect(brush.hasAttribute('disabled')).toBe(true)
+    expect(eraser.hasAttribute('disabled')).toBe(true)
+    fireEvent.click((await screen.findAllByText('人物'))[0])
+    expect(brush.hasAttribute('disabled')).toBe(false)
+    expect(eraser.hasAttribute('disabled')).toBe(false)
+  })
+
   it('groups selected siblings, undoes locally, and persists the V2 document', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true })
     apiMock.mockImplementation((path: string) => {

@@ -65,6 +65,19 @@ describe('PixiRasterMaskedContentSurface', () => {
     surface.destroy()
     texture.destroy(true)
   })
+
+  it('replaces an immutable manifest and clears tiles omitted by the new version', () => {
+    const texture = contentTexture(512, 256)
+    const surface = new PixiRasterMaskedContentSurface(texture, 512, 256)
+    surface.apply([tile(0, 0, 256, 256, 0)])
+    expect(surface.stats().maskedTiles).toBe(1)
+    surface.replace([tile(1, 0, 256, 256, 128)])
+    expect(surface.stats()).toMatchObject({ maskedTiles: 1, tiles: 1 })
+    expect(surface.container.children[0]?.filters).toBeNull()
+    expect(surface.container.children[1]?.filters).toHaveLength(1)
+    surface.destroy()
+    texture.destroy(true)
+  })
 })
 
 function contentTexture(width: number, height: number) {

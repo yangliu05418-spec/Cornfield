@@ -1,4 +1,5 @@
 import type { EditorRenderDocument } from './scene-compiler'
+import type { RasterMaskTileSnapshot } from '../tools/raster-mask/tile-mask'
 
 export type EditorViewport = {
   zoom: number
@@ -17,6 +18,17 @@ export type EditorRenderAsset = {
   width: number
   height: number
   variants: EditorAssetVariant[]
+}
+
+export type EditorRasterMaskRenderResource = {
+  id: string
+  version: number
+  width: number
+  height: number
+  defaultAlpha: number
+  generation: number
+  tiles: readonly RasterMaskTileSnapshot[]
+  changedTiles?: readonly RasterMaskTileSnapshot[]
 }
 
 export type EditorRendererStats = {
@@ -52,6 +64,7 @@ export interface EditorRenderer {
   sync: (
     document: EditorRenderDocument,
     assets: ReadonlyMap<string, EditorRenderAsset>,
+    rasterMasks?: ReadonlyMap<string, EditorRasterMaskRenderResource>,
   ) => Promise<void>
   resize: (width: number, height: number) => void
   setViewport: (viewport: EditorViewport) => void

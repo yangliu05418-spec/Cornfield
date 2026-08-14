@@ -2,12 +2,18 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 
 import type { EditorRenderDocument } from './scene-compiler'
 import type { Asset } from '#/lib/api'
-import type { EditorRenderAsset, EditorRenderer, EditorViewport } from './types'
+import type {
+  EditorRasterMaskRenderResource,
+  EditorRenderAsset,
+  EditorRenderer,
+  EditorViewport,
+} from './types'
 
 type PixiSurfaceProps = {
   enabled: boolean
   document: EditorRenderDocument
   assets?: ReadonlyMap<string, Asset>
+  rasterMasks?: ReadonlyMap<string, EditorRasterMaskRenderResource>
   viewport: EditorViewport
   onUnavailable: (reason: string) => void
   onPresentedChange: (presented: boolean) => void
@@ -17,6 +23,7 @@ export function PixiSurface({
   enabled,
   document,
   assets,
+  rasterMasks,
   viewport,
   onUnavailable,
   onPresentedChange,
@@ -129,14 +136,14 @@ export function PixiSurface({
     const renderer = rendererRef.current
     if (!enabled || !ready || !renderer) return
     void renderer
-      .sync(document, renderAssets)
+      .sync(document, renderAssets, rasterMasks)
       .then(() => onPresentedChangeRef.current(true))
       .catch((error: unknown) => {
         onUnavailableRef.current(
           error instanceof Error ? error.message : '画布资源加载失败',
         )
       })
-  }, [document, enabled, ready, renderAssets])
+  }, [document, enabled, rasterMasks, ready, renderAssets])
 
   if (!enabled) return null
   return (

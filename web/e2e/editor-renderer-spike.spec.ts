@@ -94,6 +94,12 @@ test('Pixi renderer meets the Stage A correctness and resource gate', async ({
     bytesAfterDefault: 0,
   })
   expect(result.rasterMaskPixi.largeSurfaceCreateMs).toBeLessThan(1_000)
+  expect(result.rasterMaskRenderer).toEqual({
+    initialLeftAlpha: 255,
+    initialRightAlpha: 0,
+    updatedLeftAlpha: 0,
+    updatedRightAlpha: 255,
+  })
   expect(result.contextLossSupported).toBe(true)
   expect(result.contextLostObserved).toBe(true)
   expect(result.contextRestoredObserved).toBe(true)
@@ -180,6 +186,12 @@ declare global {
         uploads: number
         tilesAfterDefault: number
         bytesAfterDefault: number
+      }
+      rasterMaskRenderer: {
+        initialLeftAlpha: number
+        initialRightAlpha: number
+        updatedLeftAlpha: number
+        updatedRightAlpha: number
       }
       contextLossSupported: boolean
       contextLostObserved: boolean

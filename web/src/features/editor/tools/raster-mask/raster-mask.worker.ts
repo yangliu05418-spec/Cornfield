@@ -56,6 +56,10 @@ function handle(request: RasterMaskWorkerRequest): RasterMaskWorkerResult {
       return current.undo()
     case 'redo':
       return current.redo()
+    case 'hydrate':
+      if (request.tiles.length > 1024)
+        throw new RangeError('too many raster mask tiles')
+      return current.hydrate(request.tiles)
     case 'snapshot':
       if (request.coordinates.length > 1024)
         throw new RangeError('too many raster mask tiles')

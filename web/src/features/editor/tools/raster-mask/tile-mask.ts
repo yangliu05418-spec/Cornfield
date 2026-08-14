@@ -160,6 +160,27 @@ export class RasterMaskBuffer {
   replaceTiles(snapshots: readonly RasterMaskTileSnapshot[]) {
     if (this.#activeStroke)
       throw new Error('cannot replace tiles during an active stroke')
+    this.#validateSnapshots(snapshots)
+    for (const snapshot of snapshots) {
+      const tile = this.#mutableTile(snapshot.tileX, snapshot.tileY)
+      tile.data.set(snapshot.alpha)
+      this.#compact(snapshot.tileX, snapshot.tileY)
+    }
+  }
+
+  replaceAllTiles(snapshots: readonly RasterMaskTileSnapshot[]) {
+    if (this.#activeStroke)
+      throw new Error('cannot replace tiles during an active stroke')
+    this.#validateSnapshots(snapshots)
+    this.#tiles.clear()
+    for (const snapshot of snapshots) {
+      const tile = this.#mutableTile(snapshot.tileX, snapshot.tileY)
+      tile.data.set(snapshot.alpha)
+      this.#compact(snapshot.tileX, snapshot.tileY)
+    }
+  }
+
+  #validateSnapshots(snapshots: readonly RasterMaskTileSnapshot[]) {
     const seen = new Set<number>()
     for (const snapshot of snapshots) {
       const dimensions = this.#tileDimensions(snapshot.tileX, snapshot.tileY)
@@ -173,9 +194,6 @@ export class RasterMaskBuffer {
       )
         throw new TypeError('invalid raster mask tile snapshot')
       seen.add(key)
-      const tile = this.#mutableTile(snapshot.tileX, snapshot.tileY)
-      tile.data.set(snapshot.alpha)
-      this.#compact(snapshot.tileX, snapshot.tileY)
     }
   }
 

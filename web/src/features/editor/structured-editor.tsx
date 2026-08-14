@@ -3,10 +3,12 @@ import {
   ArrowDown,
   ArrowLeft,
   ArrowUp,
+  Brush,
   ChevronDown,
   ChevronRight,
   Eye,
   EyeOff,
+  Eraser,
   FolderMinus,
   FolderPlus,
   Layers,
@@ -14,6 +16,7 @@ import {
   Link2Off,
   Lock,
   Maximize,
+  MousePointer2,
   CircleDashed,
   Redo2,
   Save,
@@ -61,6 +64,8 @@ import {
 import type { EditorLayerDropPosition } from './domain/layer-panel-model'
 import { PixiSurface } from './renderer/pixi-surface'
 import { StructuredCanvasInteraction } from './structured-canvas-interaction'
+import { RasterMaskOverlay } from './tools/raster-mask/raster-mask-overlay'
+import { useRasterMaskEditor } from './tools/raster-mask/use-raster-mask-editor'
 import { useEditorOperations } from './use-editor-operations'
 import {
   invertEditorShapeMask,
@@ -113,6 +118,7 @@ export function StructuredEditor({
   const revisionRef = useRef(project.revision)
   const saveTimerRef = useRef<number | undefined>(undefined)
   const saveTailRef = useRef<Promise<void> | null>(null)
+  const rasterFlushRef = useRef<() => Promise<void>>(async () => undefined)
   const dirtyRef = useRef(false)
   const saveBlockedRef = useRef(false)
   const [, setHistoryRevision] = useState(0)
@@ -418,7 +424,10 @@ export function StructuredEditor({
   async function leave() {
     try {
       await Promise.race([
-        flushSaves(),
+        (async () => {
+          await flushSaves()
+          await rasterFlushRef.current()
+        })(),
         new Promise((_, reject) =>
           window.setTimeout(() => reject(new Error('save timeout')), 3_000),
         ),
@@ -439,6 +448,31 @@ export function StructuredEditor({
       else await saveNow()
     }
   }
+
+  const acceptRasterMaskDocument = useCallback(
+    (next: EditorDocumentV2, revision: number) => {
+      revisionRef.current = revision
+      dirtyRef.current = false
+      documentRef.current = next
+      setDocument(next)
+      setSaveState('saved')
+      onProjectChange({ ...project, document: next, revision })
+    },
+    [onProjectChange, project],
+  )
+
+  const rasterMask = useRasterMaskEditor({
+    projectID: project.id,
+    document,
+    activeNode,
+    assets,
+    getRevision: () => revisionRef.current,
+    flushDocumentSaves: flushSaves,
+    onDocumentFromServer: acceptRasterMaskDocument,
+    onNotice: setNotice,
+  })
+  rasterFlushRef.current = rasterMask.flush
+  const rasterEditing = rasterMask.tool !== 'select'
 
   function buildLayerSetDocument(layerSet: LayerSet): EditorDocumentV2 {
     return {
@@ -543,7 +577,7 @@ export function StructuredEditor({
             </button>
             <strong className="structured-project-name">{project.name}</strong>
             <span className={`editor-save-state is-${saveState}`}>
-              {saveStateLabel(saveState)}
+              {rasterMask.saving ? '正在保存蒙版' : saveStateLabel(saveState)}
             </span>
             {saveState === 'offline' && (
               <button type="button" onClick={() => void saveNow()}>
@@ -555,21 +589,33 @@ export function StructuredEditor({
             <button
               type="button"
               aria-label="撤销"
-              disabled={!historyRef.current.canUndo}
-              onClick={undo}
+              disabled={
+                rasterEditing
+                  ? !rasterMask.history.canUndo
+                  : !historyRef.current.canUndo
+              }
+              onClick={() => (rasterEditing ? void rasterMask.undo() : undo())}
             >
               <Undo2 size={16} />
             </button>
             <button
               type="button"
               aria-label="重做"
-              disabled={!historyRef.current.canRedo}
-              onClick={redo}
+              disabled={
+                rasterEditing
+                  ? !rasterMask.history.canRedo
+                  : !historyRef.current.canRedo
+              }
+              onClick={() => (rasterEditing ? void rasterMask.redo() : redo())}
             >
               <Redo2 size={16} />
             </button>
           </div>
-          <div className="editor-topbar-group structured-actions">
+          <div
+            className={`editor-topbar-group structured-actions${rasterEditing ? ' is-locked' : ''}`}
+            aria-disabled={rasterEditing}
+            inert={rasterEditing ? true : undefined}
+          >
             <button
               type="button"
               disabled={operations.running || activeNode?.type !== 'raster'}
@@ -591,6 +637,7 @@ export function StructuredEditor({
                 operations.running ||
                 activeNode?.type !== 'raster' ||
                 activeNode.mask_id !== undefined ||
+                activeNode.pixel_mask !== undefined ||
                 activeNode.crop !== undefined
               }
               onClick={() =>
@@ -608,6 +655,7 @@ export function StructuredEditor({
                 operations.running ||
                 activeNode?.type !== 'raster' ||
                 activeNode.mask_id !== undefined ||
+                activeNode.pixel_mask !== undefined ||
                 activeNode.crop !== undefined
               }
               onClick={() =>
@@ -700,11 +748,126 @@ export function StructuredEditor({
         </header>
 
         <section className="structured-editor-body">
+          <nav className="structured-tool-rail" aria-label="画布工具">
+            <button
+              type="button"
+              className={rasterMask.tool === 'select' ? 'active' : undefined}
+              aria-label="选择与移动"
+              title="选择与移动"
+              onClick={() => void rasterMask.activate('select')}
+            >
+              <MousePointer2 size={18} />
+            </button>
+            <span className="structured-tool-divider" />
+            <button
+              type="button"
+              className={rasterMask.tool === 'brush' ? 'active' : undefined}
+              aria-label="蒙版画笔"
+              title="蒙版画笔"
+              disabled={
+                operations.running ||
+                rasterMask.loading ||
+                !rasterMask.available
+              }
+              onClick={() => void rasterMask.activate('brush')}
+            >
+              <Brush size={18} />
+            </button>
+            <button
+              type="button"
+              className={rasterMask.tool === 'eraser' ? 'active' : undefined}
+              aria-label="蒙版橡皮擦"
+              title="蒙版橡皮擦"
+              disabled={
+                operations.running ||
+                rasterMask.loading ||
+                !rasterMask.available
+              }
+              onClick={() => void rasterMask.activate('eraser')}
+            >
+              <Eraser size={18} />
+            </button>
+          </nav>
           <div className="structured-canvas" ref={viewportRef}>
+            {rasterEditing && (
+              <div className="raster-mask-options" aria-label="蒙版画笔参数">
+                <label>
+                  <span>大小</span>
+                  <input
+                    type="range"
+                    min="1"
+                    max="1024"
+                    value={rasterMask.settings.size}
+                    onChange={(event) =>
+                      rasterMask.setSettings((value) => ({
+                        ...value,
+                        size: Number(event.target.value),
+                      }))
+                    }
+                  />
+                  <output>{rasterMask.settings.size}px</output>
+                </label>
+                <label>
+                  <span>硬度</span>
+                  <input
+                    type="range"
+                    min="0"
+                    max="1"
+                    step="0.01"
+                    value={rasterMask.settings.hardness}
+                    onChange={(event) =>
+                      rasterMask.setSettings((value) => ({
+                        ...value,
+                        hardness: Number(event.target.value),
+                      }))
+                    }
+                  />
+                  <output>
+                    {Math.round(rasterMask.settings.hardness * 100)}%
+                  </output>
+                </label>
+                <label>
+                  <span>流量</span>
+                  <input
+                    type="range"
+                    min="0.01"
+                    max="1"
+                    step="0.01"
+                    value={rasterMask.settings.opacity}
+                    onChange={(event) =>
+                      rasterMask.setSettings((value) => ({
+                        ...value,
+                        opacity: Number(event.target.value),
+                      }))
+                    }
+                  />
+                  <output>
+                    {Math.round(rasterMask.settings.opacity * 100)}%
+                  </output>
+                </label>
+                <label className="raster-pressure-toggle">
+                  <input
+                    type="checkbox"
+                    checked={rasterMask.settings.pressure}
+                    onChange={(event) =>
+                      rasterMask.setSettings((value) => ({
+                        ...value,
+                        pressure: event.target.checked,
+                      }))
+                    }
+                  />
+                  压感
+                </label>
+                <span className="raster-mask-mode">
+                  {rasterMask.tool === 'brush' ? '恢复画面' : '隐藏画面'}
+                </span>
+              </div>
+            )}
             <PixiSurface
               enabled
               document={document}
               assets={assets}
+              rasterMasks={rasterMask.resources}
               viewport={view}
               onUnavailable={(reason) => setNotice(`图形渲染不可用：${reason}`)}
               onPresentedChange={setPresented}
@@ -715,7 +878,7 @@ export function StructuredEditor({
               view={view}
               selectedIDs={selectedIDs}
               activeID={activeID}
-              disabled={operations.running}
+              disabled={operations.running || rasterEditing}
               onViewChange={setView}
               onSelectionChange={(ids, active) => {
                 setSelectedIDs(new Set(ids))
@@ -727,6 +890,27 @@ export function StructuredEditor({
               shapeSelection={shapeTool}
               onShapeSelection={applyShapeMask}
             />
+            {rasterEditing &&
+              activeNode?.type === 'raster' &&
+              activeNode.asset_id &&
+              assets.get(activeNode.asset_id) && (
+                <RasterMaskOverlay
+                  viewportRef={viewportRef}
+                  document={document}
+                  node={activeNode}
+                  asset={assets.get(activeNode.asset_id)!}
+                  view={view}
+                  tool={rasterMask.tool === 'eraser' ? 'eraser' : 'brush'}
+                  brush={rasterMask.brush}
+                  disabled={
+                    operations.running ||
+                    rasterMask.loading ||
+                    rasterMask.blocked
+                  }
+                  mutate={rasterMask.mutate}
+                  onNotice={setNotice}
+                />
+              )}
             {assetsQuery.isError ? (
               <div className="structured-render-wait" role="alert">
                 工程资源无法读取，请刷新后重试
@@ -754,7 +938,11 @@ export function StructuredEditor({
             )}
           </div>
 
-          <aside className="structured-layer-panel">
+          <aside
+            className={`structured-layer-panel${rasterEditing ? ' is-locked' : ''}`}
+            aria-disabled={rasterEditing}
+            inert={rasterEditing ? true : undefined}
+          >
             <header>
               <div>
                 <strong>图层</strong>
@@ -888,7 +1076,7 @@ export function StructuredEditor({
                                 : '图层')}
                         </strong>
                         <small>
-                          {node.mask_id || node.shape_mask
+                          {node.mask_id || node.shape_mask || node.pixel_mask
                             ? '含蒙版'
                             : node.type === 'group'
                               ? '组'

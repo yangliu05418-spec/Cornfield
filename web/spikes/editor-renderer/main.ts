@@ -4,7 +4,10 @@ import { PixiEditorRenderer } from '../../src/features/editor/renderer/pixi-rend
 import { PixiRasterMaskedContentSurface } from '../../src/features/editor/renderer/raster-masked-content-surface'
 import type { EditorDocument } from '../../src/features/editor/domain/document'
 import type { EditorDocumentV2 } from '../../src/features/editor/domain/document-v2'
-import type { EditorRenderAsset } from '../../src/features/editor/renderer/types'
+import type {
+  EditorRasterMaskRenderResource,
+  EditorRenderAsset,
+} from '../../src/features/editor/renderer/types'
 import { compileEditorRenderScene } from '../../src/features/editor/renderer/scene-compiler'
 import { createRasterMaskWorkerClient } from '../../src/features/editor/tools/raster-mask/worker-client'
 
@@ -37,6 +40,7 @@ type SpikeResult = {
   resolutionTransitionBytes: number[]
   rasterMaskWorker: RasterMaskWorkerSpike
   rasterMaskPixi: RasterMaskPixiSpike
+  rasterMaskRenderer: RasterMaskRendererSpike
   contextLossSupported: boolean
   contextLostObserved: boolean
   contextRestoredObserved: boolean
@@ -86,12 +90,22 @@ type RasterMaskPixiSpike = {
   bytesAfterDefault: number
 }
 
+type RasterMaskRendererSpike = {
+  initialLeftAlpha: number
+  initialRightAlpha: number
+  updatedLeftAlpha: number
+  updatedRightAlpha: number
+}
+
 const output = document.querySelector('output')!
 const canvas = document.querySelector<HTMLCanvasElement>('#performance')!
 const correctnessCanvas =
   document.querySelector<HTMLCanvasElement>('#correctness')!
 const v2CorrectnessCanvas =
   document.querySelector<HTMLCanvasElement>('#v2-correctness')!
+const rasterMaskCorrectnessCanvas = document.querySelector<HTMLCanvasElement>(
+  '#raster-mask-correctness',
+)!
 void run().catch((error: unknown) => {
   const result: SpikeResult = {
     ok: false,
@@ -114,6 +128,7 @@ void run().catch((error: unknown) => {
     resolutionTransitionBytes: [],
     rasterMaskWorker: emptyRasterMaskWorkerSpike(),
     rasterMaskPixi: emptyRasterMaskPixiSpike(),
+    rasterMaskRenderer: emptyRasterMaskRendererSpike(),
     contextLossSupported: false,
     contextLostObserved: false,
     contextRestoredObserved: false,
@@ -128,8 +143,15 @@ void run().catch((error: unknown) => {
 })
 
 async function run() {
+  output.value = 'raster-mask-worker'
   const rasterMaskWorker = await runRasterMaskWorkerFixture()
+  output.value = 'raster-mask-pixi'
   const rasterMaskPixi = await runRasterMaskPixiFixture()
+  output.value = 'raster-mask-renderer'
+  const rasterMaskRenderer = await runRasterMaskRendererFixture(
+    rasterMaskCorrectnessCanvas,
+  )
+  output.value = 'pixel-correctness'
   const pixelComparison = await runPixelCorrectnessFixture(correctnessCanvas)
   const v2PixelComparison =
     await runV2PixelCorrectnessFixture(v2CorrectnessCanvas)
@@ -240,6 +262,7 @@ async function run() {
     resolutionTransitionBytes,
     rasterMaskWorker,
     rasterMaskPixi,
+    rasterMaskRenderer,
     contextLossSupported,
     contextLostObserved,
     contextRestoredObserved,
@@ -249,6 +272,111 @@ async function run() {
   }
   window.__EDITOR_SPIKE__ = result
   output.value = JSON.stringify(result, null, 2)
+}
+
+async function runRasterMaskRendererFixture(targetCanvas: HTMLCanvasElement) {
+  const maskID = '00000000-0000-4000-8000-000000000099'
+  const source = document.createElement('canvas')
+  source.width = 256
+  source.height = 64
+  source.getContext('2d')!.fillRect(0, 0, source.width, source.height)
+  const url = URL.createObjectURL(await canvasToBlob(source))
+  const assets = new Map<string, EditorRenderAsset>([
+    [
+      'pixel-mask-source',
+      {
+        id: 'pixel-mask-source',
+        width: 256,
+        height: 64,
+        variants: [{ url, width: 256, height: 64 }],
+      },
+    ],
+  ])
+  const fixture: EditorDocumentV2 = {
+    schema_version: 2,
+    renderer_semantics_version: 1,
+    canvas: { width: 256, height: 64 },
+    nodes: [
+      {
+        id: 'pixel-masked-node',
+        type: 'raster',
+        parent_id: null,
+        order_key: '00000001',
+        transform: [1, 0, 0, 1, 0, 0],
+        opacity: 1,
+        blend_mode: 'normal',
+        visible: true,
+        locked: false,
+        asset_id: 'pixel-mask-source',
+        pixel_mask: { resource_id: maskID, version: 1 },
+      },
+    ],
+  }
+  const initialTile = {
+    tileX: 0,
+    tileY: 0,
+    width: 256,
+    height: 64,
+    alpha: halfTile(255, 0),
+  }
+  const renderer = new PixiEditorRenderer()
+  try {
+    output.value = 'raster-mask-renderer:init'
+    await renderer.init(targetCanvas, {
+      width: 256,
+      height: 64,
+      resolution: 1,
+      preserveDrawingBuffer: true,
+    })
+    renderer.setViewport({ zoom: 100, panX: 0, panY: 0 })
+    const initialResource: EditorRasterMaskRenderResource = {
+      id: maskID,
+      version: 1,
+      width: 256,
+      height: 64,
+      defaultAlpha: 255,
+      generation: 1,
+      tiles: [initialTile],
+    }
+    output.value = 'raster-mask-renderer:first-sync'
+    await renderer.sync(
+      fixture,
+      assets,
+      new Map([[initialResource.id, initialResource]]),
+    )
+    output.value = 'raster-mask-renderer:first-render'
+    renderer.render()
+    await nextFrame()
+    output.value = 'raster-mask-renderer:first-read'
+    const initial = await canvasPixels(targetCanvas)
+    const updatedTile = { ...initialTile, alpha: halfTile(0, 255) }
+    const updatedResource = {
+      ...initialResource,
+      generation: 2,
+      tiles: [updatedTile],
+      changedTiles: [updatedTile],
+    }
+    output.value = 'raster-mask-renderer:second-sync'
+    await renderer.sync(
+      fixture,
+      assets,
+      new Map([[updatedResource.id, updatedResource]]),
+    )
+    output.value = 'raster-mask-renderer:second-render'
+    renderer.render()
+    await nextFrame()
+    output.value = 'raster-mask-renderer:second-read'
+    const updated = await canvasPixels(targetCanvas)
+    return {
+      initialLeftAlpha: pixelAlpha(initial, 256, 64, 32),
+      initialRightAlpha: pixelAlpha(initial, 256, 192, 32),
+      updatedLeftAlpha: pixelAlpha(updated, 256, 64, 32),
+      updatedRightAlpha: pixelAlpha(updated, 256, 192, 32),
+    }
+  } finally {
+    renderer.destroy()
+    URL.revokeObjectURL(url)
+  }
 }
 
 async function runRasterMaskPixiFixture(): Promise<RasterMaskPixiSpike> {
@@ -408,6 +536,15 @@ function emptyRasterMaskPixiSpike(): RasterMaskPixiSpike {
     uploads: 0,
     tilesAfterDefault: 0,
     bytesAfterDefault: 0,
+  }
+}
+
+function emptyRasterMaskRendererSpike(): RasterMaskRendererSpike {
+  return {
+    initialLeftAlpha: 0,
+    initialRightAlpha: 0,
+    updatedLeftAlpha: 0,
+    updatedRightAlpha: 0,
   }
 }
 

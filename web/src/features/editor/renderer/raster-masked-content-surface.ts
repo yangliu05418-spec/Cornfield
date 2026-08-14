@@ -1,4 +1,11 @@
-import { Container, MaskFilter, Rectangle, Sprite, Texture } from 'pixi.js'
+import {
+  ColorMatrixFilter,
+  Container,
+  MaskFilter,
+  Rectangle,
+  Sprite,
+  Texture,
+} from 'pixi.js'
 
 import { RASTER_MASK_TILE_SIZE } from '../tools/raster-mask/tile-mask'
 import type { RasterMaskTileSnapshot } from '../tools/raster-mask/tile-mask'
@@ -8,6 +15,7 @@ type ContentTile = {
   texture: Texture
   sprite: Sprite
   filter?: MaskFilter
+  colorFilter?: ColorMatrixFilter
 }
 
 export class PixiRasterMaskedContentSurface {
@@ -18,6 +26,7 @@ export class PixiRasterMaskedContentSurface {
   readonly #contentHeight: number
   readonly #defaultAlpha: number
   readonly #tiles = new Map<string, ContentTile>()
+  readonly #maskedTiles = new Set<string>()
   #destroyed = false
 
   constructor(
@@ -48,10 +57,12 @@ export class PixiRasterMaskedContentSurface {
     for (const snapshot of snapshots) {
       const key = tileKey(snapshot.tileX, snapshot.tileY)
       if (isDefaultTile(snapshot.alpha, this.#defaultAlpha)) {
+        this.#maskedTiles.delete(key)
         if (this.#defaultAlpha === 0) this.#removeTile(key)
         else this.#clearMask(this.#tiles.get(key))
         continue
       }
+      this.#maskedTiles.add(key)
       const tile =
         this.#tiles.get(key) ?? this.#createTile(snapshot.tileX, snapshot.tileY)
       const maskSprite = this.maskSurface.maskSprite(
@@ -61,8 +72,47 @@ export class PixiRasterMaskedContentSurface {
       if (!maskSprite) throw new Error('raster mask tile was not materialized')
       if (!tile.filter) {
         tile.filter = new MaskFilter({ sprite: maskSprite, channel: 'red' })
-        tile.sprite.filters = [tile.filter]
+        this.#syncFilters(tile)
       }
+    }
+  }
+
+  replace(snapshots: readonly RasterMaskTileSnapshot[]) {
+    this.#assertAlive()
+    const next = new Set(
+      snapshots.map((snapshot) => tileKey(snapshot.tileX, snapshot.tileY)),
+    )
+    const resets: RasterMaskTileSnapshot[] = []
+    for (const key of this.#maskedTiles) {
+      if (next.has(key)) continue
+      const [tileX, tileY] = key.split(':').map(Number)
+      const width = Math.min(
+        RASTER_MASK_TILE_SIZE,
+        this.#contentWidth - tileX * RASTER_MASK_TILE_SIZE,
+      )
+      const height = Math.min(
+        RASTER_MASK_TILE_SIZE,
+        this.#contentHeight - tileY * RASTER_MASK_TILE_SIZE,
+      )
+      const alpha = new Uint8Array(width * height)
+      alpha.fill(this.#defaultAlpha)
+      resets.push({ tileX, tileY, width, height, alpha })
+    }
+    this.apply([...resets, ...snapshots])
+  }
+
+  setColorMatrix(matrix?: readonly number[]) {
+    this.#assertAlive()
+    for (const tile of this.#tiles.values()) {
+      if (!matrix) {
+        tile.colorFilter?.destroy()
+        delete tile.colorFilter
+      } else {
+        const filter = tile.colorFilter ?? new ColorMatrixFilter()
+        filter.matrix = [...matrix] as typeof filter.matrix
+        tile.colorFilter = filter
+      }
+      this.#syncFilters(tile)
     }
   }
 
@@ -79,6 +129,7 @@ export class PixiRasterMaskedContentSurface {
   destroy() {
     if (this.#destroyed) return
     for (const key of [...this.#tiles.keys()]) this.#removeTile(key)
+    this.#maskedTiles.clear()
     this.maskSurface.container.removeFromParent()
     this.maskSurface.destroy()
     this.container.destroy({ children: true })
@@ -128,9 +179,17 @@ export class PixiRasterMaskedContentSurface {
 
   #clearMask(tile: ContentTile | undefined) {
     if (!tile?.filter) return
-    tile.sprite.filters = null
     tile.filter.destroy()
     delete tile.filter
+    this.#syncFilters(tile)
+  }
+
+  #syncFilters(tile: ContentTile) {
+    const filters = [tile.colorFilter, tile.filter].filter(
+      (filter): filter is ColorMatrixFilter | MaskFilter =>
+        filter !== undefined,
+    )
+    tile.sprite.filters = filters.length ? filters : null
   }
 
   #removeTile(key: string) {
@@ -138,6 +197,7 @@ export class PixiRasterMaskedContentSurface {
     if (!tile) return
     this.#tiles.delete(key)
     this.#clearMask(tile)
+    tile.colorFilter?.destroy()
     tile.sprite.removeFromParent()
     tile.sprite.destroy()
     tile.texture.destroy(false)

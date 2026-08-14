@@ -32,6 +32,10 @@ export type RasterMaskWorkerRequest =
   | (RequestBase & { type: 'undo' })
   | (RequestBase & { type: 'redo' })
   | (RequestBase & {
+      type: 'hydrate'
+      tiles: RasterMaskTileSnapshot[]
+    })
+  | (RequestBase & {
       type: 'snapshot'
       coordinates: Array<{ tileX: number; tileY: number }>
     })

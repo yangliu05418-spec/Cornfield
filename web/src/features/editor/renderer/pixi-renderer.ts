@@ -20,12 +20,14 @@ import { planEditorSceneAssetVariants } from '../resources/variant-plan'
 import { LatestSyncCoordinator } from './sync-coordinator'
 import { compileEditorRenderScene } from './scene-compiler'
 import { isIdentityEditorColorMatrixV1 } from './color-effects'
+import { PixiRasterMaskedContentSurface } from './raster-masked-content-surface'
 import type {
   EditorRenderDocument,
   EditorSceneRasterNode,
 } from './scene-compiler'
 import type {
   EditorRenderAsset,
+  EditorRasterMaskRenderResource,
   EditorRenderer,
   EditorRendererOptions,
   EditorRendererStats,
@@ -34,11 +36,21 @@ import type {
 
 type SceneNode = {
   container: Container
-  sprite: Sprite
+  visual: Container | Sprite
+  sprite?: Sprite
+  rasterSurface?: PixiRasterMaskedContentSurface
   mask?: Graphics
   assetID: string
   variantURL: string
+  maskResourceID?: string
+  maskVersion?: number
+  maskGeneration?: number
   colorFilter?: ColorMatrixFilter
+}
+
+type RenderResources = {
+  assets: ReadonlyMap<string, EditorRenderAsset>
+  rasterMasks: ReadonlyMap<string, EditorRasterMaskRenderResource>
 }
 
 type TextureResource = {
@@ -66,11 +78,11 @@ export class PixiEditorRenderer implements EditorRenderer {
   #resourceTimer?: number
   #latestDocument?: EditorRenderDocument
   #latestAssets?: ReadonlyMap<string, EditorRenderAsset>
+  #latestRasterMasks: ReadonlyMap<string, EditorRasterMaskRenderResource> =
+    new Map()
   #syncs = new LatestSyncCoordinator(
-    (
-      document: EditorRenderDocument,
-      assets: ReadonlyMap<string, EditorRenderAsset>,
-    ) => this.#syncScene(document, assets),
+    (document: EditorRenderDocument, resources: RenderResources) =>
+      this.#syncScene(document, resources),
   )
   #contextRecoveries = 0
   #destroyed = false
@@ -86,7 +98,11 @@ export class PixiEditorRenderer implements EditorRenderer {
   #restoredHandler = () => {
     this.#contextLost = false
     if (this.#latestDocument && this.#latestAssets) {
-      void this.sync(this.#latestDocument, this.#latestAssets)
+      void this.sync(
+        this.#latestDocument,
+        this.#latestAssets,
+        this.#latestRasterMasks,
+      )
         .then(() => {
           this.#contextRecoveries += 1
           this.#onContextChange?.(false)
@@ -137,19 +153,22 @@ export class PixiEditorRenderer implements EditorRenderer {
   async sync(
     document: EditorRenderDocument,
     assets: ReadonlyMap<string, EditorRenderAsset>,
+    rasterMasks: ReadonlyMap<
+      string,
+      EditorRasterMaskRenderResource
+    > = new Map(),
   ) {
     this.#assertReady()
     this.#latestDocument = document
     this.#latestAssets = assets
-    return this.#syncs.enqueue(document, assets)
+    this.#latestRasterMasks = rasterMasks
+    return this.#syncs.enqueue(document, { assets, rasterMasks })
   }
 
-  async #syncScene(
-    document: EditorRenderDocument,
-    assets: ReadonlyMap<string, EditorRenderAsset>,
-  ) {
+  async #syncScene(document: EditorRenderDocument, resources: RenderResources) {
     if (this.#destroyed) return
     const scene = compileEditorRenderScene(document)
+    const { assets, rasterMasks } = resources
     const plan = planEditorSceneAssetVariants(
       scene,
       assets,
@@ -170,7 +189,11 @@ export class PixiEditorRenderer implements EditorRenderer {
     await mapWithConcurrency(scene.nodes, 6, async (object) => {
       const asset = assets.get(object.assetID)
       const variant = plan.variants.get(object.id)
-      if (asset && variant) await this.#syncObject(object, asset, variant)
+      const rasterMask = object.pixelMask
+        ? rasterMasks.get(object.pixelMask.resource_id)
+        : undefined
+      if (asset && variant && (!object.pixelMask || rasterMask))
+        await this.#syncObject(object, asset, variant, rasterMask)
       else {
         const node = this.#nodes.get(object.id)
         if (node) this.#removeNode(object.id, node)
@@ -246,9 +269,10 @@ export class PixiEditorRenderer implements EditorRenderer {
     this.#canvas = undefined
     this.#latestDocument = undefined
     this.#latestAssets = undefined
+    this.#latestRasterMasks = new Map()
     this.#textureBudgetExceeded = false
-    this.#syncs = new LatestSyncCoordinator((document, assets) =>
-      this.#syncScene(document, assets),
+    this.#syncs = new LatestSyncCoordinator((document, resources) =>
+      this.#syncScene(document, resources),
     )
     this.#contextRecoveries = 0
   }
@@ -256,19 +280,26 @@ export class PixiEditorRenderer implements EditorRenderer {
   async settleResources() {
     window.clearTimeout(this.#resourceTimer)
     if (!this.#latestDocument || !this.#latestAssets || this.#destroyed) return
-    await this.sync(this.#latestDocument, this.#latestAssets)
+    await this.sync(
+      this.#latestDocument,
+      this.#latestAssets,
+      this.#latestRasterMasks,
+    )
   }
 
   async #syncObject(
     object: EditorSceneRasterNode,
     asset: EditorRenderAsset,
     variant: EditorRenderAsset['variants'][number],
+    rasterMask?: EditorRasterMaskRenderResource,
   ) {
     let node = this.#nodes.get(object.id)
+    const maskResourceID = rasterMask?.id
     if (
       !node ||
       node.assetID !== object.assetID ||
-      node.variantURL !== variant.url
+      node.variantURL !== variant.url ||
+      node.maskResourceID !== maskResourceID
     ) {
       const resource = await this.#textures.retain(
         variant.url,
@@ -284,24 +315,56 @@ export class PixiEditorRenderer implements EditorRenderer {
       const container = new Container()
       container.cullable = true
       container.cullArea = new Rectangle(0, 0, asset.width, asset.height)
-      const sprite = new Sprite(texture)
-      sprite.width = asset.width
-      sprite.height = asset.height
-      container.addChild(sprite)
+      let sprite: Sprite | undefined
+      let rasterSurface: PixiRasterMaskedContentSurface | undefined
+      let visual: Container | Sprite
+      if (rasterMask) {
+        rasterSurface = new PixiRasterMaskedContentSurface(
+          texture,
+          rasterMask.width,
+          rasterMask.height,
+          rasterMask.defaultAlpha,
+        )
+        rasterSurface.apply(rasterMask.tiles)
+        visual = rasterSurface.container
+        container.addChild(visual)
+      } else {
+        sprite = new Sprite(texture)
+        sprite.width = asset.width
+        sprite.height = asset.height
+        visual = sprite
+        container.addChild(sprite)
+      }
       this.#content.addChild(container)
       node = {
         container,
+        visual,
         sprite,
+        rasterSurface,
         assetID: object.assetID,
         variantURL: variant.url,
+        maskResourceID,
+        maskVersion: rasterMask?.version,
+        maskGeneration: rasterMask?.generation,
       }
       this.#nodes.set(object.id, node)
+    } else if (
+      rasterMask &&
+      node.rasterSurface &&
+      (node.maskVersion !== rasterMask.version ||
+        node.maskGeneration !== rasterMask.generation)
+    ) {
+      if (rasterMask.changedTiles)
+        node.rasterSurface.apply(rasterMask.changedTiles)
+      else node.rasterSurface.replace(rasterMask.tiles)
+      node.maskVersion = rasterMask.version
+      node.maskGeneration = rasterMask.generation
     }
     node.container.setFromMatrix(new Matrix(...object.transform))
     node.container.alpha = object.role === 'mask' ? 1 : object.opacity
     node.container.blendMode =
       object.role === 'mask' ? 'normal' : object.blendMode
-    node.sprite.alpha = 1
+    if (node.sprite) node.sprite.alpha = 1
     node.container.visible = object.visible
     node.container.zIndex = object.order
     this.#syncCrop(node, object, asset)
@@ -311,11 +374,17 @@ export class PixiEditorRenderer implements EditorRenderer {
 
   #syncEffects(node: SceneNode, object: EditorSceneRasterNode) {
     if (isIdentityEditorColorMatrixV1(object.colorMatrix)) {
-      node.sprite.filters = null
+      if (node.sprite) node.sprite.filters = null
+      node.rasterSurface?.setColorMatrix()
       node.colorFilter?.destroy()
       node.colorFilter = undefined
       return
     }
+    if (node.rasterSurface) {
+      node.rasterSurface.setColorMatrix(object.colorMatrix)
+      return
+    }
+    if (!node.sprite) return
     const filter = node.colorFilter ?? new ColorMatrixFilter()
     filter.matrix = object.colorMatrix
     node.colorFilter = filter
@@ -329,7 +398,7 @@ export class PixiEditorRenderer implements EditorRenderer {
   ) {
     node.mask?.destroy()
     node.mask = undefined
-    node.sprite.mask = null
+    node.visual.mask = null
     if (!object.crop) return
     const mask = new Graphics()
       .rect(
@@ -340,7 +409,7 @@ export class PixiEditorRenderer implements EditorRenderer {
       )
       .fill(0xffffff)
     node.container.addChild(mask)
-    node.sprite.mask = mask
+    node.visual.mask = mask
     node.mask = mask
   }
 
@@ -371,7 +440,7 @@ export class PixiEditorRenderer implements EditorRenderer {
         .fill(0xffffff)
     if (inverted) mask.cut()
     node.container.addChild(mask)
-    node.sprite.mask = mask
+    node.visual.mask = mask
     node.mask = mask
   }
 
@@ -379,7 +448,7 @@ export class PixiEditorRenderer implements EditorRenderer {
     const objectsByID = new Map(objects.map((object) => [object.id, object]))
     for (const node of this.#nodes.values()) {
       node.container.mask = null
-      node.sprite.renderable = true
+      if (node.sprite) node.sprite.renderable = true
     }
     for (const object of objects) {
       if (!object.maskNodeID) continue
@@ -389,7 +458,7 @@ export class PixiEditorRenderer implements EditorRenderer {
       const mask = this.#nodes.get(object.maskNodeID)
       target.container.alpha *= maskObject.opacity
       target.container.visible &&= maskObject.visible && mask !== undefined
-      if (!target.container.visible || !mask) continue
+      if (!target.container.visible || !mask?.sprite) continue
       target.container.setMask({ mask: mask.sprite, channel: 'alpha' })
     }
   }
@@ -422,6 +491,8 @@ export class PixiEditorRenderer implements EditorRenderer {
     this.#nodes.delete(id)
     node.colorFilter?.destroy()
     node.colorFilter = undefined
+    node.rasterSurface?.destroy()
+    node.rasterSurface = undefined
     node.container.removeFromParent()
     node.container.destroy({ children: true })
     this.#textures.release(node.variantURL)
@@ -433,9 +504,11 @@ export class PixiEditorRenderer implements EditorRenderer {
     this.#resourceTimer = window.setTimeout(() => {
       if (!this.#latestDocument || !this.#latestAssets || this.#destroyed)
         return
-      void this.sync(this.#latestDocument, this.#latestAssets).catch(
-        this.#onError,
-      )
+      void this.sync(
+        this.#latestDocument,
+        this.#latestAssets,
+        this.#latestRasterMasks,
+      ).catch(this.#onError)
     }, this.#resolutionUpgradeDelayMs)
   }
 

@@ -1620,8 +1620,10 @@
   font-weight: 560;
 }
 .structured-actions button {
+  min-height: 34px;
   padding: 0 10px;
-  font-size: 11px;
+  font: 550 11px/1 var(--font-ui);
+  white-space: nowrap;
 }
 .structured-actions.is-locked {
   pointer-events: none;
@@ -1872,6 +1874,52 @@
   transform: translate(-50%, -50%);
   backdrop-filter: blur(12px);
 }
+.structured-render-recovery {
+  position: absolute;
+  z-index: 8;
+  top: 50%;
+  left: 50%;
+  display: grid;
+  width: min(360px, calc(100% - 32px));
+  gap: 10px;
+  padding: 18px;
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--surface) 96%, transparent);
+  box-shadow: 0 18px 56px rgb(0 0 0 / 0.42);
+  transform: translate(-50%, -50%);
+  backdrop-filter: blur(16px);
+}
+.structured-render-recovery strong {
+  font-size: 13px;
+  font-weight: 600;
+}
+.structured-render-recovery > span {
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.5;
+}
+.structured-render-recovery > div {
+  display: flex;
+  gap: 8px;
+  margin-top: 2px;
+}
+.structured-render-recovery button {
+  min-height: 34px;
+  padding: 0 12px;
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--surface-2);
+  font: 550 11px/1 var(--font-ui);
+  white-space: nowrap;
+}
+.structured-render-recovery button:first-child {
+  color: #10130b;
+  border-color: var(--lime);
+  background: var(--lime);
+}
 .structured-layer-panel {
   display: grid;
   min-width: 0;
@@ -2061,6 +2109,20 @@
   padding: 0;
   place-items: center;
   border-radius: 7px;
+}
+.image-editor .editor-topbar button,
+.image-editor .editor-layer-drawer button,
+.image-editor .structured-properties button,
+.image-editor .editor-package-layers,
+.image-editor .editor-pending-result {
+  font: 550 11px/1 var(--font-ui);
+  white-space: nowrap;
+}
+.image-editor .editor-layer-drawer .editor-decompose {
+  width: 100%;
+  min-height: 36px;
+  padding: 0 12px;
+  line-height: 1.2;
 }
 .structured-layer-controls button:hover {
   color: var(--lime);

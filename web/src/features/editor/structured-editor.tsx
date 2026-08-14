@@ -99,6 +99,8 @@ export function StructuredEditor({
   const [notice, setNotice] = useState('')
   const [view, setView] = useState({ zoom: 100, panX: 0, panY: 0 })
   const [presented, setPresented] = useState(false)
+  const [rendererAttempt, setRendererAttempt] = useState(0)
+  const [rendererError, setRendererError] = useState('')
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [rerunConfirm, setRerunConfirm] = useState(false)
   const [pendingLayerSet, setPendingLayerSet] = useState<LayerSet>()
@@ -869,8 +871,16 @@ export function StructuredEditor({
               assets={assets}
               rasterMasks={rasterMask.resources}
               viewport={view}
-              onUnavailable={(reason) => setNotice(`图形渲染不可用：${reason}`)}
-              onPresentedChange={setPresented}
+              retryKey={rendererAttempt}
+              onUnavailable={(reason) => {
+                setPresented(false)
+                setRendererError(reason)
+                setNotice(`图形渲染不可用：${reason}`)
+              }}
+              onPresentedChange={(value) => {
+                setPresented(value)
+                if (value) setRendererError('')
+              }}
             />
             <StructuredCanvasInteraction
               document={document}
@@ -911,7 +921,26 @@ export function StructuredEditor({
                   onNotice={setNotice}
                 />
               )}
-            {assetsQuery.isError ? (
+            {rendererError ? (
+              <div className="structured-render-recovery" role="alert">
+                <strong>专业画布暂时无法显示</strong>
+                <span>{rendererError}</span>
+                <div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setRendererError('')
+                      setRendererAttempt((value) => value + 1)
+                    }}
+                  >
+                    重新加载画布
+                  </button>
+                  <button type="button" onClick={onBack}>
+                    返回工作区
+                  </button>
+                </div>
+              </div>
+            ) : assetsQuery.isError ? (
               <div className="structured-render-wait" role="alert">
                 工程资源无法读取，请刷新后重试
               </div>

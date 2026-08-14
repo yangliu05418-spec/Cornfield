@@ -1,3 +1,5 @@
+import 'pixi.js/unsafe-eval'
+
 import {
   Application,
   ColorMatrixFilter,

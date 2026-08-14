@@ -17,6 +17,7 @@ type PixiSurfaceProps = {
   viewport: EditorViewport
   onUnavailable: (reason: string) => void
   onPresentedChange: (presented: boolean) => void
+  retryKey?: number
 }
 
 export function PixiSurface({
@@ -27,6 +28,7 @@ export function PixiSurface({
   viewport,
   onUnavailable,
   onPresentedChange,
+  retryKey = 0,
 }: PixiSurfaceProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const rendererRef = useRef<EditorRenderer | undefined>(undefined)
@@ -55,15 +57,27 @@ export function PixiSurface({
     const parent = canvas.parentElement
     if (!parent) return
     let disposed = false
-    const isDisposed = () => disposed
+    let failed = false
+    const isDisposed = () => disposed || failed
     let renderer: EditorRenderer | undefined
+    let initializationTimeout = 0
     const fail = (error: unknown) => {
-      if (disposed) return
+      if (disposed || failed) return
+      failed = true
+      window.clearTimeout(initializationTimeout)
+      renderer?.destroy()
+      rendererRef.current = undefined
+      setReady(false)
+      onPresentedChangeRef.current(false)
       console.error('[editor-renderer] unavailable', error)
       onUnavailableRef.current(
         error instanceof Error ? error.message : 'WebGL 渲染器不可用',
       )
     }
+    initializationTimeout = window.setTimeout(
+      () => fail(new Error('画布初始化超时，请重新加载')),
+      12_000,
+    )
     void import('./pixi-renderer')
       .then(async ({ PixiEditorRenderer }) => {
         if (isDisposed()) return
@@ -82,18 +96,20 @@ export function PixiSurface({
           renderer.destroy()
           return
         }
+        window.clearTimeout(initializationTimeout)
         rendererRef.current = renderer
         setReady(true)
       })
       .catch(fail)
     return () => {
       disposed = true
+      window.clearTimeout(initializationTimeout)
       onPresentedChangeRef.current(false)
       setReady(false)
       rendererRef.current = undefined
       renderer?.destroy()
     }
-  }, [enabled])
+  }, [enabled, retryKey])
 
   useEffect(() => {
     if (!enabled || !ready || !canvasRef.current) return
@@ -139,6 +155,10 @@ export function PixiSurface({
       .sync(document, renderAssets, rasterMasks)
       .then(() => onPresentedChangeRef.current(true))
       .catch((error: unknown) => {
+        renderer.destroy()
+        rendererRef.current = undefined
+        setReady(false)
+        onPresentedChangeRef.current(false)
         onUnavailableRef.current(
           error instanceof Error ? error.message : '画布资源加载失败',
         )

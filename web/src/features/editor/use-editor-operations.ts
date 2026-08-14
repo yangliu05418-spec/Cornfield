@@ -47,6 +47,7 @@ export function useEditorOperations(options: UseEditorOperationsOptions) {
     useState<AssetOperation['estimated_wait']>()
   const handledLayerSetRef = useRef('')
   const handledPublishRef = useRef('')
+  const publishDestinationRef = useRef(new Map<string, 'wall' | 'download'>())
 
   useEffect(() => {
     if (!operationID && options.initialOperationID)
@@ -185,7 +186,18 @@ export function useEditorOperations(options: UseEditorOperationsOptions) {
     void api<Asset>(`/api/v1/assets/${operation.result_asset_id}`).then(
       (asset) => {
         mergeAssetIntoCaches(queryClient, asset)
-        callbacksRef.current.onNotice('新图片已置入灵感墙顶部')
+        const destination =
+          publishDestinationRef.current.get(operation.id) ?? 'wall'
+        publishDestinationRef.current.delete(operation.id)
+        if (destination === 'download') {
+          const link = window.document.createElement('a')
+          link.href = `${asset.url}?download=1`
+          link.download = ''
+          link.click()
+          callbacksRef.current.onNotice('图片已生成，正在下载到本地')
+        } else {
+          callbacksRef.current.onNotice('新图片已置入灵感墙顶部')
+        }
       },
       () => callbacksRef.current.onNotice('图片已生成，资产列表正在对账'),
     )
@@ -250,6 +262,7 @@ export function useEditorOperations(options: UseEditorOperationsOptions) {
     async (selection?: {
       mode: 'single' | 'composite'
       artboardIDs: string[]
+      destination?: 'wall' | 'download'
     }) => {
       try {
         await callbacksRef.current.flushSaves()
@@ -267,8 +280,16 @@ export function useEditorOperations(options: UseEditorOperationsOptions) {
             }),
           },
         )
+        publishDestinationRef.current.set(
+          result.id,
+          selection?.destination ?? 'wall',
+        )
         setOperationID(result.id)
-        callbacksRef.current.onNotice('正在保存为新图片')
+        callbacksRef.current.onNotice(
+          selection?.destination === 'download'
+            ? '正在生成本地下载'
+            : '正在置入灵感墙',
+        )
       } catch (error) {
         callbacksRef.current.onNotice(
           error instanceof Error ? error.message : '保存新图片失败',

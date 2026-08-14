@@ -4,8 +4,10 @@ import {
   ArrowLeft,
   ArrowUp,
   Brush,
+  Circle,
   ChevronDown,
   ChevronRight,
+  Download,
   Eye,
   EyeOff,
   Eraser,
@@ -13,6 +15,7 @@ import {
   FolderPlus,
   Layers,
   GripVertical,
+  Hand,
   ImagePlus,
   Link,
   Link2Off,
@@ -23,6 +26,7 @@ import {
   CircleDashed,
   Redo2,
   Save,
+  Square,
   SlidersHorizontal,
   Sparkles,
   Trash2,
@@ -30,7 +34,11 @@ import {
   Unlock,
 } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import type { CSSProperties, DragEvent as ReactDragEvent } from 'react'
+import type {
+  CSSProperties,
+  DragEvent as ReactDragEvent,
+  PointerEvent as ReactPointerEvent,
+} from 'react'
 
 import { AppShell } from '#/components/app-shell'
 import { ConfirmDialog } from '#/components/confirm-dialog'
@@ -112,9 +120,7 @@ export function StructuredEditor({
   const [document, setDocument] = useState(() =>
     artboardAsDocumentV2(initialArtboard),
   )
-  const [editorMode, setEditorMode] = useState<'basic' | 'professional'>(
-    'basic',
-  )
+  const [canvasTool, setCanvasTool] = useState<'select' | 'hand'>('select')
   const [newArtboardOpen, setNewArtboardOpen] = useState(false)
   const [uploadingArtboard, setUploadingArtboard] = useState(false)
   const [newArtboardSize, setNewArtboardSize] = useState({
@@ -135,6 +141,9 @@ export function StructuredEditor({
   const [rendererAttempt, setRendererAttempt] = useState(0)
   const [rendererError, setRendererError] = useState('')
   const [settingsOpen, setSettingsOpen] = useState(false)
+  const [inspectorWidth, setInspectorWidth] = useState(300)
+  const [artboardsHeight, setArtboardsHeight] = useState(238)
+  const [layerTreeHeight, setLayerTreeHeight] = useState(310)
   const [rerunConfirm, setRerunConfirm] = useState(false)
   const [pendingLayerSet, setPendingLayerSet] = useState<LayerSet>()
   const draggedLayerIDsRef = useRef<string[]>([])
@@ -161,15 +170,6 @@ export function StructuredEditor({
   const dirtyRef = useRef(false)
   const saveBlockedRef = useRef(false)
   const [, setHistoryRevision] = useState(0)
-
-  useEffect(() => {
-    if (editorMode !== 'basic') {
-      setPresented(false)
-      return
-    }
-    setRendererError('')
-    setPresented(true)
-  }, [editorMode])
 
   const rows = useMemo(
     () => buildVisibleEditorLayerRows(document, collapsed),
@@ -937,6 +937,57 @@ export function StructuredEditor({
     URL.revokeObjectURL(href)
   }
 
+  function exportCanvas(destination: 'wall' | 'download') {
+    const ids = [...selectedExportArtboards]
+    const selected = ids.length ? ids : [activeArtboard.id]
+    void operations.publish({
+      mode: selected.length > 1 ? 'composite' : 'single',
+      artboardIDs: selected,
+      destination,
+    })
+  }
+
+  function beginPanelResize(
+    event: ReactPointerEvent<HTMLDivElement>,
+    kind: 'inspector' | 'artboards' | 'layers',
+  ) {
+    event.preventDefault()
+    const start = { x: event.clientX, y: event.clientY }
+    const initial = {
+      inspector: inspectorWidth,
+      artboards: artboardsHeight,
+      layers: layerTreeHeight,
+    }[kind]
+    const move = (moveEvent: PointerEvent) => {
+      if (kind === 'inspector') {
+        setInspectorWidth(
+          Math.max(260, Math.min(460, initial + start.x - moveEvent.clientX)),
+        )
+      } else if (kind === 'artboards') {
+        setArtboardsHeight(
+          Math.max(150, Math.min(420, initial + moveEvent.clientY - start.y)),
+        )
+      } else {
+        setLayerTreeHeight(
+          Math.max(150, Math.min(520, initial + moveEvent.clientY - start.y)),
+        )
+      }
+    }
+    const stop = () => {
+      window.removeEventListener('pointermove', move)
+      window.removeEventListener('pointerup', stop)
+      window.removeEventListener('pointercancel', stop)
+      window.document.body.style.removeProperty('cursor')
+      window.document.body.style.removeProperty('user-select')
+    }
+    window.document.body.style.cursor =
+      kind === 'inspector' ? 'col-resize' : 'row-resize'
+    window.document.body.style.userSelect = 'none'
+    window.addEventListener('pointermove', move)
+    window.addEventListener('pointerup', stop)
+    window.addEventListener('pointercancel', stop)
+  }
+
   return (
     <AppShell immersive>
       <main className="image-editor structured-editor">
@@ -959,196 +1010,59 @@ export function StructuredEditor({
               </button>
             )}
           </div>
-          <div className="editor-topbar-group">
-            <button
-              type="button"
-              aria-label="撤销"
-              disabled={
-                rasterEditing
-                  ? !rasterMask.history.canUndo
-                  : !historyRef.current.canUndo
-              }
-              onClick={() => (rasterEditing ? void rasterMask.undo() : undo())}
-            >
-              <Undo2 size={16} />
-            </button>
-            <button
-              type="button"
-              aria-label="重做"
-              disabled={
-                rasterEditing
-                  ? !rasterMask.history.canRedo
-                  : !historyRef.current.canRedo
-              }
-              onClick={() => (rasterEditing ? void rasterMask.redo() : redo())}
-            >
-              <Redo2 size={16} />
-            </button>
-            <div className="editor-mode-switch" aria-label="画布模式">
-              <button
-                type="button"
-                className={editorMode === 'basic' ? 'active' : undefined}
-                onClick={() => setEditorMode('basic')}
-              >
-                基础模式
-              </button>
-              <button
-                type="button"
-                className={editorMode === 'professional' ? 'active' : undefined}
-                onClick={() => {
-                  setRendererError('')
-                  setEditorMode('professional')
-                  setRendererAttempt((value) => value + 1)
-                }}
-              >
-                专业模式
-              </button>
-            </div>
-          </div>
-          <div
-            className={`editor-topbar-group structured-actions is-${editorMode}${rasterEditing ? ' is-locked' : ''}`}
-            aria-disabled={rasterEditing}
-            inert={rasterEditing ? true : undefined}
-          >
-            <button
-              type="button"
-              disabled={operations.running || activeNode?.type !== 'raster'}
-              onClick={createAdjustmentLayer}
-            >
-              <SlidersHorizontal size={16} /> 调整层
-            </button>
-            <button
-              type="button"
-              disabled={operations.running || selectedIDs.size === 0}
-              onClick={removeSelection}
-            >
-              <Trash2 size={16} /> 删除
-            </button>
-            <button
-              type="button"
-              className={shapeTool === 'rectangle' ? 'active' : undefined}
-              disabled={
-                operations.running ||
-                activeNode?.type !== 'raster' ||
-                activeNode.mask_id !== undefined ||
-                activeNode.pixel_mask !== undefined ||
-                activeNode.crop !== undefined
-              }
-              onClick={() =>
-                setShapeTool((value) =>
-                  value === 'rectangle' ? undefined : 'rectangle',
-                )
-              }
-            >
-              <CircleDashed size={16} /> 矩形蒙版
-            </button>
-            <button
-              type="button"
-              className={shapeTool === 'ellipse' ? 'active' : undefined}
-              disabled={
-                operations.running ||
-                activeNode?.type !== 'raster' ||
-                activeNode.mask_id !== undefined ||
-                activeNode.pixel_mask !== undefined ||
-                activeNode.crop !== undefined
-              }
-              onClick={() =>
-                setShapeTool((value) =>
-                  value === 'ellipse' ? undefined : 'ellipse',
-                )
-              }
-            >
-              <CircleDashed size={16} /> 椭圆蒙版
-            </button>
-            <button
-              type="button"
-              disabled={
-                operations.running || !canGroupEditorNodes(selectedNodes)
-              }
-              onClick={groupSelection}
-            >
-              <FolderPlus size={16} /> 成组
-            </button>
-            <button
-              type="button"
-              disabled={operations.running || activeNode?.type !== 'group'}
-              onClick={() => {
-                if (!activeNode) return
-                const childIDs = document.nodes
-                  .filter((node) => node.parent_id === activeNode.id)
-                  .map((node) => node.id)
-                const changed = runCommand(
-                  () => ungroupEditorNode(documentRef.current, activeNode.id),
-                  '已解散图层组',
-                )
-                if (changed) {
-                  setSelectedIDs(new Set(childIDs))
-                  setActiveID(childIDs.at(-1) ?? '')
-                }
-              }}
-            >
-              <FolderMinus size={16} /> 解组
-            </button>
-            <button
-              type="button"
-              disabled={
-                operations.running ||
-                !canAttachEditorMask(selectedNodes, activeNode)
-              }
-              onClick={attachMask}
-            >
-              <Link size={16} /> 设为蒙版
-            </button>
-            <button
-              type="button"
-              disabled={operations.running || !activeNode?.mask_id}
-              onClick={() => {
-                if (!activeNode) return
-                runCommand(
-                  () => detachEditorMask(documentRef.current, activeNode.id),
-                  '已解除蒙版',
-                )
-              }}
-            >
-              <Link2Off size={16} /> 解除蒙版
-            </button>
-            <button
-              type="button"
-              className="editor-layer-settings"
-              aria-label="智能分层设置"
-              disabled={operations.running}
-              onClick={() => setSettingsOpen((value) => !value)}
-            >
-              <Layers size={16} /> 参数
-            </button>
-            <button
-              type="button"
-              className="editor-decompose"
-              disabled={operations.running || !operations.canDecompose}
-              title={operations.capabilityMessage || '智能分层'}
-              onClick={() => void requestDecomposition()}
-            >
-              <Sparkles size={16} /> 智能分层
-            </button>
-            <button
-              type="button"
-              className="editor-publish"
-              disabled={operations.running}
-              onClick={() => {
-                const ids = [...selectedExportArtboards]
-                const selected = ids.length ? ids : [activeArtboard.id]
-                void operations.publish({
-                  mode: selected.length > 1 ? 'composite' : 'single',
-                  artboardIDs: selected,
-                })
-              }}
-            >
-              <Save size={16} /> 保存为新图片
-            </button>
+          <div className="editor-topbar-group editor-export-actions">
+            <details className="editor-export-menu">
+              <summary aria-label="导出图片">
+                <Save size={15} /> 导出 <ChevronDown size={13} />
+              </summary>
+              <div>
+                <button
+                  type="button"
+                  disabled={operations.running}
+                  onClick={(event) => {
+                    exportCanvas('download')
+                    event.currentTarget
+                      .closest('details')
+                      ?.removeAttribute('open')
+                  }}
+                >
+                  <Download size={15} />
+                  <span>
+                    <strong>下载到本地</strong>
+                    <small>生成 PNG 并立即下载</small>
+                  </span>
+                </button>
+                <button
+                  type="button"
+                  disabled={operations.running}
+                  onClick={(event) => {
+                    exportCanvas('wall')
+                    event.currentTarget
+                      .closest('details')
+                      ?.removeAttribute('open')
+                  }}
+                >
+                  <ImagePlus size={15} />
+                  <span>
+                    <strong>放入灵感墙</strong>
+                    <small>作为新图片保存到资产</small>
+                  </span>
+                </button>
+              </div>
+            </details>
           </div>
         </header>
 
-        <section className="structured-editor-body">
+        <section
+          className="structured-editor-body"
+          style={
+            {
+              '--structured-inspector-width': `${inspectorWidth}px`,
+              '--structured-artboards-height': `${artboardsHeight}px`,
+              '--structured-layer-tree-height': `${layerTreeHeight}px`,
+            } as CSSProperties
+          }
+        >
           <aside className="structured-artboard-panel" aria-label="画板">
             <header>
               <div>
@@ -1351,17 +1265,79 @@ export function StructuredEditor({
               Alt + 拖动画板 · 勾选后可拼合导出
             </small>
           </aside>
+          <div
+            className="structured-panel-resizer is-artboards"
+            role="separator"
+            aria-label="调整画板面板高度"
+            aria-orientation="horizontal"
+            onPointerDown={(event) => beginPanelResize(event, 'artboards')}
+          />
           <nav className="structured-tool-rail" aria-label="画布工具">
             <button
               type="button"
-              className={rasterMask.tool === 'select' ? 'active' : undefined}
+              className={
+                canvasTool === 'select' && rasterMask.tool === 'select'
+                  ? 'active'
+                  : undefined
+              }
               aria-label="选择与移动"
               title="选择与移动"
-              onClick={() => void rasterMask.activate('select')}
+              onClick={() => {
+                setCanvasTool('select')
+                void rasterMask.activate('select')
+              }}
             >
               <MousePointer2 size={18} />
             </button>
+            <button
+              type="button"
+              className={canvasTool === 'hand' ? 'active' : undefined}
+              aria-label="抓手工具"
+              title="抓手工具（空格）"
+              onClick={() => {
+                setCanvasTool('hand')
+                void rasterMask.activate('select')
+              }}
+            >
+              <Hand size={18} />
+            </button>
+            <button
+              type="button"
+              aria-label="适应画布"
+              title="适应画布（0）"
+              onClick={fitCanvas}
+            >
+              <Maximize size={17} />
+            </button>
             <span className="structured-tool-divider" />
+            <button
+              type="button"
+              className={shapeTool === 'rectangle' ? 'active' : undefined}
+              aria-label="矩形蒙版"
+              title="矩形蒙版"
+              disabled={operations.running || activeNode?.type !== 'raster'}
+              onClick={() =>
+                setShapeTool((value) =>
+                  value === 'rectangle' ? undefined : 'rectangle',
+                )
+              }
+            >
+              <Square size={17} />
+            </button>
+            <button
+              type="button"
+              className={shapeTool === 'ellipse' ? 'active' : undefined}
+              aria-label="椭圆蒙版"
+              title="椭圆蒙版"
+              disabled={operations.running || activeNode?.type !== 'raster'}
+              onClick={() =>
+                setShapeTool((value) =>
+                  value === 'ellipse' ? undefined : 'ellipse',
+                )
+              }
+            >
+              <Circle size={17} />
+            </button>
             <button
               type="button"
               className={rasterMask.tool === 'brush' ? 'active' : undefined}
@@ -1389,6 +1365,140 @@ export function StructuredEditor({
               onClick={() => void rasterMask.activate('eraser')}
             >
               <Eraser size={18} />
+            </button>
+            <span className="structured-tool-divider" />
+            <button
+              type="button"
+              aria-label="调整层"
+              title="新建调整层"
+              disabled={operations.running || activeNode?.type !== 'raster'}
+              onClick={createAdjustmentLayer}
+            >
+              <SlidersHorizontal size={17} />
+            </button>
+            <button
+              type="button"
+              aria-label="成组"
+              title="成组"
+              disabled={
+                operations.running || !canGroupEditorNodes(selectedNodes)
+              }
+              onClick={groupSelection}
+            >
+              <FolderPlus size={17} />
+            </button>
+            <button
+              type="button"
+              aria-label="解散图层组"
+              title="解组"
+              disabled={operations.running || activeNode?.type !== 'group'}
+              onClick={() => {
+                if (!activeNode) return
+                const childIDs = document.nodes
+                  .filter((node) => node.parent_id === activeNode.id)
+                  .map((node) => node.id)
+                if (
+                  runCommand(
+                    () => ungroupEditorNode(documentRef.current, activeNode.id),
+                    '已解散图层组',
+                  )
+                ) {
+                  setSelectedIDs(new Set(childIDs))
+                  setActiveID(childIDs.at(-1) ?? '')
+                }
+              }}
+            >
+              <FolderMinus size={17} />
+            </button>
+            <button
+              type="button"
+              aria-label="设为图层蒙版"
+              title="设为图层蒙版"
+              disabled={
+                operations.running ||
+                !canAttachEditorMask(selectedNodes, activeNode)
+              }
+              onClick={attachMask}
+            >
+              <Link size={17} />
+            </button>
+            <button
+              type="button"
+              aria-label="解除图层蒙版"
+              title="解除图层蒙版"
+              disabled={operations.running || !activeNode?.mask_id}
+              onClick={() => {
+                if (activeNode)
+                  runCommand(
+                    () => detachEditorMask(documentRef.current, activeNode.id),
+                    '已解除蒙版',
+                  )
+              }}
+            >
+              <Link2Off size={17} />
+            </button>
+            <button
+              type="button"
+              aria-label="移除形状蒙版"
+              title="移除形状蒙版"
+              disabled={operations.running || !activeNode?.shape_mask}
+              onClick={() => {
+                if (activeNode)
+                  runCommand(
+                    () =>
+                      removeEditorShapeMask(documentRef.current, activeNode.id),
+                    '已移除形状蒙版，可撤销恢复',
+                  )
+              }}
+            >
+              <CircleDashed size={17} />
+            </button>
+            <button
+              type="button"
+              aria-label="删除所选图层"
+              title="删除所选图层"
+              disabled={operations.running || selectedIDs.size === 0}
+              onClick={removeSelection}
+            >
+              <Trash2 size={17} />
+            </button>
+            <span className="structured-tool-divider" />
+            <button
+              type="button"
+              className={`tool-accent${settingsOpen ? ' active' : ''}`}
+              aria-label="智能分层"
+              title={operations.capabilityMessage || '智能分层'}
+              disabled={operations.running || !operations.canDecompose}
+              onClick={() => setSettingsOpen((value) => !value)}
+            >
+              <Sparkles size={18} />
+            </button>
+            <span className="structured-tool-spacer" />
+            <button
+              type="button"
+              aria-label="撤销"
+              title="撤销"
+              disabled={
+                rasterEditing
+                  ? !rasterMask.history.canUndo
+                  : !historyRef.current.canUndo
+              }
+              onClick={() => (rasterEditing ? void rasterMask.undo() : undo())}
+            >
+              <Undo2 size={17} />
+            </button>
+            <button
+              type="button"
+              aria-label="重做"
+              title="重做"
+              disabled={
+                rasterEditing
+                  ? !rasterMask.history.canRedo
+                  : !historyRef.current.canRedo
+              }
+              onClick={() => (rasterEditing ? void rasterMask.redo() : redo())}
+            >
+              <Redo2 size={17} />
             </button>
           </nav>
           <div
@@ -1481,15 +1591,18 @@ export function StructuredEditor({
                 </span>
               </div>
             )}
-            {editorMode === 'basic' && (
+            <div
+              className={`structured-dom-fallback${presented ? ' is-hidden' : ''}`}
+              aria-hidden={presented}
+            >
               <EditorDOMSurface
                 document={projectDocument}
                 assets={assets}
                 viewport={view}
               />
-            )}
+            </div>
             <PixiSurface
-              enabled={editorMode === 'professional'}
+              enabled
               document={projectDocument}
               assets={assets}
               rasterMasks={rasterMask.resources}
@@ -1501,7 +1614,6 @@ export function StructuredEditor({
                 setNotice(`图形渲染不可用：${reason}`)
               }}
               onPresentedChange={(value) => {
-                if (editorMode !== 'professional') return
                 setPresented(value)
                 if (value) setRendererError('')
               }}
@@ -1522,6 +1634,7 @@ export function StructuredEditor({
               selectedIDs={selectedIDs}
               activeID={activeID}
               disabled={operations.running || rasterEditing}
+              forcePan={canvasTool === 'hand'}
               onViewChange={setView}
               onSelectionChange={(ids, active) => {
                 setSelectedIDs(new Set(ids))
@@ -1545,9 +1658,7 @@ export function StructuredEditor({
                   ),
                 }))
               }
-              ariaLabel={
-                editorMode === 'professional' ? '专业图层画布' : '图片编辑画布'
-              }
+              ariaLabel="图片编辑画布"
             />
             {rasterEditing &&
               activeNode?.type === 'raster' &&
@@ -1570,42 +1681,29 @@ export function StructuredEditor({
                   onNotice={setNotice}
                 />
               )}
-            {editorMode === 'professional' && rendererError ? (
-              <div className="structured-render-recovery" role="alert">
-                <strong>专业画布暂时无法显示</strong>
-                <span>{rendererError}</span>
-                <div>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setRendererError('')
-                      setRendererAttempt((value) => value + 1)
-                    }}
-                  >
-                    重新加载画布
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setEditorMode('basic')
-                      setRendererError('')
-                      setRendererAttempt((value) => value + 1)
-                    }}
-                  >
-                    切换基础模式
-                  </button>
-                  <button type="button" onClick={onBack}>
-                    返回工作区
-                  </button>
-                </div>
+            {rendererError ? (
+              <div
+                className="structured-render-recovery is-compact"
+                role="status"
+              >
+                <span>高性能渲染暂不可用，已使用兼容画布</span>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setRendererError('')
+                    setRendererAttempt((value) => value + 1)
+                  }}
+                >
+                  重试
+                </button>
               </div>
             ) : assetsQuery.isError ? (
               <div className="structured-render-wait" role="alert">
                 工程资源无法读取，请刷新后重试
               </div>
-            ) : editorMode === 'professional' && !presented ? (
-              <div className="structured-render-wait" aria-live="polite">
-                <span className="spinner" /> 正在准备专业画布
+            ) : !presented ? (
+              <div className="structured-render-progress" aria-live="polite">
+                <span className="spinner" /> 正在启用高性能渲染
               </div>
             ) : null}
             {operations.running && (
@@ -1627,6 +1725,13 @@ export function StructuredEditor({
             )}
           </div>
 
+          <div
+            className="structured-panel-resizer is-inspector"
+            role="separator"
+            aria-label="调整侧栏宽度"
+            aria-orientation="vertical"
+            onPointerDown={(event) => beginPanelResize(event, 'inspector')}
+          />
           <aside
             className={`structured-layer-panel${rasterEditing ? ' is-locked' : ''}`}
             aria-disabled={rasterEditing}
@@ -1862,6 +1967,13 @@ export function StructuredEditor({
               })}
             </div>
 
+            <div
+              className="structured-panel-resizer is-layers"
+              role="separator"
+              aria-label="调整图层与属性面板高度"
+              aria-orientation="horizontal"
+              onPointerDown={(event) => beginPanelResize(event, 'layers')}
+            />
             {activeNode && (
               <section className="structured-properties">
                 <label>
@@ -2074,7 +2186,7 @@ export function StructuredEditor({
         </section>
 
         <footer className="editor-statusbar">
-          <span>{notice || 'V2 专业图层模式'}</span>
+          <span>{notice || '画布工作台 · 自动保存'}</span>
           <div>
             <span>{Math.round(view.zoom)}%</span>
             <input
@@ -2113,7 +2225,10 @@ export function StructuredEditor({
           </section>
         )}
         {settingsOpen && (
-          <aside className="editor-layer-drawer" aria-label="智能分层设置">
+          <aside
+            className="editor-layer-drawer editor-layer-popover"
+            aria-label="智能分层设置"
+          >
             <button
               type="button"
               className="drawer-close"
@@ -2172,9 +2287,10 @@ export function StructuredEditor({
             <button
               className="editor-decompose"
               type="button"
+              disabled={operations.running || !operations.canDecompose}
               onClick={() => void requestDecomposition()}
             >
-              <Sparkles size={16} /> 开始分层
+              <Sparkles size={15} /> <span>开始智能分层</span>
             </button>
           </aside>
         )}

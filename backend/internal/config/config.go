@@ -20,7 +20,7 @@ type Config struct {
 	SessionTTL               time.Duration
 	SessionIdleTTL           time.Duration
 	LegnextAPIKey            string
-	OpenRouterAPIKey         string
+	OpenRouterAPIKeys        []string
 	BFLAPIKey                string
 	BytePlusAPIKey           string
 	ProviderCallbackSecret   string
@@ -69,7 +69,7 @@ func load(requireProviderKeys bool) (Config, error) {
 		if cfg.LegnextAPIKey, err = secret("LEGNEXT_API_KEY"); err != nil {
 			return Config{}, err
 		}
-		if cfg.OpenRouterAPIKey, err = secret("OPENROUTER_API_KEY"); err != nil {
+		if cfg.OpenRouterAPIKeys, err = secretList("OPENROUTER_API_KEY"); err != nil {
 			return Config{}, err
 		}
 		if cfg.BFLAPIKey, err = secret("BFL_API_KEY"); err != nil {
@@ -168,11 +168,25 @@ func (c Config) validate(requireProviderKeys bool) error {
 	if c.ProviderMode != "live" {
 		return nil
 	}
-	secrets := make([]struct{ name, value string }, 0, 4)
+	secrets := make([]struct{ name, value string }, 0, 6)
 	if requireProviderKeys {
 		secrets = append(secrets,
 			struct{ name, value string }{name: "LEGNEXT_API_KEY", value: c.LegnextAPIKey},
-			struct{ name, value string }{name: "OPENROUTER_API_KEY", value: c.OpenRouterAPIKey},
+		)
+		if len(c.OpenRouterAPIKeys) == 0 {
+			secrets = append(secrets, struct{ name, value string }{name: "OPENROUTER_API_KEY"})
+		}
+		seen := make(map[string]struct{}, len(c.OpenRouterAPIKeys))
+		for index, value := range c.OpenRouterAPIKeys {
+			if _, ok := seen[value]; ok {
+				return fmt.Errorf("OPENROUTER_API_KEY_FILE contains a duplicate key")
+			}
+			seen[value] = struct{}{}
+			secrets = append(secrets, struct{ name, value string }{
+				name: fmt.Sprintf("OPENROUTER_API_KEY[%d]", index+1), value: value,
+			})
+		}
+		secrets = append(secrets,
 			struct{ name, value string }{name: "BFL_API_KEY", value: c.BFLAPIKey},
 			struct{ name, value string }{name: "BYTEPLUS_API_KEY", value: c.BytePlusAPIKey},
 		)
@@ -216,4 +230,28 @@ func secret(name string) (string, error) {
 		return "", fmt.Errorf("read %s_FILE: %w", name, err)
 	}
 	return strings.TrimSpace(string(b)), nil
+}
+
+// secretList reads one secret per non-empty line. A direct environment value
+// remains a single entry for local development and backwards compatibility.
+func secretList(name string) ([]string, error) {
+	if value := strings.TrimSpace(os.Getenv(name)); value != "" {
+		return []string{value}, nil
+	}
+	path := strings.TrimSpace(os.Getenv(name + "_FILE"))
+	if path == "" {
+		return nil, nil
+	}
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("read %s_FILE: %w", name, err)
+	}
+	lines := strings.Split(strings.ReplaceAll(string(b), "\r\n", "\n"), "\n")
+	values := make([]string, 0, len(lines))
+	for _, line := range lines {
+		if value := strings.TrimSpace(line); value != "" {
+			values = append(values, value)
+		}
+	}
+	return values, nil
 }

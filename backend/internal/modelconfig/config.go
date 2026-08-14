@@ -369,9 +369,9 @@ func validateCapabilities(m Model) error {
 		if len(parts) != 2 {
 			return fmt.Errorf("model %s has invalid aspect ratio %q", m.ID, ratio)
 		}
-		width, widthErr := strconv.Atoi(parts[0])
-		height, heightErr := strconv.Atoi(parts[1])
-		if widthErr != nil || heightErr != nil || width < 1 || height < 1 {
+		width, widthErr := strconv.ParseFloat(parts[0], 64)
+		height, heightErr := strconv.ParseFloat(parts[1], 64)
+		if widthErr != nil || heightErr != nil || width <= 0 || height <= 0 || math.IsInf(width, 0) || math.IsInf(height, 0) || math.IsNaN(width) || math.IsNaN(height) {
 			return fmt.Errorf("model %s has invalid aspect ratio %q", m.ID, ratio)
 		}
 		if _, exists := seenRatios[ratio]; exists {

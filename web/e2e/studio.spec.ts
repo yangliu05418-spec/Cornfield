@@ -1047,7 +1047,7 @@ test('V3 editor autosaves artboards and restores them after reload', async ({
   await expect(page.getByRole('option', { name: /1600×900/ })).toBeVisible()
 })
 
-test('V3 editor switches between a CSP-safe Pixi surface and DOM fallback', async ({
+test('V3 editor uses one CSP-safe workbench with a non-blocking fallback', async ({
   page,
 }) => {
   await installStudioMocks(page)
@@ -1055,18 +1055,20 @@ test('V3 editor switches between a CSP-safe Pixi surface and DOM fallback', asyn
   page.on('pageerror', (error) => pageErrors.push(error.message))
   await page.goto('/app/editor/editor-project-1')
 
-  await expect(page.getByTestId('editor-dom-surface')).toBeVisible()
-  await page.getByRole('button', { name: '专业模式' }).click()
   await expect(page.getByTestId('editor-pixi-surface')).toBeVisible()
-  await expect(page.getByText('专业画布暂时无法显示')).toHaveCount(0)
+  await expect(page.getByRole('button', { name: '基础模式' })).toHaveCount(0)
+  await expect(page.getByRole('button', { name: '专业模式' })).toHaveCount(0)
+  await expect(page.getByRole('navigation', { name: '画布工具' })).toBeVisible()
+  await expect(page.getByRole('button', { name: '智能分层' })).toBeVisible()
+  await expect(
+    page.getByRole('separator', { name: '调整侧栏宽度' }),
+  ).toBeVisible()
+  await expect(
+    page.getByRole('separator', { name: '调整图层与属性面板高度' }),
+  ).toBeVisible()
   expect(pageErrors.some((message) => message.includes('unsafe-eval'))).toBe(
     false,
   )
-
-  await page.getByRole('button', { name: '基础模式' }).click()
-  await expect(page.getByTestId('editor-pixi-surface')).toHaveCount(0)
-  await expect(page.getByTestId('editor-dom-surface')).toBeVisible()
-  await expect(page.getByRole('option', { name: /1024×1024/ })).toBeVisible()
 })
 
 test('V3 editor imports every image as an independent artboard', async ({

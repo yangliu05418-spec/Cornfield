@@ -167,9 +167,21 @@ check_raw_secret() {
     "${path}" || fail "${path} must contain exactly one raw value of at least ${minimum_length} characters without whitespace"
 }
 
-for path in "${legnext_key_path}" "${openrouter_key_path}" "${bfl_key_path}" "${byteplus_key_path}"; do
+check_raw_secret_list() {
+  path="$1"
+  minimum_length="$2"
+  check_secret_mode "${path}"
+  awk -v minimum_length="${minimum_length}" '
+    length($0) == 0 || length($0) < minimum_length || $0 ~ /[[:space:]]/ || seen[$0]++ { exit 1 }
+    { count++ }
+    END { if (count == 0) exit 1 }
+  ' "${path}" || fail "${path} must contain one or more unique raw values of at least ${minimum_length} characters, one per line"
+}
+
+for path in "${legnext_key_path}" "${bfl_key_path}" "${byteplus_key_path}"; do
   check_raw_secret "${path}" 16
 done
+check_raw_secret_list "${openrouter_key_path}" 16
 for path in "${provider_callback_path}" "${provider_url_signing_path}"; do
   check_raw_secret "${path}" 32
 done

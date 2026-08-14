@@ -66,6 +66,8 @@ OPENROUTER_API_KEY_FILE=../secrets/openrouter_api_key \
 go run ./cmd/modelctl verify-remote
 ```
 
+`openrouter_api_key` 支持单个 key，也支持每行一个 key 的凭据池。Worker 按“当前在途最少、累计派发最少”选择 key；明确的 401、402 或 429 只冷却对应 key，并在安全的拒绝响应下切换下一把 key。请求已写出后的超时、断连或模糊 5xx 不跨 key 重提，继续进入 `submission_uncertain`，避免重复计费。`modelctl verify-remote` 只使用文件中的第一把 key 做只读能力核验。
+
 上述检查均不会创建图片，也不能证明生成协议、图生图参考 URL、callback 公网可达、结果下载、取消语义或最终费用正确。真实 Provider key 只挂载到 Worker，API 只持有 callback/短期资产 URL 的内部签名 secret。付费 canary 前必须先确认宿主 Nginx/TLS 已上线，并从公网验证 Provider 能访问短期签名的 `GET/HEAD /api/v1/provider-assets/...`；Legnext 的 `POST /api/v1/provider-callbacks/...` 还必须能通过公网到达 API。不要把完整签名 URL 记录到终端历史或工单。
 
 首次上线和 Provider 合约变化后必须在公开 HTTPS 部署上用专用、设有低额度上限的测试用户执行小规模真实 canary；这一步必须人工触发，不能由 CI、健康探针或负载脚本自动执行：

@@ -4,6 +4,8 @@ import (
 	"log/slog"
 	"net/url"
 	"os"
+	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -124,7 +126,7 @@ func TestLoadAPIDoesNotRequireProviderBillingKeys(t *testing.T) {
 	if err != nil {
 		t.Fatalf("API configuration unexpectedly required billing keys: %v", err)
 	}
-	if cfg.LegnextAPIKey != "" || cfg.OpenRouterAPIKey != "" || cfg.BFLAPIKey != "" || cfg.BytePlusAPIKey != "" {
+	if cfg.LegnextAPIKey != "" || len(cfg.OpenRouterAPIKeys) != 0 || cfg.BFLAPIKey != "" || cfg.BytePlusAPIKey != "" {
 		t.Fatal("API configuration contains provider billing keys")
 	}
 }
@@ -156,6 +158,48 @@ func TestLoadAcceptsProductionLiveConfiguration(t *testing.T) {
 
 	if _, err := Load(); err != nil {
 		t.Fatalf("expected valid production configuration, got %v", err)
+	}
+}
+
+func TestLoadReadsOpenRouterKeyPoolFromSecretFile(t *testing.T) {
+	t.Setenv("PROVIDER_MODE", "live")
+	t.Setenv("LEGNEXT_API_KEY", "legnext-test-key")
+	t.Setenv("OPENROUTER_API_KEY", "")
+	t.Setenv("BFL_API_KEY", "bfl-test-key")
+	t.Setenv("BYTEPLUS_API_KEY", "byteplus-test-key")
+	t.Setenv("PROVIDER_CALLBACK_SECRET", strings.Repeat("c", 32))
+	t.Setenv("PROVIDER_URL_SIGNING_SECRET", strings.Repeat("u", 32))
+	path := filepath.Join(t.TempDir(), "openrouter-keys")
+	if err := os.WriteFile(path, []byte("key-a\n\nkey-b\r\nkey-c\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("OPENROUTER_API_KEY_FILE", path)
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"key-a", "key-b", "key-c"}
+	if !slices.Equal(cfg.OpenRouterAPIKeys, want) {
+		t.Fatalf("OpenRouterAPIKeys = %v, want %v", cfg.OpenRouterAPIKeys, want)
+	}
+}
+
+func TestLoadRejectsDuplicateOpenRouterKeys(t *testing.T) {
+	t.Setenv("PROVIDER_MODE", "live")
+	t.Setenv("LEGNEXT_API_KEY", "legnext-test-key")
+	t.Setenv("OPENROUTER_API_KEY", "")
+	t.Setenv("BFL_API_KEY", "bfl-test-key")
+	t.Setenv("BYTEPLUS_API_KEY", "byteplus-test-key")
+	t.Setenv("PROVIDER_CALLBACK_SECRET", strings.Repeat("c", 32))
+	t.Setenv("PROVIDER_URL_SIGNING_SECRET", strings.Repeat("u", 32))
+	path := filepath.Join(t.TempDir(), "openrouter-keys")
+	if err := os.WriteFile(path, []byte("same-key\nsame-key\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("OPENROUTER_API_KEY_FILE", path)
+	if _, err := Load(); err == nil || !strings.Contains(err.Error(), "duplicate") {
+		t.Fatalf("expected duplicate key error, got %v", err)
 	}
 }
 

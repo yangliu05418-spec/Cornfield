@@ -156,5 +156,10 @@ func secret(name string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("read %s_FILE: %w", name, err)
 	}
-	return strings.TrimSpace(string(data)), nil
+	for _, line := range strings.Split(strings.ReplaceAll(string(data), "\r\n", "\n"), "\n") {
+		if value := strings.TrimSpace(line); value != "" {
+			return value, nil
+		}
+	}
+	return "", nil
 }

@@ -83,6 +83,7 @@ function compileV3(document: EditorDocumentV3): EditorRenderScene {
   )
   const nodes: EditorSceneRasterNode[] = []
   ordered.forEach((artboard, artboardOrder) => {
+    if (artboard.nodes.length === 0) return
     const scene = compileV2(artboardAsDocumentV2(artboard))
     nodes.push(
       ...scene.nodes.map((node) => ({

@@ -43,6 +43,7 @@ type Props = {
   shapeSelection?: 'rectangle' | 'ellipse'
   onShapeSelection: (mask: EditorShapeMaskV2 | undefined) => void
   onArtboardMove?: (delta: { x: number; y: number }) => void
+  ariaLabel?: string
 }
 
 export function StructuredCanvasInteraction({
@@ -62,6 +63,7 @@ export function StructuredCanvasInteraction({
   shapeSelection,
   onShapeSelection,
   onArtboardMove,
+  ariaLabel = '专业图层画布',
 }: Props) {
   const rootRef = useRef<HTMLDivElement>(null)
   const cancelPointerSessionRef = useRef<() => void>(() => undefined)
@@ -390,7 +392,7 @@ export function StructuredCanvasInteraction({
       data-panning={spacePressed || dragging || undefined}
       data-shape-tool={shapeSelection}
       role="region"
-      aria-label="专业图层画布"
+      aria-label={ariaLabel}
       tabIndex={0}
       onPointerDown={beginPointer}
       onWheel={(event) => {

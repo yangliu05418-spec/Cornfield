@@ -74,6 +74,7 @@ import {
   reorderEditorNodeRelative,
 } from './domain/layer-panel-model'
 import type { EditorLayerDropPosition } from './domain/layer-panel-model'
+import { EditorDOMSurface } from './renderer/dom-surface'
 import { PixiSurface } from './renderer/pixi-surface'
 import { StructuredCanvasInteraction } from './structured-canvas-interaction'
 import { RasterMaskOverlay } from './tools/raster-mask/raster-mask-overlay'
@@ -112,7 +113,7 @@ export function StructuredEditor({
     artboardAsDocumentV2(initialArtboard),
   )
   const [editorMode, setEditorMode] = useState<'basic' | 'professional'>(
-    'professional',
+    'basic',
   )
   const [newArtboardOpen, setNewArtboardOpen] = useState(false)
   const [uploadingArtboard, setUploadingArtboard] = useState(false)
@@ -160,6 +161,15 @@ export function StructuredEditor({
   const dirtyRef = useRef(false)
   const saveBlockedRef = useRef(false)
   const [, setHistoryRevision] = useState(0)
+
+  useEffect(() => {
+    if (editorMode !== 'basic') {
+      setPresented(false)
+      return
+    }
+    setRendererError('')
+    setPresented(true)
+  }, [editorMode])
 
   const rows = useMemo(
     () => buildVisibleEditorLayerRows(document, collapsed),
@@ -985,7 +995,11 @@ export function StructuredEditor({
               <button
                 type="button"
                 className={editorMode === 'professional' ? 'active' : undefined}
-                onClick={() => setEditorMode('professional')}
+                onClick={() => {
+                  setRendererError('')
+                  setEditorMode('professional')
+                  setRendererAttempt((value) => value + 1)
+                }}
               >
                 专业模式
               </button>
@@ -1467,8 +1481,15 @@ export function StructuredEditor({
                 </span>
               </div>
             )}
+            {editorMode === 'basic' && (
+              <EditorDOMSurface
+                document={projectDocument}
+                assets={assets}
+                viewport={view}
+              />
+            )}
             <PixiSurface
-              enabled
+              enabled={editorMode === 'professional'}
               document={projectDocument}
               assets={assets}
               rasterMasks={rasterMask.resources}
@@ -1480,6 +1501,7 @@ export function StructuredEditor({
                 setNotice(`图形渲染不可用：${reason}`)
               }}
               onPresentedChange={(value) => {
+                if (editorMode !== 'professional') return
                 setPresented(value)
                 if (value) setRendererError('')
               }}
@@ -1523,6 +1545,9 @@ export function StructuredEditor({
                   ),
                 }))
               }
+              ariaLabel={
+                editorMode === 'professional' ? '专业图层画布' : '图片编辑画布'
+              }
             />
             {rasterEditing &&
               activeNode?.type === 'raster' &&
@@ -1545,7 +1570,7 @@ export function StructuredEditor({
                   onNotice={setNotice}
                 />
               )}
-            {rendererError ? (
+            {editorMode === 'professional' && rendererError ? (
               <div className="structured-render-recovery" role="alert">
                 <strong>专业画布暂时无法显示</strong>
                 <span>{rendererError}</span>
@@ -1578,7 +1603,7 @@ export function StructuredEditor({
               <div className="structured-render-wait" role="alert">
                 工程资源无法读取，请刷新后重试
               </div>
-            ) : !presented ? (
+            ) : editorMode === 'professional' && !presented ? (
               <div className="structured-render-wait" aria-live="polite">
                 <span className="spinner" /> 正在准备专业画布
               </div>

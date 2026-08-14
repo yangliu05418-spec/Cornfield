@@ -18,6 +18,34 @@ import {
 const identity: EditorTransform = [1, 0, 0, 1, 0, 0]
 
 describe('editor scene compiler', () => {
+  it('keeps an empty V3 artboard renderable', () => {
+    const document: EditorDocumentV3 = {
+      schema_version: 3,
+      renderer_semantics_version: 2,
+      active_artboard_id: 'blank',
+      artboards: [
+        {
+          id: 'blank',
+          name: 'Blank',
+          order_key: '000001',
+          x: 20,
+          y: 30,
+          width: 1600,
+          height: 900,
+          visible: true,
+          locked: false,
+          nodes: [],
+        },
+      ],
+    }
+
+    expect(compileEditorRenderScene(document)).toMatchObject({
+      canvas: { width: 1600, height: 900 },
+      nodes: [],
+      artboards: [{ id: 'blank', x: 20, y: 30 }],
+    })
+  })
+
   it('keeps V3 nodes inside independently positioned artboards', () => {
     const document: EditorDocumentV3 = {
       schema_version: 3,

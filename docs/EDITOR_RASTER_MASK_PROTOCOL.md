@@ -32,8 +32,13 @@ The pure TypeScript tile engine is the first authoritative implementation. Worke
 
 ## Persistence boundary
 
-The next persistence increment will introduce project-owned mask resources and immutable versions. Each version is a manifest from tile coordinate to a derived immutable asset. Updating a mask creates a new version by committing changed tiles with an expected resource revision; it never mutates an existing version.
+- `editor_raster_masks` owns one mask per project raster node and binds it to the immutable source asset dimensions.
+- `editor_raster_mask_versions` is append-only. A commit may branch from any existing version after an undo; the project revision lock still serializes the authoritative document update.
+- A version is a complete sparse manifest. Unchanged rows are copied from its base version, while immutable `.a8` bytes remain content-addressed and deduplicated by SHA-256.
+- The project document stores only `{resource_id, version}`. Saving a document validates owner, project, target node, source asset and version before accepting the reference.
+- Tile commits use a project-scoped multipart endpoint with a JSON manifest first, at most 576 full Alpha8 tile parts and a 40 MiB body limit. Default tiles are represented by `delete`, never by stored bytes.
+- The API records a short database-visible blob write lease before committing bytes. Worker orphan cleanup includes active leases and every immutable mask-version reference, closing the cross-process put/delete race.
+- Publication snapshots both the editor-project revision and every referenced mask version. The Worker loads only materialized tiles and samples them directly into its existing 512px render tiles; it never creates a full-canvas Alpha image.
+- Project and user deletion remove manifests through database cascades. The conservative content sweeper deletes bytes only after the SHA reference recheck proves that no version or active write lease still references them.
 
-Publication snapshots both the editor-project revision and every referenced mask version. A later brush stroke therefore cannot alter an already queued export. Project deletion and user deletion remove manifests first and content bytes only after the existing SHA reference check proves that no version still references them.
-
-The existing generic upload endpoint must not be used to surface mask tiles as library assets. Tile ingestion will be a project-scoped path with fixed dimensions, media type, owner checks, byte limits and orphan cleanup.
+The generic upload endpoint is not used for mask tiles, and mask bytes never appear as user-library assets.

@@ -21,6 +21,11 @@ export type EditorShapeMaskV2 = {
   inverted: boolean
 }
 
+export type EditorPixelMaskV2 = {
+  resource_id: string
+  version: number
+}
+
 export type EditorNodeV2 = {
   id: string
   type: 'raster' | 'group' | 'adjustment'
@@ -39,6 +44,7 @@ export type EditorNodeV2 = {
   effects?: EditorEffectV2[]
   target_id?: string
   shape_mask?: EditorShapeMaskV2
+  pixel_mask?: EditorPixelMaskV2
 }
 
 export type EditorDocumentV2 = {
@@ -95,6 +101,7 @@ export function compileEditorDocumentV2ToV1(
         node.mask_id !== undefined ||
         node.target_id !== undefined ||
         node.shape_mask !== undefined ||
+        node.pixel_mask !== undefined ||
         node.blend_mode !== 'normal' ||
         (node.effects?.length ?? 0) > 0 ||
         !node.asset_id,
@@ -175,8 +182,12 @@ export function validateEditorDocumentV2(document: EditorDocumentV2): string[] {
         node.target_id !== undefined ||
         !validCrop(node.crop) ||
         !validShapeMask(node.shape_mask) ||
+        !validPixelMask(node.pixel_mask) ||
         (node.shape_mask !== undefined &&
-          (node.crop !== undefined || node.mask_id !== undefined)) ||
+          (node.crop !== undefined ||
+            node.mask_id !== undefined ||
+            node.pixel_mask !== undefined)) ||
+        (node.pixel_mask !== undefined && node.mask_id !== undefined) ||
         !validEffects(node.effects ?? [])
       )
         errors.push(`asset:${node.id}`)
@@ -186,6 +197,7 @@ export function validateEditorDocumentV2(document: EditorDocumentV2): string[] {
         node.crop !== undefined ||
         node.target_id !== undefined ||
         node.shape_mask !== undefined ||
+        node.pixel_mask !== undefined ||
         (node.effects?.length ?? 0) > 0
       )
         errors.push(`group:${node.id}`)
@@ -194,6 +206,7 @@ export function validateEditorDocumentV2(document: EditorDocumentV2): string[] {
       node.crop !== undefined ||
       node.mask_id !== undefined ||
       node.shape_mask !== undefined ||
+      node.pixel_mask !== undefined ||
       node.target_id === undefined ||
       node.target_id === node.id ||
       node.blend_mode !== 'normal' ||
@@ -224,6 +237,11 @@ export function validateEditorDocumentV2(document: EditorDocumentV2): string[] {
       document.nodes.some((candidate) => candidate.mask_id === node.id)
     )
       errors.push(`shape-mask-source:${node.id}`)
+    if (
+      node.pixel_mask !== undefined &&
+      document.nodes.some((candidate) => candidate.mask_id === node.id)
+    )
+      errors.push(`pixel-mask-source:${node.id}`)
     if (
       !validAncestry(node, nodes, 'parent_id', 32) ||
       !validAncestry(node, nodes, 'mask_id', 500)
@@ -259,6 +277,17 @@ function validShapeMask(mask?: EditorShapeMaskV2) {
     mask.height > 0 &&
     mask.x + mask.width <= 1 &&
     mask.y + mask.height <= 1
+  )
+}
+
+function validPixelMask(mask?: EditorPixelMaskV2) {
+  return (
+    mask === undefined ||
+    (/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+      mask.resource_id,
+    ) &&
+      Number.isSafeInteger(mask.version) &&
+      mask.version >= 0)
   )
 }
 

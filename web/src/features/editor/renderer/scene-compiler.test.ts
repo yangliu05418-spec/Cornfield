@@ -190,6 +190,18 @@ describe('editor scene compiler', () => {
     expect(scene.nodes[0].shapeMask?.x).toBe(0.1)
   })
 
+  it('keeps immutable pixel mask references in the render scene', () => {
+    const layer = raster('masked', null, '00000001', identity, 1)
+    layer.pixel_mask = {
+      resource_id: '8cab813d-008a-49f2-bfe4-1e1d4ca45b60',
+      version: 7,
+    }
+    const scene = compileEditorRenderScene(v2([layer]))
+    expect(scene.nodes[0].pixelMask).toEqual(layer.pixel_mask)
+    layer.pixel_mask.version = 8
+    expect(scene.nodes[0].pixelMask?.version).toBe(7)
+  })
+
   it('rejects group blend and unsupported mask semantics', () => {
     const groupNode = group('group', null, '00000001', identity, 1)
     groupNode.blend_mode = 'multiply'

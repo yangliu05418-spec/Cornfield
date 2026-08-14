@@ -32,6 +32,7 @@ type RenderNode struct {
 	Effects     []EffectV2
 	ColorMatrix ColorMatrixV1
 	ShapeMask   *ShapeMaskV2
+	PixelMask   *PixelMaskV2
 }
 
 func DecodeRenderScene(raw []byte) (RenderScene, error) {
@@ -153,6 +154,7 @@ func CompileV2RenderScene(document DocumentV2) (RenderScene, error) {
 				Crop: cloneCrop(node.Crop), Role: role, MaskNodeID: cloneString(node.MaskID),
 				BlendMode: node.BlendMode, Effects: cloneEffects(node.Effects), ColorMatrix: ComposeColorMatricesV1(matrices...),
 				ShapeMask: cloneShapeMaskV2(node.ShapeMask),
+				PixelMask: clonePixelMaskV2(node.PixelMask),
 			})
 		}
 	}
@@ -178,14 +180,14 @@ func (s RenderScene) Validate() error {
 	nodesByID := make(map[string]RenderNode, len(s.Nodes))
 	for index, node := range s.Nodes {
 		if !validNodeID(node.ID) || node.AssetID == uuid.Nil || !validTransform(node.Transform) ||
-			!validOpacity(node.Opacity) || node.Order != index || !validCrop(node.Crop) || !validShapeMaskV2(node.ShapeMask) || !validBlendMode(node.BlendMode) || !validEffects(node.Effects) || !validColorMatrixV1(node.ColorMatrix) ||
+			!validOpacity(node.Opacity) || node.Order != index || !validCrop(node.Crop) || !validShapeMaskV2(node.ShapeMask) || !validPixelMaskV2(node.PixelMask) || !validBlendMode(node.BlendMode) || !validEffects(node.Effects) || !validColorMatrixV1(node.ColorMatrix) ||
 			(node.Role != RenderRoleContent && node.Role != RenderRoleMask) {
 			return ErrInvalidDocument
 		}
 		if _, exists := nodesByID[node.ID]; exists {
 			return ErrInvalidDocument
 		}
-		if node.Role == RenderRoleMask && node.MaskNodeID != nil {
+		if node.Role == RenderRoleMask && (node.MaskNodeID != nil || node.PixelMask != nil) {
 			return fmt.Errorf("%w: mask nodes cannot have masks", ErrInvalidDocument)
 		}
 		nodesByID[node.ID] = node
@@ -236,6 +238,14 @@ func cloneCrop(value *Crop) *Crop {
 }
 
 func cloneShapeMaskV2(value *ShapeMaskV2) *ShapeMaskV2 {
+	if value == nil {
+		return nil
+	}
+	result := *value
+	return &result
+}
+
+func clonePixelMaskV2(value *PixelMaskV2) *PixelMaskV2 {
 	if value == nil {
 		return nil
 	}

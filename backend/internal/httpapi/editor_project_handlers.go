@@ -225,6 +225,28 @@ func (s *Server) saveEditorProject(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusUnprocessableEntity, "EDITOR_ASSET_INVALID", "工程包含不存在或不可访问的图片", false, r)
 		return
 	}
+	maskReferences := document.PixelMaskReferences()
+	if len(maskReferences) > 0 {
+		maskIDs := make([]uuid.UUID, len(maskReferences))
+		maskVersions := make([]int64, len(maskReferences))
+		nodeIDs := make([]string, len(maskReferences))
+		maskAssetIDs := make([]uuid.UUID, len(maskReferences))
+		for index, reference := range maskReferences {
+			maskIDs[index], maskVersions[index] = reference.ResourceID, reference.Version
+			nodeIDs[index], maskAssetIDs[index] = reference.NodeID, reference.AssetID
+		}
+		var validMaskCount int
+		err = tx.QueryRow(r.Context(), `SELECT count(*) FROM
+			unnest($1::uuid[],$2::bigint[],$3::text[],$4::uuid[]) refs(mask_id,version,node_id,asset_id)
+			JOIN editor_raster_masks m ON m.id=refs.mask_id AND m.owner_user_id=$5
+				AND m.editor_project_id=$6 AND m.target_node_id=refs.node_id AND m.source_asset_id=refs.asset_id
+			JOIN editor_raster_mask_versions v ON v.mask_id=refs.mask_id AND v.version=refs.version`,
+			maskIDs, maskVersions, nodeIDs, maskAssetIDs, currentSession(r).UserID, id).Scan(&validMaskCount)
+		if err != nil || validMaskCount != len(maskReferences) {
+			writeError(w, http.StatusUnprocessableEntity, "EDITOR_RASTER_MASK_INVALID", "工程包含不存在或不可访问的像素蒙版", false, r)
+			return
+		}
+	}
 	var revision int64
 	err = tx.QueryRow(r.Context(), `UPDATE image_editor_projects SET document=$4,revision=revision+1,updated_at=now()
 		WHERE id=$1 AND owner_user_id=$2 AND revision=$3 RETURNING revision`, id, currentSession(r).UserID, input.ExpectedRevision, input.Document).Scan(&revision)

@@ -42,7 +42,37 @@ import (
 const (
 	maxLayerInputBytes = int64(30 << 20)
 	maxLayerGroupBytes = int64(512 << 20)
+	rasterMaskTileSize = 256
 )
+
+type sparseRasterMaskTile struct {
+	width  int
+	height int
+	pixels []byte
+}
+
+type sparseRasterMask struct {
+	bounds       image.Rectangle
+	defaultAlpha uint8
+	tiles        map[[2]int]sparseRasterMaskTile
+}
+
+func (m *sparseRasterMask) ColorModel() color.Model { return color.AlphaModel }
+func (m *sparseRasterMask) Bounds() image.Rectangle { return m.bounds }
+func (m *sparseRasterMask) At(x, y int) color.Color {
+	if !image.Pt(x, y).In(m.bounds) {
+		return color.Alpha{}
+	}
+	tile, ok := m.tiles[[2]int{x / rasterMaskTileSize, y / rasterMaskTileSize}]
+	if !ok {
+		return color.Alpha{A: m.defaultAlpha}
+	}
+	localX, localY := x%rasterMaskTileSize, y%rasterMaskTileSize
+	if localX >= tile.width || localY >= tile.height {
+		return color.Alpha{A: m.defaultAlpha}
+	}
+	return color.Alpha{A: tile.pixels[localY*tile.width+localX]}
+}
 
 type AssetOperationWorker struct {
 	river.WorkerDefaults[AssetOperationArgs]
@@ -408,7 +438,7 @@ func encodeOpaqueJPEG(path string, quality int) error {
 }
 
 func (w *AssetOperationWorker) renderDocument(ctx context.Context, ownerID uuid.UUID, scene studioEditor.RenderScene, target string) error {
-	canvas, err := compositeEditorScene(ctx, scene, func(assetID uuid.UUID) (image.Image, error) {
+	canvas, err := compositeEditorSceneWithPixelMasks(ctx, scene, func(assetID uuid.UUID) (image.Image, error) {
 		var storageKey string
 		err := w.DB.QueryRow(ctx, `SELECT storage_key FROM assets WHERE id=$1 AND owner_user_id=$2 AND purged_at IS NULL AND purge_pending=false`, assetID, ownerID).Scan(&storageKey)
 		if err != nil {
@@ -421,6 +451,8 @@ func (w *AssetOperationWorker) renderDocument(ctx context.Context, ownerID uuid.
 		source, _, decodeErr := image.Decode(file)
 		_ = file.Close()
 		return source, decodeErr
+	}, func(reference studioEditor.PixelMaskV2) (image.Image, error) {
+		return w.loadEditorRasterMask(ctx, ownerID, reference)
 	})
 	if err != nil {
 		return err
@@ -439,6 +471,55 @@ func (w *AssetOperationWorker) renderDocument(ctx context.Context, ownerID uuid.
 	return closeErr
 }
 
+func (w *AssetOperationWorker) loadEditorRasterMask(ctx context.Context, ownerID uuid.UUID, reference studioEditor.PixelMaskV2) (image.Image, error) {
+	var width, height, defaultAlpha int
+	err := w.DB.QueryRow(ctx, `SELECT m.width,m.height,m.default_alpha
+		FROM editor_raster_masks m
+		JOIN editor_raster_mask_versions v ON v.mask_id=m.id AND v.version=$3
+		WHERE m.id=$1 AND m.owner_user_id=$2`, reference.ResourceID, ownerID, reference.Version).Scan(&width, &height, &defaultAlpha)
+	if err != nil {
+		return nil, fmt.Errorf("load raster mask: %w", err)
+	}
+	rows, err := w.DB.Query(ctx, `SELECT tile_x,tile_y,width,height,storage_key,byte_size
+		FROM editor_raster_mask_version_tiles
+		WHERE mask_id=$1 AND version=$2 ORDER BY tile_y,tile_x`, reference.ResourceID, reference.Version)
+	if err != nil {
+		return nil, fmt.Errorf("load raster mask tiles: %w", err)
+	}
+	defer rows.Close()
+	mask := &sparseRasterMask{
+		bounds: image.Rect(0, 0, width, height), defaultAlpha: uint8(defaultAlpha),
+		tiles: make(map[[2]int]sparseRasterMaskTile),
+	}
+	for rows.Next() {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		var tileX, tileY, tileWidth, tileHeight, byteSize int
+		var storageKey string
+		if err := rows.Scan(&tileX, &tileY, &tileWidth, &tileHeight, &storageKey, &byteSize); err != nil {
+			return nil, fmt.Errorf("scan raster mask tile: %w", err)
+		}
+		if tileWidth < 1 || tileHeight < 1 || byteSize != tileWidth*tileHeight || byteSize > rasterMaskTileSize*rasterMaskTileSize {
+			return nil, errors.New("raster mask tile metadata is invalid")
+		}
+		file, err := w.Blobs.Open(storageKey)
+		if err != nil {
+			return nil, fmt.Errorf("open raster mask tile: %w", err)
+		}
+		pixels, readErr := io.ReadAll(io.LimitReader(file, int64(byteSize+1)))
+		closeErr := file.Close()
+		if readErr != nil || closeErr != nil || len(pixels) != byteSize {
+			return nil, errors.New("raster mask tile bytes are invalid")
+		}
+		mask.tiles[[2]int{tileX, tileY}] = sparseRasterMaskTile{width: tileWidth, height: tileHeight, pixels: pixels}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("read raster mask tiles: %w", err)
+	}
+	return mask, nil
+}
+
 func compositeEditorDocument(ctx context.Context, document studioEditor.Document, load func(uuid.UUID) (image.Image, error)) (*image.RGBA, error) {
 	scene, err := studioEditor.CompileV1RenderScene(document)
 	if err != nil {
@@ -448,6 +529,10 @@ func compositeEditorDocument(ctx context.Context, document studioEditor.Document
 }
 
 func compositeEditorScene(ctx context.Context, scene studioEditor.RenderScene, load func(uuid.UUID) (image.Image, error)) (*image.RGBA, error) {
+	return compositeEditorSceneWithPixelMasks(ctx, scene, load, nil)
+}
+
+func compositeEditorSceneWithPixelMasks(ctx context.Context, scene studioEditor.RenderScene, load func(uuid.UUID) (image.Image, error), loadPixelMask func(studioEditor.PixelMaskV2) (image.Image, error)) (*image.RGBA, error) {
 	if err := scene.Validate(); err != nil {
 		return nil, err
 	}
@@ -478,11 +563,12 @@ func compositeEditorScene(ctx context.Context, scene studioEditor.RenderScene, l
 		if crop.Empty() {
 			continue
 		}
-		if node.MaskNodeID == nil && node.ShapeMask == nil && node.BlendMode == "normal" && studioEditor.IsIdentityColorMatrixV1(node.ColorMatrix) {
+		if node.MaskNodeID == nil && node.ShapeMask == nil && node.PixelMask == nil && node.BlendMode == "normal" && studioEditor.IsIdentityColorMatrixV1(node.ColorMatrix) {
 			drawEditorNode(canvas, node, source, crop)
 		} else {
 			var maskNode *studioEditor.RenderNode
 			var maskSource image.Image
+			var pixelMaskSource image.Image
 			if node.MaskNodeID != nil {
 				value, exists := nodesByID[*node.MaskNodeID]
 				if !exists || !value.Visible || value.Opacity == 0 {
@@ -494,10 +580,23 @@ func compositeEditorScene(ctx context.Context, scene studioEditor.RenderScene, l
 					return nil, err
 				}
 			}
-			if renderErr := drawProcessedEditorNode(ctx, canvas, canvasBounds, node, source, crop, maskNode, maskSource); renderErr != nil {
+			if node.PixelMask != nil {
+				if loadPixelMask == nil {
+					return nil, studioEditor.ErrUnsupportedDocumentSemantics
+				}
+				pixelMaskSource, err = loadPixelMask(*node.PixelMask)
+				if err != nil {
+					return nil, err
+				}
+				if pixelMaskSource.Bounds().Dx() != sourceBounds.Dx() || pixelMaskSource.Bounds().Dy() != sourceBounds.Dy() {
+					return nil, errors.New("raster mask dimensions do not match source asset")
+				}
+			}
+			if renderErr := drawProcessedEditorNode(ctx, canvas, canvasBounds, node, source, crop, maskNode, maskSource, pixelMaskSource); renderErr != nil {
 				return nil, renderErr
 			}
 			maskSource = nil
+			pixelMaskSource = nil
 		}
 		source = nil
 		if err := ctx.Err(); err != nil {
@@ -516,7 +615,7 @@ func drawEditorNode(destination *image.RGBA, node studioEditor.RenderNode, sourc
 	draw.BiLinear.Transform(destination, matrix, source, sourceBounds, draw.Over, options)
 }
 
-func drawProcessedEditorNode(ctx context.Context, destination *image.RGBA, canvasBounds image.Rectangle, node studioEditor.RenderNode, source image.Image, sourceBounds image.Rectangle, maskNode *studioEditor.RenderNode, maskSource image.Image) error {
+func drawProcessedEditorNode(ctx context.Context, destination *image.RGBA, canvasBounds image.Rectangle, node studioEditor.RenderNode, source image.Image, sourceBounds image.Rectangle, maskNode *studioEditor.RenderNode, maskSource image.Image, pixelMaskSource image.Image) error {
 	bounds := transformedBounds(node.Transform, sourceBounds).Intersect(canvasBounds)
 	if bounds.Empty() {
 		return nil
@@ -540,6 +639,9 @@ func drawProcessedEditorNode(ctx context.Context, destination *image.RGBA, canva
 				mask = image.NewAlpha(layer.Bounds())
 				draw.BiLinear.Transform(mask, affineMatrix(maskNode.Transform, tileBounds.Min.X, tileBounds.Min.Y), maskSource, maskSource.Bounds(), draw.Src, nil)
 				opacity *= maskNode.Opacity
+			} else if pixelMaskSource != nil {
+				mask = image.NewAlpha(layer.Bounds())
+				transformEditorPixelMask(mask, pixelMaskSource, sourceBounds, node.Transform, tileBounds.Min)
 			}
 			applyEditorLayerEffects(layer, mask, opacity, matrix, node.ShapeMask, node.Transform, tileBounds.Min, source.Bounds())
 			if err := compositeEditorLayer(ctx, destination, tileBounds, layer, node.BlendMode); err != nil {
@@ -548,6 +650,37 @@ func drawProcessedEditorNode(ctx context.Context, destination *image.RGBA, canva
 		}
 	}
 	return nil
+}
+
+func transformEditorPixelMask(destination *image.Alpha, source image.Image, sourceBounds image.Rectangle, transform [6]float64, tileOrigin image.Point) {
+	inverse, ok := invertEditorTransform(transform)
+	if !ok {
+		return
+	}
+	for y := 0; y < destination.Bounds().Dy(); y++ {
+		for x := 0; x < destination.Bounds().Dx(); x++ {
+			canvasX := float64(tileOrigin.X+x) + 0.5
+			canvasY := float64(tileOrigin.Y+y) + 0.5
+			sourceX := inverse[0]*canvasX + inverse[2]*canvasY + inverse[4] - 0.5
+			sourceY := inverse[1]*canvasX + inverse[3]*canvasY + inverse[5] - 0.5
+			destination.SetAlpha(x, y, color.Alpha{A: sampleEditorMaskAlpha(source, sourceBounds, sourceX, sourceY)})
+		}
+	}
+}
+
+func sampleEditorMaskAlpha(source image.Image, bounds image.Rectangle, x, y float64) uint8 {
+	left, top := int(math.Floor(x)), int(math.Floor(y))
+	weightX, weightY := x-float64(left), y-float64(top)
+	alphaAt := func(px, py int) float64 {
+		if !image.Pt(px, py).In(bounds) {
+			return 0
+		}
+		_, _, _, alpha := source.At(px, py).RGBA()
+		return float64(alpha) / 65535
+	}
+	topAlpha := alphaAt(left, top)*(1-weightX) + alphaAt(left+1, top)*weightX
+	bottomAlpha := alphaAt(left, top+1)*(1-weightX) + alphaAt(left+1, top+1)*weightX
+	return channelByte(topAlpha*(1-weightY) + bottomAlpha*weightY)
 }
 
 func applyEditorLayerEffects(layer *image.RGBA, mask *image.Alpha, opacity float64, matrix studioEditor.ColorMatrixV1, shapeMask *studioEditor.ShapeMaskV2, transform [6]float64, tileOrigin image.Point, sourceBounds image.Rectangle) {

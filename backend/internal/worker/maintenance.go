@@ -216,6 +216,8 @@ func (m *Maintenance) purgeAsset(ctx context.Context, assetID uuid.UUID, storage
 	if err = tx.QueryRow(ctx, `SELECT EXISTS(
 		SELECT 1 FROM assets WHERE sha256=$1 AND id<>$2 AND purged_at IS NULL
 		UNION ALL SELECT 1 FROM generation_staged_outputs WHERE sha256=$1
+		UNION ALL SELECT 1 FROM editor_raster_mask_version_tiles WHERE sha256=$1
+		UNION ALL SELECT 1 FROM blob_write_leases WHERE sha256=$1 AND expires_at>now()
 		UNION ALL SELECT 1 FROM asset_operations o
 			CROSS JOIN LATERAL jsonb_array_elements(COALESCE(o.staged_manifest->'items','[]'::jsonb)) item
 			WHERE item->>'sha256'=$1 AND o.status NOT IN ('succeeded','failed','cancelled','submission_uncertain')
@@ -260,6 +262,9 @@ type contentStorageMaintenanceStats struct {
 
 func (m *Maintenance) maintainContentStorage(ctx context.Context) (contentStorageMaintenanceStats, error) {
 	stats := contentStorageMaintenanceStats{}
+	if _, err := m.DB.Exec(ctx, `DELETE FROM blob_write_leases WHERE expires_at<=now()`); err != nil {
+		return stats, fmt.Errorf("clean expired blob write leases: %w", err)
+	}
 	references, err := m.loadStorageReferences(ctx)
 	if err != nil {
 		return stats, err
@@ -323,6 +328,8 @@ func (m *Maintenance) storageDigestReferenced(ctx context.Context, digest string
 	err := m.DB.QueryRow(ctx, `SELECT EXISTS(
 		SELECT 1 FROM assets WHERE sha256=$1 AND purged_at IS NULL
 		UNION ALL SELECT 1 FROM generation_staged_outputs WHERE sha256=$1
+		UNION ALL SELECT 1 FROM editor_raster_mask_version_tiles WHERE sha256=$1
+		UNION ALL SELECT 1 FROM blob_write_leases WHERE sha256=$1 AND expires_at>now()
 		UNION ALL SELECT 1 FROM asset_operations o
 			CROSS JOIN LATERAL jsonb_array_elements(COALESCE(o.staged_manifest->'items','[]'::jsonb)) item
 			WHERE item->>'sha256'=$1 AND o.status NOT IN ('succeeded','failed','cancelled','submission_uncertain')
@@ -333,6 +340,8 @@ func (m *Maintenance) storageDigestReferenced(ctx context.Context, digest string
 func (m *Maintenance) loadStorageReferences(ctx context.Context) (map[string]storageReference, error) {
 	rows, err := m.DB.Query(ctx, `SELECT storage_key,sha256,true FROM assets WHERE purged_at IS NULL
 		UNION ALL SELECT storage_key,sha256,false FROM generation_staged_outputs
+		UNION ALL SELECT storage_key,sha256,false FROM editor_raster_mask_version_tiles
+		UNION ALL SELECT storage_key,sha256,false FROM blob_write_leases WHERE expires_at>now()
 		UNION ALL SELECT item->>'storage_key',item->>'sha256',false FROM asset_operations o
 			CROSS JOIN LATERAL jsonb_array_elements(COALESCE(o.staged_manifest->'items','[]'::jsonb)) item
 			WHERE item->>'storage_key'<>'' AND item->>'sha256'<>'' AND o.status NOT IN ('succeeded','failed','cancelled','submission_uncertain')`)

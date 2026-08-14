@@ -90,4 +90,20 @@ describe('editor document V2', () => {
     v2.nodes[0].crop = { x: 0, y: 0, width: 0.5, height: 0.5 }
     expect(validateEditorDocumentV2(v2)).toContain(`asset:${v2.nodes[0].id}`)
   })
+
+  it('validates immutable pixel mask references', () => {
+    const v2 = migrateEditorDocumentV1ToV2(
+      fixture('v1-flat.json') as EditorDocumentV1,
+    )
+    v2.nodes[0].pixel_mask = {
+      resource_id: '8cab813d-008a-49f2-bfe4-1e1d4ca45b60',
+      version: 4,
+    }
+    expect(validateEditorDocumentV2(v2)).toEqual([])
+    expect(() => compileEditorDocumentV2ToV1(v2)).toThrow(
+      UnsupportedEditorSemanticsError,
+    )
+    v2.nodes[0].pixel_mask.version = -1
+    expect(validateEditorDocumentV2(v2)).toContain(`asset:${v2.nodes[0].id}`)
+  })
 })

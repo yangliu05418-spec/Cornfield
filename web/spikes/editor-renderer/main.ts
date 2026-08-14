@@ -17,6 +17,8 @@ type SpikeResult = {
   initMs: number
   syncMs: number
   burstSyncMs: number
+  burstSyncPasses: number
+  burstCoalescedSyncs: number
   renderP50Ms: number
   renderP95Ms: number
   frameIntervalP95Ms: number
@@ -77,6 +79,8 @@ void run().catch((error: unknown) => {
     initMs: 0,
     syncMs: 0,
     burstSyncMs: 0,
+    burstSyncPasses: 0,
+    burstCoalescedSyncs: 0,
     renderP50Ms: 0,
     renderP95Ms: 0,
     frameIntervalP95Ms: 0,
@@ -127,6 +131,7 @@ async function run() {
   const syncStarted = performance.now()
   await renderer.sync(document, assets)
   const syncMs = performance.now() - syncStarted
+  const beforeBurst = renderer.stats()
   const burstStarted = performance.now()
   await Promise.all(
     Array.from({ length: 20 }, (_, index) =>
@@ -134,6 +139,10 @@ async function run() {
     ),
   )
   const burstSyncMs = performance.now() - burstStarted
+  const afterBurst = renderer.stats()
+  const burstSyncPasses = afterBurst.syncPasses - beforeBurst.syncPasses
+  const burstCoalescedSyncs =
+    afterBurst.coalescedSyncs - beforeBurst.coalescedSyncs
   for (let index = 0; index < 30; index += 1) {
     await nextFrame()
     renderer.setViewport({
@@ -190,6 +199,8 @@ async function run() {
     initMs,
     syncMs,
     burstSyncMs,
+    burstSyncPasses,
+    burstCoalescedSyncs,
     renderP50Ms: percentile(renderTimes, 0.5),
     renderP95Ms: percentile(renderTimes, 0.95),
     frameIntervalP95Ms: percentile(frameIntervals, 0.95),

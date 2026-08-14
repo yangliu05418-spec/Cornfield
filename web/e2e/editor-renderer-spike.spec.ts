@@ -42,8 +42,8 @@ test('Pixi renderer meets the Stage A correctness and resource gate', async ({
   )
   expect(result.syncMs).toBeLessThan(2_500)
   expect(result.burstSyncMs).toBeLessThan(2_500)
-  expect(result.statsBeforeDestroy.coalescedSyncs).toBeGreaterThanOrEqual(18)
-  expect(result.statsBeforeDestroy.syncPasses).toBeLessThanOrEqual(3)
+  expect(result.burstCoalescedSyncs).toBeGreaterThanOrEqual(18)
+  expect(result.burstSyncPasses).toBeLessThanOrEqual(2)
   expect(result.renderP95Ms).toBeLessThan(8)
   expect(result.longTasks).toBeGreaterThanOrEqual(0)
   if (timingGateEnforced) {
@@ -117,6 +117,8 @@ declare global {
       initMs: number
       syncMs: number
       burstSyncMs: number
+      burstSyncPasses: number
+      burstCoalescedSyncs: number
       renderP50Ms: number
       renderP95Ms: number
       frameIntervalP95Ms: number

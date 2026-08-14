@@ -257,4 +257,49 @@ describe('StructuredEditor', () => {
       )
     })
   })
+
+  it('persists and controls a shape mask with the current design language', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    apiMock.mockImplementation((path: string) => {
+      if (path === '/api/v1/assets/resolve')
+        return Promise.resolve({ items: [firstAsset, secondAsset] })
+      if (path === '/api/v1/models')
+        return Promise.resolve({ revision: 'test', models: [] })
+      return Promise.resolve({ revision: 2 })
+    })
+    const value = project()
+    value.document.nodes[0].shape_mask = {
+      type: 'ellipse',
+      x: 0.1,
+      y: 0.2,
+      width: 0.6,
+      height: 0.5,
+      inverted: false,
+    }
+    render(
+      <QueryClientProvider
+        client={
+          new QueryClient({ defaultOptions: { queries: { retry: false } } })
+        }
+      >
+        <StructuredEditor
+          project={value}
+          onBack={vi.fn()}
+          onProjectChange={vi.fn()}
+        />
+      </QueryClientProvider>,
+    )
+    fireEvent.click((await screen.findAllByText('人物'))[0])
+    expect(screen.getAllByText('椭圆蒙版')).toHaveLength(2)
+    fireEvent.click(screen.getByRole('button', { name: '反相' }))
+    expect(screen.getByText('椭圆蒙版 · 已反相')).toBeTruthy()
+    await vi.advanceTimersByTimeAsync(1_100)
+    const saveCall = apiMock.mock.calls.find(
+      ([path, init]) =>
+        String(path).endsWith('/document') &&
+        (init as RequestInit | undefined)?.method === 'PUT',
+    )
+    const body = JSON.parse((saveCall?.[1] as RequestInit).body as string)
+    expect(body.document.nodes[0].shape_mask).toMatchObject({ inverted: true })
+  })
 })

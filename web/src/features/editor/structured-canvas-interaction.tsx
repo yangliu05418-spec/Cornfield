@@ -3,10 +3,12 @@ import type { CSSProperties, PointerEvent as ReactPointerEvent } from 'react'
 
 import type { Asset } from '#/lib/api'
 import { screenPointToWorld, zoomAtScreenPoint } from '#/lib/editor-transform'
-import type { EditorDocumentV2 } from './domain/document-v2'
+import type { EditorDocumentV2, EditorShapeMaskV2 } from './domain/document-v2'
+import type { EditorTransform } from './domain/document'
 import {
   editorSelectionContainsNode,
   editorSelectionBounds,
+  editorNodeWorldTransform,
   hitTestEditorDocument,
   transformEditorNodesAroundWorldPoint,
   translateEditorNodes,
@@ -18,6 +20,7 @@ type Props = {
   assets: ReadonlyMap<string, Asset>
   view: EditorViewport
   selectedIDs: ReadonlySet<string>
+  activeID: string
   disabled?: boolean
   onViewChange: (view: EditorViewport) => void
   onSelectionChange: (ids: ReadonlySet<string>, activeID: string) => void
@@ -28,6 +31,8 @@ type Props = {
     mergeKey?: string,
   ) => void
   onFit: () => void
+  shapeSelection?: 'rectangle' | 'ellipse'
+  onShapeSelection: (mask: EditorShapeMaskV2 | undefined) => void
 }
 
 export function StructuredCanvasInteraction({
@@ -35,17 +40,21 @@ export function StructuredCanvasInteraction({
   assets,
   view,
   selectedIDs,
+  activeID,
   disabled,
   onViewChange,
   onSelectionChange,
   onPreview,
   onCommit,
   onFit,
+  shapeSelection,
+  onShapeSelection,
 }: Props) {
   const rootRef = useRef<HTMLDivElement>(null)
   const cancelPointerSessionRef = useRef<() => void>(() => undefined)
   const [spacePressed, setSpacePressed] = useState(false)
   const [dragging, setDragging] = useState(false)
+  const [marquee, setMarquee] = useState<ShapeMarquee>()
   const selectionBounds = useMemo(
     () => editorSelectionBounds(document, assets, selectedIDs),
     [assets, document, selectedIDs],
@@ -97,6 +106,55 @@ export function StructuredCanvasInteraction({
       return
     }
 
+    if (shapeSelection) {
+      const active = document.nodes.find((node) => node.id === activeID)
+      const asset = active?.asset_id ? assets.get(active.asset_id) : undefined
+      if (!active || active.type !== 'raster' || !asset) return
+      const worldTransform = editorNodeWorldTransform(
+        new Map(document.nodes.map((node) => [node.id, node])),
+        active.id,
+      )
+      const start = screenPointToWorld(event.clientX, event.clientY, rect, view)
+      let current = start
+      const move = (moveEvent: PointerEvent) => {
+        current = screenPointToWorld(
+          moveEvent.clientX,
+          moveEvent.clientY,
+          rect,
+          view,
+        )
+        const mask = worldPointsToNodeRect(
+          worldTransform,
+          start,
+          current,
+          asset,
+        )
+        setMarquee(mask ? shapeMarquee(mask, worldTransform, asset) : undefined)
+      }
+      const stop = (commit: boolean) => {
+        finish(move, pointerUp, pointerCancel)
+        cancelPointerSessionRef.current = () => undefined
+        setMarquee(undefined)
+        if (!commit) return
+        const local = worldPointsToNodeRect(
+          worldTransform,
+          start,
+          current,
+          asset,
+        )
+        if (local)
+          onShapeSelection({ type: shapeSelection, ...local, inverted: false })
+      }
+      const pointerUp = () => stop(true)
+      const pointerCancel = () => stop(false)
+      cancelPointerSessionRef.current = () =>
+        finish(move, pointerUp, pointerCancel, { updateState: false })
+      window.addEventListener('pointermove', move)
+      window.addEventListener('pointerup', pointerUp)
+      window.addEventListener('pointercancel', pointerCancel)
+      return
+    }
+
     const point = screenPointToWorld(event.clientX, event.clientY, rect, view)
     const hitID = hitTestEditorDocument(document, assets, point)
     if (!hitID) {
@@ -117,10 +175,10 @@ export function StructuredCanvasInteraction({
       if (nextSelection.has(hitID)) nextSelection.delete(hitID)
       else nextSelection.add(hitID)
     }
-    const activeID = nextSelection.has(hitID)
+    const nextActiveID = nextSelection.has(hitID)
       ? hitID
       : ([...nextSelection].at(-1) ?? '')
-    onSelectionChange(nextSelection, activeID)
+    onSelectionChange(nextSelection, nextActiveID)
     if (
       disabled ||
       (!nextSelection.has(hitID) && !hitInsideSelection) ||
@@ -286,6 +344,7 @@ export function StructuredCanvasInteraction({
       ref={rootRef}
       className="structured-canvas-interaction"
       data-panning={spacePressed || dragging || undefined}
+      data-shape-tool={shapeSelection}
       role="region"
       aria-label="专业图层画布"
       tabIndex={0}
@@ -463,6 +522,97 @@ export function StructuredCanvasInteraction({
           </div>
         </div>
       )}
+      {marquee && (
+        <div
+          className="structured-selection-world"
+          style={{
+            transform: `translate(${view.panX}px, ${view.panY}px) scale(${scale})`,
+          }}
+        >
+          <div
+            className={`structured-shape-marquee is-${shapeSelection}`}
+            style={
+              {
+                left: 0,
+                top: 0,
+                width: marquee.width,
+                height: marquee.height,
+                transform: `matrix(${marquee.transform.join(',')})`,
+                '--editor-zoom': scale,
+              } as CSSProperties
+            }
+          />
+        </div>
+      )}
     </div>
   )
+}
+
+type ShapeMarquee = {
+  width: number
+  height: number
+  transform: EditorTransform
+}
+
+function shapeMarquee(
+  mask: Pick<EditorShapeMaskV2, 'x' | 'y' | 'width' | 'height'>,
+  transform: EditorTransform,
+  asset: Pick<Asset, 'width' | 'height'>,
+): ShapeMarquee {
+  const left = mask.x * asset.width
+  const top = mask.y * asset.height
+  return {
+    width: mask.width * asset.width,
+    height: mask.height * asset.height,
+    transform: [
+      transform[0],
+      transform[1],
+      transform[2],
+      transform[3],
+      transform[4] + transform[0] * left + transform[2] * top,
+      transform[5] + transform[1] * left + transform[3] * top,
+    ],
+  }
+}
+
+function worldPointsToNodeRect(
+  transform: EditorTransform,
+  start: { x: number; y: number },
+  current: { x: number; y: number },
+  asset: Pick<Asset, 'width' | 'height'>,
+) {
+  const inverse = invertTransform(transform)
+  if (!inverse) return undefined
+  const first = applyTransform(inverse, start.x, start.y)
+  const second = applyTransform(inverse, current.x, current.y)
+  const left = clamp(Math.min(first.x, second.x) / asset.width)
+  const top = clamp(Math.min(first.y, second.y) / asset.height)
+  const right = clamp(Math.max(first.x, second.x) / asset.width)
+  const bottom = clamp(Math.max(first.y, second.y) / asset.height)
+  if (right - left < 0.001 || bottom - top < 0.001) return undefined
+  return { x: left, y: top, width: right - left, height: bottom - top }
+}
+
+function invertTransform(value: EditorTransform): EditorTransform | undefined {
+  const determinant = value[0] * value[3] - value[1] * value[2]
+  if (Math.abs(determinant) < 1e-12) return undefined
+  return [
+    value[3] / determinant,
+    -value[1] / determinant,
+    -value[2] / determinant,
+    value[0] / determinant,
+    (value[2] * value[5] - value[3] * value[4]) / determinant,
+    (value[1] * value[4] - value[0] * value[5]) / determinant,
+  ]
+}
+
+function applyTransform(transform: EditorTransform, x: number, y: number) {
+  return {
+    x: transform[0] * x + transform[2] * y + transform[4],
+    y: transform[1] * x + transform[3] * y + transform[5],
+  }
+}
+
+function clamp(value: number) {
+  return Math.max(0, Math.min(1, value))
 }

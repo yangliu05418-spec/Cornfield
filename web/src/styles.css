@@ -1604,6 +1604,9 @@
 .structured-canvas-interaction[data-panning] {
   cursor: grabbing;
 }
+.structured-canvas-interaction[data-shape-tool]:not([data-panning]) {
+  cursor: crosshair;
+}
 .structured-canvas-interaction:focus-visible {
   outline: 1px solid color-mix(in srgb, var(--lime) 52%, transparent);
   outline-offset: -2px;
@@ -1631,6 +1634,33 @@
   box-shadow: 0 0 0 max(1px, calc(1px / var(--editor-zoom, 1)))
     rgb(15 17 19 / 0.5);
   pointer-events: none;
+}
+.structured-shape-marquee {
+  position: absolute;
+  box-sizing: border-box;
+  border: max(1px, calc(1px / var(--editor-zoom, 1))) dashed var(--lime);
+  transform-origin: 0 0;
+  background: color-mix(in srgb, var(--lime) 8%, transparent);
+  pointer-events: none;
+}
+.structured-shape-marquee.is-ellipse {
+  border-radius: 50%;
+}
+.structured-mask-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.structured-mask-actions span {
+  color: var(--muted);
+  font-size: 11px;
+  margin-right: auto;
+}
+.structured-actions button.active {
+  border-color: color-mix(in srgb, var(--lime) 58%, transparent);
+  color: var(--lime);
+  background: color-mix(in srgb, var(--lime) 8%, transparent);
 }
 .structured-transform-handle {
   position: absolute;

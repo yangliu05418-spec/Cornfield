@@ -12,6 +12,15 @@ export type EditorEffectV2 = {
   parameters: Record<string, number>
 }
 
+export type EditorShapeMaskV2 = {
+  type: 'rectangle' | 'ellipse'
+  x: number
+  y: number
+  width: number
+  height: number
+  inverted: boolean
+}
+
 export type EditorNodeV2 = {
   id: string
   type: 'raster' | 'group' | 'adjustment'
@@ -29,6 +38,7 @@ export type EditorNodeV2 = {
   crop?: EditorCrop
   effects?: EditorEffectV2[]
   target_id?: string
+  shape_mask?: EditorShapeMaskV2
 }
 
 export type EditorDocumentV2 = {
@@ -84,6 +94,7 @@ export function compileEditorDocumentV2ToV1(
         node.parent_id !== null ||
         node.mask_id !== undefined ||
         node.target_id !== undefined ||
+        node.shape_mask !== undefined ||
         node.blend_mode !== 'normal' ||
         (node.effects?.length ?? 0) > 0 ||
         !node.asset_id,
@@ -163,6 +174,9 @@ export function validateEditorDocumentV2(document: EditorDocumentV2): string[] {
         !node.asset_id ||
         node.target_id !== undefined ||
         !validCrop(node.crop) ||
+        !validShapeMask(node.shape_mask) ||
+        (node.shape_mask !== undefined &&
+          (node.crop !== undefined || node.mask_id !== undefined)) ||
         !validEffects(node.effects ?? [])
       )
         errors.push(`asset:${node.id}`)
@@ -171,6 +185,7 @@ export function validateEditorDocumentV2(document: EditorDocumentV2): string[] {
         node.asset_id !== undefined ||
         node.crop !== undefined ||
         node.target_id !== undefined ||
+        node.shape_mask !== undefined ||
         (node.effects?.length ?? 0) > 0
       )
         errors.push(`group:${node.id}`)
@@ -178,6 +193,7 @@ export function validateEditorDocumentV2(document: EditorDocumentV2): string[] {
       node.asset_id !== undefined ||
       node.crop !== undefined ||
       node.mask_id !== undefined ||
+      node.shape_mask !== undefined ||
       node.target_id === undefined ||
       node.target_id === node.id ||
       node.blend_mode !== 'normal' ||
@@ -204,6 +220,11 @@ export function validateEditorDocumentV2(document: EditorDocumentV2): string[] {
         errors.push(`target:${node.id}`)
     }
     if (
+      node.shape_mask !== undefined &&
+      document.nodes.some((candidate) => candidate.mask_id === node.id)
+    )
+      errors.push(`shape-mask-source:${node.id}`)
+    if (
       !validAncestry(node, nodes, 'parent_id', 32) ||
       !validAncestry(node, nodes, 'mask_id', 500)
     )
@@ -222,6 +243,22 @@ function validCrop(crop?: EditorCrop) {
     crop.height > 0 &&
     crop.x + crop.width <= 1 &&
     crop.y + crop.height <= 1
+  )
+}
+
+function validShapeMask(mask?: EditorShapeMaskV2) {
+  if (!mask) return true
+  const runtimeType: string = mask.type
+  return (
+    (runtimeType === 'rectangle' || runtimeType === 'ellipse') &&
+    [mask.x, mask.y, mask.width, mask.height].every(Number.isFinite) &&
+    typeof mask.inverted === 'boolean' &&
+    mask.x >= 0 &&
+    mask.y >= 0 &&
+    mask.width > 0 &&
+    mask.height > 0 &&
+    mask.x + mask.width <= 1 &&
+    mask.y + mask.height <= 1
   )
 }
 

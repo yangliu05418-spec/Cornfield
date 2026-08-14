@@ -275,6 +275,7 @@ export class PixiEditorRenderer implements EditorRenderer {
     node.container.visible = object.visible
     node.container.zIndex = object.order
     this.#syncCrop(node, object, asset)
+    this.#syncShapeMask(node, object, asset)
     this.#syncEffects(node, object)
   }
 
@@ -308,6 +309,37 @@ export class PixiEditorRenderer implements EditorRenderer {
         object.crop.height * asset.height,
       )
       .fill(0xffffff)
+    node.container.addChild(mask)
+    node.sprite.mask = mask
+    node.mask = mask
+  }
+
+  #syncShapeMask(
+    node: SceneNode,
+    object: EditorSceneRasterNode,
+    asset: EditorRenderAsset,
+  ) {
+    if (!object.shapeMask) return
+    node.mask?.destroy()
+    const { x, y, width, height, inverted, type } = object.shapeMask
+    const left = x * asset.width
+    const top = y * asset.height
+    const mask = new Graphics()
+    if (inverted) mask.rect(0, 0, asset.width, asset.height).fill(0xffffff)
+    if (type === 'ellipse')
+      mask
+        .ellipse(
+          left + (width * asset.width) / 2,
+          top + (height * asset.height) / 2,
+          (width * asset.width) / 2,
+          (height * asset.height) / 2,
+        )
+        .fill(0xffffff)
+    else
+      mask
+        .rect(left, top, width * asset.width, height * asset.height)
+        .fill(0xffffff)
+    if (inverted) mask.cut()
     node.container.addChild(mask)
     node.sprite.mask = mask
     node.mask = mask

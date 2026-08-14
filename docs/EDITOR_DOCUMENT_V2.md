@@ -13,12 +13,15 @@ Cornfield V2 is the renderer-independent document protocol for the professional 
 | Six deterministic raster blend modes            |  Yes |            Yes |
 | Exposure, contrast, saturation and temperature  |  Yes |            Yes |
 | Explicit raster-clipped adjustment layers       |  Yes |            Yes |
+| Rectangle/ellipse vector shape masks            |  Yes |            Yes |
 | Group, chained or cropped masks                 |  Yes |        Not yet |
 | Group-wide or all-layers-below adjustment scope |   No |        Not yet |
 
 Unsupported publishing semantics return `EDITOR_DOCUMENT_SEMANTICS_UNSUPPORTED`. The TypeScript preview compiler and Go export compiler both support nested group transforms, inherited visibility/opacity, one raster alpha mask per raster content node, six blend modes and the ordered color-effect pipeline. Unsupported mask structures are rejected before rendering; they are never silently flattened or baked into a misleading result.
 
 An `adjustment` node owns no pixel asset. Its explicit `target_id` must reference an ordinary raster sibling and remains stable across reorder operations. The target's own effects run first; visible adjustment nodes then run in deterministic sibling order. Adjustment opacity is effect strength. Both compilers collapse the complete stack into one 4×5 color matrix, so any number of clipped adjustments still requires one shader filter in Pixi and one cancellable tiled pixel pass in the Worker. A raster currently used as an alpha mask cannot be an adjustment target.
+
+A raster `shape_mask` is normalized in that raster's local pixel coordinate space, so it follows nested translation, rotation, scale and flip without rewriting its geometry. V1 supports rectangle and ellipse masks plus inversion. A raster cannot currently stack crop, independent raster alpha mask and shape mask; unsupported combinations are rejected instead of silently replacing a mask. Pixi uses vector mask geometry while the Worker inverse-transforms four subpixel samples per output pixel inside existing 512px tiles, avoiding a canvas-sized alpha allocation.
 
 ## Limits
 
@@ -51,6 +54,7 @@ The renderer-independent V2 authoring kernel owns structural edits before React 
 - group/ungroup with world appearance preservation;
 - attach/detach of one independent raster alpha mask;
 - create and edit explicit raster-clipped adjustment layers;
+- create, invert and remove local-coordinate vector shape masks;
 - cycle-safe reparenting that preserves world transforms, opacity, visibility and lock state;
 - node-delta undo/redo with a bounded 100-entry history.
 

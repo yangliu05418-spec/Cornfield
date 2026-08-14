@@ -344,6 +344,36 @@ func TestCompositeEditorScenePublishesCompiledAdjustmentPixels(t *testing.T) {
 	}
 }
 
+func TestCompositeEditorSceneAppliesRectangleEllipseAndInvertedShapeMasks(t *testing.T) {
+	assetID := uuid.New()
+	tests := []struct {
+		name            string
+		mask            studioEditor.ShapeMaskV2
+		visible, hidden image.Point
+	}{
+		{name: "rectangle", mask: studioEditor.ShapeMaskV2{Type: "rectangle", X: .25, Y: .25, Width: .5, Height: .5}, visible: image.Pt(4, 4), hidden: image.Pt(0, 0)},
+		{name: "ellipse", mask: studioEditor.ShapeMaskV2{Type: "ellipse", X: 0, Y: 0, Width: 1, Height: 1}, visible: image.Pt(4, 4), hidden: image.Pt(0, 0)},
+		{name: "inverted", mask: studioEditor.ShapeMaskV2{Type: "rectangle", X: .25, Y: .25, Width: .5, Height: .5, Inverted: true}, visible: image.Pt(0, 0), hidden: image.Pt(4, 4)},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			scene := studioEditor.RenderScene{Canvas: studioEditor.Canvas{Width: 8, Height: 8}, Nodes: []studioEditor.RenderNode{{ID: "content", AssetID: assetID, Transform: [6]float64{1, 0, 0, 1, 0, 0}, Opacity: 1, Visible: true, Order: 0, Role: studioEditor.RenderRoleContent, BlendMode: "normal", ColorMatrix: studioEditor.IdentityColorMatrixV1(), ShapeMask: &test.mask}}}
+			canvas, err := compositeEditorScene(context.Background(), scene, func(uuid.UUID) (image.Image, error) {
+				return solidNRGBA(8, 8, color.NRGBA{R: 220, G: 80, B: 40, A: 255}), nil
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, _, _, alpha := canvas.At(test.visible.X, test.visible.Y).RGBA(); alpha == 0 {
+				t.Fatalf("visible point was masked: %v", test.visible)
+			}
+			if _, _, _, alpha := canvas.At(test.hidden.X, test.hidden.Y).RGBA(); alpha != 0 {
+				t.Fatalf("hidden point leaked: %v", test.hidden)
+			}
+		})
+	}
+}
+
 func TestBlendEditorChannelModes(t *testing.T) {
 	tests := map[string]float64{
 		"normal": .25, "multiply": .1875, "screen": .8125,

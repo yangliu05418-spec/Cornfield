@@ -14,6 +14,7 @@ import {
   Link2Off,
   Lock,
   Maximize,
+  CircleDashed,
   Redo2,
   Save,
   SlidersHorizontal,
@@ -61,6 +62,11 @@ import type { EditorLayerDropPosition } from './domain/layer-panel-model'
 import { PixiSurface } from './renderer/pixi-surface'
 import { StructuredCanvasInteraction } from './structured-canvas-interaction'
 import { useEditorOperations } from './use-editor-operations'
+import {
+  invertEditorShapeMask,
+  removeEditorShapeMask,
+  setEditorShapeMask,
+} from './domain/shape-mask-v2'
 import type { LayerDecompositionSettings } from './use-editor-operations'
 
 type SaveState =
@@ -81,6 +87,7 @@ export function StructuredEditor({
     structuredClone(project.document),
   )
   const [selectedIDs, setSelectedIDs] = useState<Set<string>>(new Set())
+  const [shapeTool, setShapeTool] = useState<'rectangle' | 'ellipse'>()
   const [activeID, setActiveID] = useState('')
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set())
   const [saveState, setSaveState] = useState<SaveState>('saved')
@@ -336,6 +343,15 @@ export function StructuredEditor({
     }
   }
 
+  function applyShapeMask(mask: EditorNodeV2['shape_mask']) {
+    if (!activeID || !mask) return
+    const changed = runCommand(
+      () => setEditorShapeMask(documentRef.current, activeID, mask),
+      '已创建非破坏形状蒙版',
+    )
+    if (changed) setShapeTool(undefined)
+  }
+
   function attachMask() {
     if (selectedNodes.length !== 2 || !activeNode) return
     const mask = selectedNodes.find((node) => node.id !== activeNode.id)
@@ -570,6 +586,40 @@ export function StructuredEditor({
             </button>
             <button
               type="button"
+              className={shapeTool === 'rectangle' ? 'active' : undefined}
+              disabled={
+                operations.running ||
+                activeNode?.type !== 'raster' ||
+                activeNode.mask_id !== undefined ||
+                activeNode.crop !== undefined
+              }
+              onClick={() =>
+                setShapeTool((value) =>
+                  value === 'rectangle' ? undefined : 'rectangle',
+                )
+              }
+            >
+              <CircleDashed size={16} /> 矩形蒙版
+            </button>
+            <button
+              type="button"
+              className={shapeTool === 'ellipse' ? 'active' : undefined}
+              disabled={
+                operations.running ||
+                activeNode?.type !== 'raster' ||
+                activeNode.mask_id !== undefined ||
+                activeNode.crop !== undefined
+              }
+              onClick={() =>
+                setShapeTool((value) =>
+                  value === 'ellipse' ? undefined : 'ellipse',
+                )
+              }
+            >
+              <CircleDashed size={16} /> 椭圆蒙版
+            </button>
+            <button
+              type="button"
               disabled={
                 operations.running || !canGroupEditorNodes(selectedNodes)
               }
@@ -664,6 +714,7 @@ export function StructuredEditor({
               assets={assets}
               view={view}
               selectedIDs={selectedIDs}
+              activeID={activeID}
               disabled={operations.running}
               onViewChange={setView}
               onSelectionChange={(ids, active) => {
@@ -673,6 +724,8 @@ export function StructuredEditor({
               onPreview={previewDocument}
               onCommit={commitCanvasDocument}
               onFit={fitCanvas}
+              shapeSelection={shapeTool}
+              onShapeSelection={applyShapeMask}
             />
             {assetsQuery.isError ? (
               <div className="structured-render-wait" role="alert">
@@ -835,7 +888,7 @@ export function StructuredEditor({
                                 : '图层')}
                         </strong>
                         <small>
-                          {node.mask_id
+                          {node.mask_id || node.shape_mask
                             ? '含蒙版'
                             : node.type === 'group'
                               ? '组'
@@ -1019,6 +1072,48 @@ export function StructuredEditor({
                       })}
                     </div>
                   </>
+                )}
+                {activeNode.shape_mask && (
+                  <div className="structured-mask-actions">
+                    <span>
+                      {activeNode.shape_mask.type === 'ellipse'
+                        ? '椭圆蒙版'
+                        : '矩形蒙版'}
+                      {activeNode.shape_mask.inverted ? ' · 已反相' : ''}
+                    </span>
+                    <button
+                      type="button"
+                      disabled={operations.running}
+                      onClick={() =>
+                        runCommand(
+                          () =>
+                            invertEditorShapeMask(
+                              documentRef.current,
+                              activeNode.id,
+                            ),
+                          '已反相形状蒙版',
+                        )
+                      }
+                    >
+                      反相
+                    </button>
+                    <button
+                      type="button"
+                      disabled={operations.running}
+                      onClick={() =>
+                        runCommand(
+                          () =>
+                            removeEditorShapeMask(
+                              documentRef.current,
+                              activeNode.id,
+                            ),
+                          '已移除形状蒙版，可撤销恢复',
+                        )
+                      }
+                    >
+                      移除蒙版
+                    </button>
+                  </div>
                 )}
                 <div className="structured-order-controls">
                   <button

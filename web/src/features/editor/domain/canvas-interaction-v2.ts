@@ -281,12 +281,31 @@ function pointInsideRaster(
   const crop = entry.node.crop ?? { x: 0, y: 0, width: 1, height: 1 }
   const left = crop.x * asset.width
   const top = crop.y * asset.height
-  return (
+  const insideRaster =
     local.x >= left &&
     local.x <= left + crop.width * asset.width &&
     local.y >= top &&
     local.y <= top + crop.height * asset.height
-  )
+  if (!insideRaster || !entry.node.shape_mask) return insideRaster
+  const normalizedX = local.x / asset.width
+  const normalizedY = local.y / asset.height
+  const mask = entry.node.shape_mask
+  const insideMask =
+    mask.type === 'ellipse'
+      ? Math.pow(
+          (normalizedX - (mask.x + mask.width / 2)) / (mask.width / 2),
+          2,
+        ) +
+          Math.pow(
+            (normalizedY - (mask.y + mask.height / 2)) / (mask.height / 2),
+            2,
+          ) <=
+        1
+      : normalizedX >= mask.x &&
+        normalizedX <= mask.x + mask.width &&
+        normalizedY >= mask.y &&
+        normalizedY <= mask.y + mask.height
+  return insideMask !== mask.inverted
 }
 
 function rasterBounds(entry: RasterGeometry, assets: EditorAssetDimensions) {
@@ -294,6 +313,21 @@ function rasterBounds(entry: RasterGeometry, assets: EditorAssetDimensions) {
     ? assets.get(entry.node.asset_id)
     : undefined
   if (!asset) return undefined
+  if (entry.node.shape_mask && !entry.node.shape_mask.inverted) {
+    const mask = entry.node.shape_mask
+    return objectBounds(
+      multiplyTransforms(entry.transform, [
+        1,
+        0,
+        0,
+        1,
+        mask.x * asset.width,
+        mask.y * asset.height,
+      ]),
+      mask.width * asset.width,
+      mask.height * asset.height,
+    )
+  }
   const crop = entry.node.crop ?? { x: 0, y: 0, width: 1, height: 1 }
   const transform = multiplyTransforms(entry.transform, [
     1,

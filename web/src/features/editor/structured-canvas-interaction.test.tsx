@@ -30,10 +30,12 @@ describe('StructuredCanvasInteraction', () => {
     const onCommit = vi.fn()
     render(
       <StructuredCanvasInteraction
-        document={document()}
+        document={makeDocument()}
         assets={new Map([[asset.id, asset]])}
         view={{ zoom: 100, panX: -50, panY: -40 }}
         selectedIDs={new Set()}
+        activeID=""
+        onShapeSelection={vi.fn()}
         onViewChange={vi.fn()}
         onSelectionChange={onSelectionChange}
         onPreview={onPreview}
@@ -64,10 +66,12 @@ describe('StructuredCanvasInteraction', () => {
     const onCommit = vi.fn()
     render(
       <StructuredCanvasInteraction
-        document={document()}
+        document={makeDocument()}
         assets={new Map([[asset.id, asset]])}
         view={{ zoom: 100, panX: -50, panY: -40 }}
         selectedIDs={new Set(['layer'])}
+        activeID="layer"
+        onShapeSelection={vi.fn()}
         onViewChange={onViewChange}
         onSelectionChange={vi.fn()}
         onPreview={vi.fn()}
@@ -97,7 +101,7 @@ describe('StructuredCanvasInteraction', () => {
   })
 
   it('restores the initial document when a pointer drag is cancelled', () => {
-    const initial = document()
+    const initial = makeDocument()
     const onPreview = vi.fn()
     const onCommit = vi.fn()
     render(
@@ -106,6 +110,8 @@ describe('StructuredCanvasInteraction', () => {
         assets={new Map([[asset.id, asset]])}
         view={{ zoom: 100, panX: -50, panY: -40 }}
         selectedIDs={new Set(['layer'])}
+        activeID="layer"
+        onShapeSelection={vi.fn()}
         onViewChange={vi.fn()}
         onSelectionChange={vi.fn()}
         onPreview={onPreview}
@@ -127,10 +133,12 @@ describe('StructuredCanvasInteraction', () => {
     const onCommit = vi.fn()
     render(
       <StructuredCanvasInteraction
-        document={document()}
+        document={makeDocument()}
         assets={new Map([[asset.id, asset]])}
         view={{ zoom: 100, panX: -50, panY: -40 }}
         selectedIDs={new Set(['layer'])}
+        activeID="layer"
+        onShapeSelection={vi.fn()}
         onViewChange={vi.fn()}
         onSelectionChange={vi.fn()}
         onPreview={onPreview}
@@ -172,9 +180,49 @@ describe('StructuredCanvasInteraction', () => {
     })
     expect(onCommit).toHaveBeenCalledTimes(3)
   })
+
+  it('converts a dragged world selection into normalized local mask geometry', () => {
+    const value = makeDocument()
+    value.nodes[0].transform = [0, 1, -1, 0, 100, 0]
+    const onShapeSelection = vi.fn()
+    render(
+      <StructuredCanvasInteraction
+        document={value}
+        assets={new Map([[asset.id, asset]])}
+        view={{ zoom: 100, panX: -50, panY: -40 }}
+        selectedIDs={new Set(['layer'])}
+        activeID="layer"
+        shapeSelection="ellipse"
+        onShapeSelection={onShapeSelection}
+        onViewChange={vi.fn()}
+        onSelectionChange={vi.fn()}
+        onPreview={vi.fn()}
+        onCommit={vi.fn()}
+        onFit={vi.fn()}
+      />,
+    )
+    const canvas = screen.getByRole('region', { name: '专业图层画布' })
+    vi.spyOn(canvas, 'getBoundingClientRect').mockReturnValue(rect())
+    fireEvent.pointerDown(canvas, { button: 0, clientX: 90, clientY: 70 })
+    fireEvent.pointerMove(window, { clientX: 70, clientY: 120 })
+    const marquee = globalThis.document.querySelector<HTMLElement>(
+      '.structured-shape-marquee.is-ellipse',
+    )
+    expect(marquee).toBeTruthy()
+    expect(marquee?.style.transform).toBe('matrix(0,1,-1,0,40,10)')
+    fireEvent.pointerUp(window)
+    expect(onShapeSelection).toHaveBeenCalledWith({
+      type: 'ellipse',
+      x: 0.1,
+      y: 0.75,
+      width: 0.5,
+      height: 0.25,
+      inverted: false,
+    })
+  })
 })
 
-function document(): EditorDocumentV2 {
+function makeDocument(): EditorDocumentV2 {
   return {
     schema_version: 2,
     renderer_semantics_version: 1,

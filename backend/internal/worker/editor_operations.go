@@ -478,7 +478,7 @@ func compositeEditorScene(ctx context.Context, scene studioEditor.RenderScene, l
 		if crop.Empty() {
 			continue
 		}
-		if node.MaskNodeID == nil && node.BlendMode == "normal" && studioEditor.IsIdentityColorMatrixV1(node.ColorMatrix) {
+		if node.MaskNodeID == nil && node.ShapeMask == nil && node.BlendMode == "normal" && studioEditor.IsIdentityColorMatrixV1(node.ColorMatrix) {
 			drawEditorNode(canvas, node, source, crop)
 		} else {
 			var maskNode *studioEditor.RenderNode
@@ -541,7 +541,7 @@ func drawProcessedEditorNode(ctx context.Context, destination *image.RGBA, canva
 				draw.BiLinear.Transform(mask, affineMatrix(maskNode.Transform, tileBounds.Min.X, tileBounds.Min.Y), maskSource, maskSource.Bounds(), draw.Src, nil)
 				opacity *= maskNode.Opacity
 			}
-			applyEditorLayerEffects(layer, mask, opacity, matrix)
+			applyEditorLayerEffects(layer, mask, opacity, matrix, node.ShapeMask, node.Transform, tileBounds.Min, source.Bounds())
 			if err := compositeEditorLayer(ctx, destination, tileBounds, layer, node.BlendMode); err != nil {
 				return err
 			}
@@ -550,7 +550,8 @@ func drawProcessedEditorNode(ctx context.Context, destination *image.RGBA, canva
 	return nil
 }
 
-func applyEditorLayerEffects(layer *image.RGBA, mask *image.Alpha, opacity float64, matrix studioEditor.ColorMatrixV1) {
+func applyEditorLayerEffects(layer *image.RGBA, mask *image.Alpha, opacity float64, matrix studioEditor.ColorMatrixV1, shapeMask *studioEditor.ShapeMaskV2, transform [6]float64, tileOrigin image.Point, sourceBounds image.Rectangle) {
+	inverse, invertible := invertEditorTransform(transform)
 	for y := 0; y < layer.Bounds().Dy(); y++ {
 		for x := 0; x < layer.Bounds().Dx(); x++ {
 			pixelOffset := layer.PixOffset(x, y)
@@ -566,12 +567,56 @@ func applyEditorLayerEffects(layer *image.RGBA, mask *image.Alpha, opacity float
 				sourceAlpha *= float64(mask.AlphaAt(x, y).A) / 255
 			}
 			sourceAlpha *= opacity
+			if shapeMask != nil {
+				if !invertible {
+					sourceAlpha = 0
+				} else {
+					sourceAlpha *= editorShapeMaskCoverage(*shapeMask, inverse, float64(tileOrigin.X+x), float64(tileOrigin.Y+y), sourceBounds)
+				}
+			}
 			layer.Pix[pixelOffset] = channelByte(red * sourceAlpha)
 			layer.Pix[pixelOffset+1] = channelByte(green * sourceAlpha)
 			layer.Pix[pixelOffset+2] = channelByte(blue * sourceAlpha)
 			layer.Pix[pixelOffset+3] = channelByte(sourceAlpha)
 		}
 	}
+}
+
+func invertEditorTransform(value [6]float64) ([6]float64, bool) {
+	determinant := value[0]*value[3] - value[1]*value[2]
+	if math.Abs(determinant) < 1e-12 {
+		return [6]float64{}, false
+	}
+	return [6]float64{
+		value[3] / determinant,
+		-value[1] / determinant,
+		-value[2] / determinant,
+		value[0] / determinant,
+		(value[2]*value[5] - value[3]*value[4]) / determinant,
+		(value[1]*value[4] - value[0]*value[5]) / determinant,
+	}, true
+}
+
+func editorShapeMaskCoverage(mask studioEditor.ShapeMaskV2, inverse [6]float64, canvasX, canvasY float64, bounds image.Rectangle) float64 {
+	covered := 0
+	for _, offset := range [][2]float64{{.25, .25}, {.75, .25}, {.25, .75}, {.75, .75}} {
+		x := inverse[0]*(canvasX+offset[0]) + inverse[2]*(canvasY+offset[1]) + inverse[4] - float64(bounds.Min.X)
+		y := inverse[1]*(canvasX+offset[0]) + inverse[3]*(canvasY+offset[1]) + inverse[5] - float64(bounds.Min.Y)
+		normalizedX := x / float64(bounds.Dx())
+		normalizedY := y / float64(bounds.Dy())
+		inside := false
+		if mask.Type == "ellipse" {
+			centerX, centerY := mask.X+mask.Width/2, mask.Y+mask.Height/2
+			dx, dy := (normalizedX-centerX)/(mask.Width/2), (normalizedY-centerY)/(mask.Height/2)
+			inside = dx*dx+dy*dy <= 1
+		} else {
+			inside = normalizedX >= mask.X && normalizedX <= mask.X+mask.Width && normalizedY >= mask.Y && normalizedY <= mask.Y+mask.Height
+		}
+		if inside != mask.Inverted {
+			covered++
+		}
+	}
+	return float64(covered) / 4
 }
 
 func compositeEditorLayer(ctx context.Context, destination *image.RGBA, bounds image.Rectangle, source *image.RGBA, blendMode string) error {

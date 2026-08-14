@@ -31,6 +31,7 @@ type RenderNode struct {
 	BlendMode   string
 	Effects     []EffectV2
 	ColorMatrix ColorMatrixV1
+	ShapeMask   *ShapeMaskV2
 }
 
 func DecodeRenderScene(raw []byte) (RenderScene, error) {
@@ -117,7 +118,7 @@ func CompileV2RenderScene(document DocumentV2) (RenderScene, error) {
 	}
 	for maskID := range maskIDs {
 		mask := byID[maskID]
-		if mask.MaskID != nil || mask.Crop != nil || mask.BlendMode != "normal" || hasEnabledEffects(mask.Effects) {
+		if mask.MaskID != nil || mask.Crop != nil || mask.ShapeMask != nil || mask.BlendMode != "normal" || hasEnabledEffects(mask.Effects) {
 			return RenderScene{}, ErrUnsupportedDocumentSemantics
 		}
 	}
@@ -151,6 +152,7 @@ func CompileV2RenderScene(document DocumentV2) (RenderScene, error) {
 				Opacity: opacity, Visible: visible, Order: len(nodes),
 				Crop: cloneCrop(node.Crop), Role: role, MaskNodeID: cloneString(node.MaskID),
 				BlendMode: node.BlendMode, Effects: cloneEffects(node.Effects), ColorMatrix: ComposeColorMatricesV1(matrices...),
+				ShapeMask: cloneShapeMaskV2(node.ShapeMask),
 			})
 		}
 	}
@@ -176,7 +178,7 @@ func (s RenderScene) Validate() error {
 	nodesByID := make(map[string]RenderNode, len(s.Nodes))
 	for index, node := range s.Nodes {
 		if !validNodeID(node.ID) || node.AssetID == uuid.Nil || !validTransform(node.Transform) ||
-			!validOpacity(node.Opacity) || node.Order != index || !validCrop(node.Crop) || !validBlendMode(node.BlendMode) || !validEffects(node.Effects) || !validColorMatrixV1(node.ColorMatrix) ||
+			!validOpacity(node.Opacity) || node.Order != index || !validCrop(node.Crop) || !validShapeMaskV2(node.ShapeMask) || !validBlendMode(node.BlendMode) || !validEffects(node.Effects) || !validColorMatrixV1(node.ColorMatrix) ||
 			(node.Role != RenderRoleContent && node.Role != RenderRoleMask) {
 			return ErrInvalidDocument
 		}
@@ -231,6 +233,14 @@ func cloneCrop(value *Crop) *Crop {
 	}
 	copy := *value
 	return &copy
+}
+
+func cloneShapeMaskV2(value *ShapeMaskV2) *ShapeMaskV2 {
+	if value == nil {
+		return nil
+	}
+	result := *value
+	return &result
 }
 
 func cloneString(value *string) *string {

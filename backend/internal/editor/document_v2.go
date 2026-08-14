@@ -109,21 +109,31 @@ type DocumentV2 struct {
 }
 
 type NodeV2 struct {
-	ID        string     `json:"id"`
-	Type      string     `json:"type"`
-	Name      string     `json:"name,omitempty"`
-	ParentID  *string    `json:"parent_id"`
-	OrderKey  string     `json:"order_key"`
-	Transform [6]float64 `json:"transform"`
-	Opacity   float64    `json:"opacity"`
-	BlendMode string     `json:"blend_mode"`
-	Visible   bool       `json:"visible"`
-	Locked    bool       `json:"locked"`
-	MaskID    *string    `json:"mask_id,omitempty"`
-	AssetID   *uuid.UUID `json:"asset_id,omitempty"`
-	Crop      *Crop      `json:"crop,omitempty"`
-	Effects   []EffectV2 `json:"effects"`
-	TargetID  *string    `json:"target_id,omitempty"`
+	ID        string       `json:"id"`
+	Type      string       `json:"type"`
+	Name      string       `json:"name,omitempty"`
+	ParentID  *string      `json:"parent_id"`
+	OrderKey  string       `json:"order_key"`
+	Transform [6]float64   `json:"transform"`
+	Opacity   float64      `json:"opacity"`
+	BlendMode string       `json:"blend_mode"`
+	Visible   bool         `json:"visible"`
+	Locked    bool         `json:"locked"`
+	MaskID    *string      `json:"mask_id,omitempty"`
+	AssetID   *uuid.UUID   `json:"asset_id,omitempty"`
+	Crop      *Crop        `json:"crop,omitempty"`
+	Effects   []EffectV2   `json:"effects"`
+	TargetID  *string      `json:"target_id,omitempty"`
+	ShapeMask *ShapeMaskV2 `json:"shape_mask,omitempty"`
+}
+
+type ShapeMaskV2 struct {
+	Type     string  `json:"type"`
+	X        float64 `json:"x"`
+	Y        float64 `json:"y"`
+	Width    float64 `json:"width"`
+	Height   float64 `json:"height"`
+	Inverted bool    `json:"inverted"`
 }
 
 type EffectV2 struct {
@@ -184,7 +194,7 @@ func (d DocumentV2) ToV1() (Document, error) {
 	}
 	nodes := append([]NodeV2(nil), d.Nodes...)
 	for _, node := range nodes {
-		if node.Type != "raster" || node.ParentID != nil || node.MaskID != nil || node.BlendMode != "normal" || len(node.Effects) != 0 || node.AssetID == nil {
+		if node.Type != "raster" || node.ParentID != nil || node.MaskID != nil || node.ShapeMask != nil || node.BlendMode != "normal" || len(node.Effects) != 0 || node.AssetID == nil {
 			return Document{}, ErrUnsupportedDocumentSemantics
 		}
 	}
@@ -237,14 +247,14 @@ func (d DocumentV2) Validate() error {
 			return ErrInvalidDocument
 		}
 		if node.Type == "raster" {
-			if node.AssetID == nil || *node.AssetID == uuid.Nil || node.TargetID != nil || !validCrop(node.Crop) || !validEffects(node.Effects) {
+			if node.AssetID == nil || *node.AssetID == uuid.Nil || node.TargetID != nil || !validCrop(node.Crop) || !validEffects(node.Effects) || !validShapeMaskV2(node.ShapeMask) || (node.ShapeMask != nil && (node.Crop != nil || node.MaskID != nil)) {
 				return ErrInvalidDocument
 			}
 		} else if node.Type == "group" {
-			if node.AssetID != nil || node.Crop != nil || node.TargetID != nil || len(node.Effects) != 0 {
+			if node.AssetID != nil || node.Crop != nil || node.TargetID != nil || node.ShapeMask != nil || len(node.Effects) != 0 {
 				return ErrInvalidDocument
 			}
-		} else if node.AssetID != nil || node.Crop != nil || node.MaskID != nil || node.TargetID == nil || *node.TargetID == node.ID || node.Transform != [6]float64{1, 0, 0, 1, 0, 0} || node.BlendMode != "normal" || !validEffects(node.Effects) {
+		} else if node.AssetID != nil || node.Crop != nil || node.MaskID != nil || node.ShapeMask != nil || node.TargetID == nil || *node.TargetID == node.ID || node.Transform != [6]float64{1, 0, 0, 1, 0, 0} || node.BlendMode != "normal" || !validEffects(node.Effects) {
 			return ErrInvalidDocument
 		}
 		nodes[node.ID] = node
@@ -269,6 +279,13 @@ func (d DocumentV2) Validate() error {
 			}
 			for _, candidate := range d.Nodes {
 				if candidate.MaskID != nil && *candidate.MaskID == target.ID {
+					return ErrInvalidDocument
+				}
+			}
+		}
+		if node.ShapeMask != nil {
+			for _, candidate := range d.Nodes {
+				if candidate.MaskID != nil && *candidate.MaskID == node.ID {
 					return ErrInvalidDocument
 				}
 			}
@@ -351,6 +368,14 @@ func validCrop(crop *Crop) bool {
 	}
 	sum := crop.X + crop.Y + crop.Width + crop.Height
 	return crop.X >= 0 && crop.Y >= 0 && crop.Width > 0 && crop.Height > 0 && crop.X+crop.Width <= 1 && crop.Y+crop.Height <= 1 && !math.IsNaN(sum) && !math.IsInf(sum, 0)
+}
+
+func validShapeMaskV2(mask *ShapeMaskV2) bool {
+	if mask == nil {
+		return true
+	}
+	sum := mask.X + mask.Y + mask.Width + mask.Height
+	return (mask.Type == "rectangle" || mask.Type == "ellipse") && mask.X >= 0 && mask.Y >= 0 && mask.Width > 0 && mask.Height > 0 && mask.X+mask.Width <= 1 && mask.Y+mask.Height <= 1 && !math.IsNaN(sum) && !math.IsInf(sum, 0)
 }
 
 func validEffects(effects []EffectV2) bool {

@@ -17,7 +17,7 @@ COPY --from=build /out/api /api
 USER 65532:65532
 ENTRYPOINT ["/api"]
 
-FROM debian:bookworm-slim@sha256:7b140f374b289a7c2befc338f42ebe6441b7ea838a042bbd5acbfca6ec875818 AS worker
+FROM debian:bookworm-slim@sha256:abd67ffcfa541b485a3dff59865ab629aa048a6c613e639d36e7456b0b229241 AS worker
 ARG LIBVIPS_TOOLS_VERSION=8.14.1-3+deb12u3
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates "libvips-tools=${LIBVIPS_TOOLS_VERSION}" && rm -rf /var/lib/apt/lists/* && \
     useradd --uid 65532 --no-create-home --shell /usr/sbin/nologin studio

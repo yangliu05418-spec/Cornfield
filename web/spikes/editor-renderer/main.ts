@@ -1,4 +1,7 @@
+import { Application, Rectangle, Texture } from 'pixi.js'
+
 import { PixiEditorRenderer } from '../../src/features/editor/renderer/pixi-renderer'
+import { PixiRasterMaskedContentSurface } from '../../src/features/editor/renderer/raster-masked-content-surface'
 import type { EditorDocument } from '../../src/features/editor/domain/document'
 import type { EditorDocumentV2 } from '../../src/features/editor/domain/document-v2'
 import type { EditorRenderAsset } from '../../src/features/editor/renderer/types'
@@ -33,6 +36,7 @@ type SpikeResult = {
   v2ExpectedBounds?: PixelBounds
   resolutionTransitionBytes: number[]
   rasterMaskWorker: RasterMaskWorkerSpike
+  rasterMaskPixi: RasterMaskPixiSpike
   contextLossSupported: boolean
   contextLostObserved: boolean
   contextRestoredObserved: boolean
@@ -66,6 +70,22 @@ type RasterMaskWorkerSpike = {
   redoTiles: number
 }
 
+type RasterMaskPixiSpike = {
+  largeSurfaceCreateMs: number
+  largeSurfaceContentTiles: number
+  offsetVisibleAlpha: number
+  offsetHiddenAlpha: number
+  initialLeftAlpha: number
+  initialRightAlpha: number
+  updatedLeftAlpha: number
+  updatedRightAlpha: number
+  defaultLeftAlpha: number
+  defaultRightAlpha: number
+  uploads: number
+  tilesAfterDefault: number
+  bytesAfterDefault: number
+}
+
 const output = document.querySelector('output')!
 const canvas = document.querySelector<HTMLCanvasElement>('#performance')!
 const correctnessCanvas =
@@ -93,13 +113,15 @@ void run().catch((error: unknown) => {
     v2MaskRemovalMismatchRatio: 1,
     resolutionTransitionBytes: [],
     rasterMaskWorker: emptyRasterMaskWorkerSpike(),
+    rasterMaskPixi: emptyRasterMaskPixiSpike(),
     contextLossSupported: false,
     contextLostObserved: false,
     contextRestoredObserved: false,
     statsBeforeDestroy: emptyStats(),
     statsAfterRecovery: emptyStats(),
     statsAfterDestroy: emptyStats(),
-    error: error instanceof Error ? error.message : String(error),
+    error:
+      error instanceof Error ? (error.stack ?? error.message) : String(error),
   }
   window.__EDITOR_SPIKE__ = result
   output.value = JSON.stringify(result, null, 2)
@@ -107,6 +129,7 @@ void run().catch((error: unknown) => {
 
 async function run() {
   const rasterMaskWorker = await runRasterMaskWorkerFixture()
+  const rasterMaskPixi = await runRasterMaskPixiFixture()
   const pixelComparison = await runPixelCorrectnessFixture(correctnessCanvas)
   const v2PixelComparison =
     await runV2PixelCorrectnessFixture(v2CorrectnessCanvas)
@@ -216,6 +239,7 @@ async function run() {
     v2ExpectedBounds: v2PixelComparison.expectedBounds,
     resolutionTransitionBytes,
     rasterMaskWorker,
+    rasterMaskPixi,
     contextLossSupported,
     contextLostObserved,
     contextRestoredObserved,
@@ -225,6 +249,90 @@ async function run() {
   }
   window.__EDITOR_SPIKE__ = result
   output.value = JSON.stringify(result, null, 2)
+}
+
+async function runRasterMaskPixiFixture(): Promise<RasterMaskPixiSpike> {
+  const maskCanvas = document.createElement('canvas')
+  const app = new Application()
+  await app.init({
+    canvas: maskCanvas,
+    width: 512,
+    height: 64,
+    preference: 'webgl',
+    antialias: false,
+    autoStart: false,
+    backgroundAlpha: 0,
+    preserveDrawingBuffer: true,
+  })
+  const surface = new PixiRasterMaskedContentSurface(Texture.WHITE, 512, 64)
+  const alpha = halfTile(255, 0)
+  const offsetAlpha = halfTile(255, 0)
+  surface.apply([
+    { tileX: 0, tileY: 0, width: 256, height: 64, alpha },
+    { tileX: 1, tileY: 0, width: 256, height: 64, alpha: offsetAlpha },
+  ])
+  app.stage.addChild(surface.container)
+  app.render()
+  const initial = app.renderer.extract.pixels({
+    target: app.stage,
+    frame: new Rectangle(0, 0, 512, 64),
+  })
+
+  const reversed = halfTile(0, 255)
+  surface.apply([
+    { tileX: 0, tileY: 0, width: 256, height: 64, alpha: reversed },
+  ])
+  app.render()
+  const updated = app.renderer.extract.pixels({
+    target: app.stage,
+    frame: new Rectangle(0, 0, 512, 64),
+  })
+
+  const defaultAlpha = new Uint8Array(256 * 64)
+  defaultAlpha.fill(255)
+  surface.apply([
+    { tileX: 0, tileY: 0, width: 256, height: 64, alpha: defaultAlpha },
+    {
+      tileX: 1,
+      tileY: 0,
+      width: 256,
+      height: 64,
+      alpha: defaultAlpha.slice(),
+    },
+  ])
+  app.render()
+  const restored = app.renderer.extract.pixels({
+    target: app.stage,
+    frame: new Rectangle(0, 0, 512, 64),
+  })
+  const stats = surface.stats()
+  surface.container.removeFromParent()
+  surface.destroy()
+  const largeSurfaceStarted = performance.now()
+  const largeSurface = new PixiRasterMaskedContentSurface(
+    Texture.WHITE,
+    8_000,
+    4_500,
+  )
+  const largeSurfaceCreateMs = performance.now() - largeSurfaceStarted
+  const largeSurfaceContentTiles = largeSurface.stats().contentTiles
+  largeSurface.destroy()
+  app.destroy(false, { children: true })
+  return {
+    largeSurfaceCreateMs,
+    largeSurfaceContentTiles,
+    offsetVisibleAlpha: pixelAlpha(initial.pixels, initial.width, 320, 32),
+    offsetHiddenAlpha: pixelAlpha(initial.pixels, initial.width, 448, 32),
+    initialLeftAlpha: pixelAlpha(initial.pixels, initial.width, 64, 32),
+    initialRightAlpha: pixelAlpha(initial.pixels, initial.width, 192, 32),
+    updatedLeftAlpha: pixelAlpha(updated.pixels, updated.width, 64, 32),
+    updatedRightAlpha: pixelAlpha(updated.pixels, updated.width, 192, 32),
+    defaultLeftAlpha: pixelAlpha(restored.pixels, restored.width, 64, 32),
+    defaultRightAlpha: pixelAlpha(restored.pixels, restored.width, 192, 32),
+    uploads: stats.uploads,
+    tilesAfterDefault: stats.tiles,
+    bytesAfterDefault: stats.bytes,
+  }
 }
 
 async function runRasterMaskWorkerFixture(): Promise<RasterMaskWorkerSpike> {
@@ -283,6 +391,42 @@ function emptyRasterMaskWorkerSpike(): RasterMaskWorkerSpike {
     undoTiles: 0,
     redoTiles: 0,
   }
+}
+
+function emptyRasterMaskPixiSpike(): RasterMaskPixiSpike {
+  return {
+    largeSurfaceCreateMs: 0,
+    largeSurfaceContentTiles: 0,
+    offsetVisibleAlpha: 0,
+    offsetHiddenAlpha: 0,
+    initialLeftAlpha: 0,
+    initialRightAlpha: 0,
+    updatedLeftAlpha: 0,
+    updatedRightAlpha: 0,
+    defaultLeftAlpha: 0,
+    defaultRightAlpha: 0,
+    uploads: 0,
+    tilesAfterDefault: 0,
+    bytesAfterDefault: 0,
+  }
+}
+
+function pixelAlpha(
+  pixels: Uint8ClampedArray,
+  width: number,
+  x: number,
+  y: number,
+) {
+  return pixels[(y * width + x) * 4 + 3]
+}
+
+function halfTile(left: number, right: number) {
+  const alpha = new Uint8Array(256 * 64)
+  for (let y = 0; y < 64; y += 1) {
+    alpha.fill(left, y * 256, y * 256 + 128)
+    alpha.fill(right, y * 256 + 128, y * 256 + 256)
+  }
+  return alpha
 }
 
 async function runV2PixelCorrectnessFixture(targetCanvas: HTMLCanvasElement) {

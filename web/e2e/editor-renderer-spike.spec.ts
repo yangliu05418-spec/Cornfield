@@ -68,6 +68,17 @@ test('Pixi renderer meets the Stage A correctness and resource gate', async ({
     2048 * 2048 * 4,
     640 * 640 * 4,
   ])
+  expect(result.rasterMaskWorker.createMs).toBeLessThan(1_000)
+  expect(result.rasterMaskWorker.strokeMs).toBeLessThan(2_500)
+  expect(result.rasterMaskWorker.previewTiles).toBeGreaterThan(1)
+  expect(result.rasterMaskWorker.changedPixels).toBeGreaterThan(1_000)
+  expect(result.rasterMaskWorker.retainedHistoryBytes).toBeLessThanOrEqual(
+    64 << 20,
+  )
+  expect(result.rasterMaskWorker.undoTiles).toBeGreaterThan(1)
+  expect(result.rasterMaskWorker.redoTiles).toBe(
+    result.rasterMaskWorker.undoTiles,
+  )
   expect(result.contextLossSupported).toBe(true)
   expect(result.contextLostObserved).toBe(true)
   expect(result.contextRestoredObserved).toBe(true)
@@ -129,6 +140,15 @@ declare global {
         bottom: number
       }
       resolutionTransitionBytes: number[]
+      rasterMaskWorker: {
+        createMs: number
+        strokeMs: number
+        previewTiles: number
+        changedPixels: number
+        retainedHistoryBytes: number
+        undoTiles: number
+        redoTiles: number
+      }
       contextLossSupported: boolean
       contextLostObserved: boolean
       contextRestoredObserved: boolean

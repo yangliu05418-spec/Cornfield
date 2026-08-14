@@ -122,6 +122,32 @@ describe('V2 canvas interaction geometry', () => {
     ).toMatchObject({ left: 20, top: 10, right: 60, bottom: 50 })
   })
 
+  it('honors ellipse and inverted shape masks in hit testing and bounds', () => {
+    const layer = raster('layer', null, 'asset-a', 0)
+    layer.shape_mask = {
+      type: 'ellipse',
+      x: 0.25,
+      y: 0.25,
+      width: 0.5,
+      height: 0.5,
+      inverted: false,
+    }
+    const document = v2([layer])
+    expect(hitTestEditorDocument(document, assets, { x: 50, y: 40 })).toBe(
+      'layer',
+    )
+    expect(hitTestEditorDocument(document, assets, { x: 25, y: 20 })).toBe(
+      undefined,
+    )
+    expect(
+      editorSelectionBounds(document, assets, new Set(['layer'])),
+    ).toMatchObject({ left: 25, top: 20, right: 75, bottom: 60 })
+    layer.shape_mask.inverted = true
+    expect(hitTestEditorDocument(v2([layer]), assets, { x: 25, y: 20 })).toBe(
+      'layer',
+    )
+  })
+
   it('rejects moving a child of a locked group', () => {
     const group = groupNode('group', null, 0)
     group.locked = true

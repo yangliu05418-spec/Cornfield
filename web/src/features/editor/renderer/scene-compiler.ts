@@ -7,6 +7,7 @@ import type {
   EditorDocumentV2,
   EditorEffectV2,
   EditorNodeV2,
+  EditorShapeMaskV2,
 } from '../domain/document-v2'
 import { validateEditorDocumentV2 } from '../domain/document-v2'
 import {
@@ -31,6 +32,7 @@ export type EditorSceneRasterNode = {
   blendMode: EditorNodeV2['blend_mode']
   effects: EditorEffectV2[]
   colorMatrix: EditorColorMatrixV1
+  shapeMask?: EditorShapeMaskV2
 }
 
 export type EditorRenderScene = {
@@ -69,6 +71,7 @@ function compileV1(document: EditorDocumentV1): EditorRenderScene {
         blendMode: 'normal',
         effects: [],
         colorMatrix: compileEditorColorMatrixV1([]),
+        shapeMask: undefined,
       })),
   }
 }
@@ -111,6 +114,7 @@ function compileV2(document: EditorDocumentV2): EditorRenderScene {
     if (
       mask.mask_id !== undefined ||
       mask.crop !== undefined ||
+      mask.shape_mask !== undefined ||
       mask.blend_mode !== 'normal' ||
       (mask.effects ?? []).some((effect) => effect.enabled)
     )
@@ -164,6 +168,7 @@ function compileV2(document: EditorDocumentV2): EditorRenderScene {
         blendMode: node.blend_mode,
         effects,
         colorMatrix,
+        shapeMask: node.shape_mask ? { ...node.shape_mask } : undefined,
       })
       order += 1
     }

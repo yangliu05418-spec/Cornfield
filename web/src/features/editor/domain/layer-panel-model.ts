@@ -50,7 +50,10 @@ export function canAttachEditorMask(
     nodes.length === 2 &&
     active?.type === 'raster' &&
     nodes.every(
-      (node) => node.type === 'raster' && node.parent_id === active.parent_id,
+      (node) =>
+        node.type === 'raster' &&
+        node.parent_id === active.parent_id &&
+        node.shape_mask === undefined,
     )
   )
 }

@@ -102,6 +102,23 @@ func TestCompileV2RenderSceneCollapsesClippedAdjustmentsIntoTargetMatrix(t *test
 	}
 }
 
+func TestCompileV2RenderSceneCarriesIndependentShapeMask(t *testing.T) {
+	asset := uuid.New()
+	mask := &ShapeMaskV2{Type: "rectangle", X: .1, Y: .2, Width: .6, Height: .5}
+	document := DocumentV2{SchemaVersion: 2, RendererSemanticsVersion: 1, Canvas: Canvas{Width: 10, Height: 10}, Nodes: []NodeV2{{ID: "content", Type: "raster", OrderKey: "00000001", Transform: [6]float64{1, 0, 0, 1, 0, 0}, Opacity: 1, BlendMode: "normal", Visible: true, AssetID: &asset, ShapeMask: mask}}}
+	scene, err := CompileV2RenderScene(document)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if scene.Nodes[0].ShapeMask == nil || *scene.Nodes[0].ShapeMask != *mask {
+		t.Fatalf("shape mask lost: %#v", scene.Nodes[0].ShapeMask)
+	}
+	mask.X = .9
+	if scene.Nodes[0].ShapeMask.X != .1 {
+		t.Fatal("scene retained mutable document mask")
+	}
+}
+
 func TestCompileV2RenderSceneRejectsGroupBlend(t *testing.T) {
 	group := NodeV2{ID: "group", Type: "group", OrderKey: "00000001", Transform: [6]float64{1, 0, 0, 1, 0, 0}, Opacity: 1, BlendMode: "multiply", Visible: true}
 	_, err := CompileV2RenderScene(DocumentV2{SchemaVersion: 2, RendererSemanticsVersion: 1, Canvas: Canvas{Width: 10, Height: 10}, Nodes: []NodeV2{group}})

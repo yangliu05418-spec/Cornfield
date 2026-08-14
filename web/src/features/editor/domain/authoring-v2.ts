@@ -183,8 +183,10 @@ export function attachEditorMask(
     content.type !== 'raster' ||
     mask.type !== 'raster' ||
     content.parent_id !== mask.parent_id ||
+    content.shape_mask !== undefined ||
     mask.mask_id !== undefined ||
     mask.crop !== undefined ||
+    mask.shape_mask !== undefined ||
     document.nodes.some((node) => node.mask_id === mask.id)
   )
     throw commandError(

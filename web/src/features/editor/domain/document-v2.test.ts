@@ -72,4 +72,22 @@ describe('editor document V2', () => {
     v2.nodes.at(-1)!.target_id = 'missing'
     expect(validateEditorDocumentV2(v2)).toContain('target:adjustment')
   })
+
+  it('validates shape masks and refuses lossy V1 compilation', () => {
+    const v2 = fixture('v2-flat.json') as EditorDocumentV2
+    v2.nodes[0].shape_mask = {
+      type: 'ellipse',
+      x: 0.1,
+      y: 0.2,
+      width: 0.6,
+      height: 0.5,
+      inverted: true,
+    }
+    expect(validateEditorDocumentV2(v2)).toEqual([])
+    expect(() => compileEditorDocumentV2ToV1(v2)).toThrow(
+      UnsupportedEditorSemanticsError,
+    )
+    v2.nodes[0].crop = { x: 0, y: 0, width: 0.5, height: 0.5 }
+    expect(validateEditorDocumentV2(v2)).toContain(`asset:${v2.nodes[0].id}`)
+  })
 })

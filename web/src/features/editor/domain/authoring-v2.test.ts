@@ -82,6 +82,26 @@ describe('editor V2 authoring commands', () => {
     )
   })
 
+  it('rejects stacking an independent alpha mask with a shape mask', () => {
+    const shapeMask = raster('shape-mask', null, 0)
+    shapeMask.shape_mask = {
+      type: 'ellipse',
+      x: 0,
+      y: 0,
+      width: 1,
+      height: 1,
+      inverted: false,
+    }
+    const content = raster('content', null, 1)
+    const alpha = raster('alpha', null, 2)
+    expect(() =>
+      attachEditorMask(v2([shapeMask, content]), 'content', 'shape-mask'),
+    ).toThrow(EditorCommandError)
+    expect(() =>
+      attachEditorMask(v2([alpha, shapeMask]), 'shape-mask', 'alpha'),
+    ).toThrow(EditorCommandError)
+  })
+
   it('reparents a subtree while preserving its world transform', () => {
     const left = groupNode('left', null, 0)
     left.transform = [2, 0, 0, 2, 10, 20]

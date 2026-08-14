@@ -96,6 +96,15 @@ describe('structured layer panel model', () => {
     expect(canGroupEditorNodes([first, nested])).toBe(false)
     expect(canAttachEditorMask([first, second], first)).toBe(true)
     expect(canAttachEditorMask([first, nested], first)).toBe(false)
+    second.shape_mask = {
+      type: 'rectangle',
+      x: 0,
+      y: 0,
+      width: 1,
+      height: 1,
+      inverted: false,
+    }
+    expect(canAttachEditorMask([first, second], first)).toBe(false)
     const clipped = adjustment('adjustment', first.id, '00000002')
     expect(canGroupEditorNodes([clipped])).toBe(false)
     expect(canGroupEditorNodes([first, clipped])).toBe(true)

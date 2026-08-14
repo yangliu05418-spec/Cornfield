@@ -174,6 +174,22 @@ describe('editor scene compiler', () => {
     )
   })
 
+  it('clones shape masks into the render scene', () => {
+    const layer = raster('shape', null, '00000001', identity, 1)
+    layer.shape_mask = {
+      type: 'ellipse',
+      x: 0.1,
+      y: 0.2,
+      width: 0.5,
+      height: 0.6,
+      inverted: true,
+    }
+    const scene = compileEditorRenderScene(v2([layer]))
+    expect(scene.nodes[0].shapeMask).toEqual(layer.shape_mask)
+    layer.shape_mask.x = 0.4
+    expect(scene.nodes[0].shapeMask?.x).toBe(0.1)
+  })
+
   it('rejects group blend and unsupported mask semantics', () => {
     const groupNode = group('group', null, '00000001', identity, 1)
     groupNode.blend_mode = 'multiply'

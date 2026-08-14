@@ -128,6 +128,24 @@ func TestDocumentV2ValidatesClippedAdjustmentTarget(t *testing.T) {
 	}
 }
 
+func TestDocumentV2ValidatesShapeMaskWithoutSilentV1Downgrade(t *testing.T) {
+	v2, err := MigrateV1ToV2(New(uuid.New(), 128, 128))
+	if err != nil {
+		t.Fatal(err)
+	}
+	v2.Nodes[0].ShapeMask = &ShapeMaskV2{Type: "ellipse", X: .1, Y: .2, Width: .6, Height: .5, Inverted: true}
+	if err = v2.Validate(); err != nil {
+		t.Fatalf("valid shape mask rejected: %v", err)
+	}
+	if _, err = v2.ToV1(); !errors.Is(err, ErrUnsupportedDocumentSemantics) {
+		t.Fatalf("shape mask downgrade error = %v", err)
+	}
+	v2.Nodes[0].Crop = &Crop{X: 0, Y: 0, Width: .5, Height: .5}
+	if err = v2.Validate(); !errors.Is(err, ErrInvalidDocument) {
+		t.Fatalf("crop and shape mask conflict = %v", err)
+	}
+}
+
 func TestDecodeV2RejectsUnknownFieldsAndExcessiveDepth(t *testing.T) {
 	v2, err := MigrateV1ToV2(New(uuid.New(), 32, 32))
 	if err != nil {

@@ -77,12 +77,20 @@ func TestProductionCatalogIsValid(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load production catalog: %v", err)
 	}
-	if len(catalog.Models) != 11 || catalog.Hash == "" {
+	if len(catalog.Models) != 13 || catalog.Hash == "" {
 		t.Fatalf("unexpected catalog: %+v", catalog)
 	}
 	flash, ok := catalog.Find("openrouter-gemini-3-1-flash-image")
 	if !ok || slices.Contains(flash.AspectRatiosForResolution("4K"), "1:4") || !slices.Contains(flash.AspectRatiosForResolution("2K"), "1:4") {
 		t.Fatalf("unexpected Nano Banana 2 resolution-specific ratios: %+v", flash.Capabilities.AspectRatiosByResolution)
+	}
+	grok, ok := catalog.Find("openrouter-grok-imagine-image-2")
+	if !ok || !slices.Contains(grok.Capabilities.AspectRatios, "9:19.5") || !slices.Equal(grok.Capabilities.Qualities, []string{"low", "medium"}) {
+		t.Fatalf("unexpected Grok Imagine 2 capabilities: %+v", grok.Capabilities)
+	}
+	qwen, ok := catalog.Find("openrouter-qwen-image-3-pro")
+	if !ok || qwen.Capabilities.MaxReferenceImages != 4 || !slices.Contains(qwen.Capabilities.AspectRatios, "1:4") {
+		t.Fatalf("unexpected Qwen Image 3 Pro capabilities: %+v", qwen.Capabilities)
 	}
 }
 

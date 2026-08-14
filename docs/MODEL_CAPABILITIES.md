@@ -1,6 +1,6 @@
 # 模型能力边界
 
-本表记录 Cornfield 当前启用模型的生产能力上限。OpenRouter 模型以其 Dedicated Image API 的实时 endpoint discovery 为准；部署前由 `modelctl verify-remote` 检测漂移。日期：2026-08-10。
+本表记录 Cornfield 当前启用模型的生产能力上限。OpenRouter 模型以其 Dedicated Image API 的实时 endpoint discovery 为准；部署前由 `modelctl verify-remote` 检测漂移。日期：2026-08-14。
 
 | Cornfield 模型 | 参考图上限 | Cornfield 单图上限 | 边界说明 |
 |---|---:|---:|---|
@@ -10,6 +10,8 @@
 | Nano Banana Pro | 14 | 25 MiB | OpenRouter 两个 Google endpoints 均为 14；Cornfield 的分辨率仍取多 endpoint 的安全交集。 |
 | GPT Image 2 | 16 | 25 MiB | OpenRouter OpenAI endpoint 声明 `input_references.max=16`。画质可传 `quality=auto/low/medium/high`；该 endpoint 不声明比例或分辨率字段。 |
 | Grok Imagine Image Quality | 3 | 25 MiB | OpenRouter 与 xAI 多图编辑文档的上限一致。 |
+| Grok Imagine Image 2.0 | 3 | 25 MiB | OpenRouter endpoint 声明 1K/2K、13 个固定比例与 `quality=low/medium`；单请求固定输出 1 张。 |
+| Qwen Image 3 Pro | 4 | 25 MiB | OpenRouter endpoint 声明 1K/2K、13 个固定比例与最多 4 张参考图；Cornfield 保持每 draw 单图语义。 |
 | Seedream 4.5 | 14 | 25 MiB | OpenRouter Seed endpoint 声明 14。上游常见约束是输入图与输出图合计最多 15；Cornfield 每 draw 请求 1 张输出，因此最多开放 14 张输入。 |
 | Seedream 5.0 Pro（BytePlus 官方） | 10 | 25 MiB | Pro 单请求固定输出 1 张，支持 2–10 张多参考图；Cornfield 使用显式像素尺寸与 `standard/fast` 提示词优化，不发送流式、连续组图、seed 或 guidance 字段。 |
 | FLUX.2 Max（BFL 官方） | 8 | 25 MiB | 官方 API 上限为 8；Playground 的 10 张不属于 API 合约。输出最大 4MP、边长至少 64px、尺寸为 16 的倍数。 |

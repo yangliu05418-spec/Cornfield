@@ -43,6 +43,23 @@ func DecodeRenderScene(raw []byte) (RenderScene, error) {
 	return document.RenderScene()
 }
 
+func DecodeRenderSceneForSelection(raw []byte, artboardID string, artboardIDs []string, mode string) (RenderScene, error) {
+	document, err := DecodeAny(raw)
+	if err != nil {
+		return RenderScene{}, err
+	}
+	if document.SchemaVersion != 3 || document.V3 == nil {
+		return document.RenderScene()
+	}
+	if mode == "composite" {
+		return CompileV3CompositeRenderScene(*document.V3, artboardIDs)
+	}
+	if artboardID == "" {
+		artboardID = document.V3.ActiveArtboardID
+	}
+	return CompileV3ArtboardRenderScene(*document.V3, artboardID)
+}
+
 func (d DecodedDocument) RenderScene() (RenderScene, error) {
 	switch d.SchemaVersion {
 	case 1:
@@ -55,9 +72,75 @@ func (d DecodedDocument) RenderScene() (RenderScene, error) {
 			return RenderScene{}, ErrInvalidDocument
 		}
 		return CompileV2RenderScene(*d.V2)
+	case 3:
+		if d.V3 == nil {
+			return RenderScene{}, ErrInvalidDocument
+		}
+		return CompileV3ArtboardRenderScene(*d.V3, d.V3.ActiveArtboardID)
 	default:
 		return RenderScene{}, ErrInvalidDocument
 	}
+}
+
+func CompileV3ArtboardRenderScene(document DocumentV3, artboardID string) (RenderScene, error) {
+	if err := document.Validate(); err != nil {
+		return RenderScene{}, err
+	}
+	artboard, exists := document.Artboard(artboardID)
+	if !exists || !artboard.Visible || len(artboard.Nodes) == 0 {
+		return RenderScene{}, ErrInvalidDocument
+	}
+	return CompileV2RenderScene(DocumentV2{
+		SchemaVersion: 2, RendererSemanticsVersion: 1,
+		Canvas: Canvas{Width: artboard.Width, Height: artboard.Height}, Nodes: artboard.Nodes,
+	})
+}
+
+func CompileV3CompositeRenderScene(document DocumentV3, artboardIDs []string) (RenderScene, error) {
+	if err := document.Validate(); err != nil || len(artboardIDs) == 0 {
+		return RenderScene{}, ErrInvalidDocument
+	}
+	artboards, err := document.OrderedArtboards(artboardIDs)
+	if err != nil {
+		return RenderScene{}, err
+	}
+	minX, minY := math.Inf(1), math.Inf(1)
+	maxX, maxY := math.Inf(-1), math.Inf(-1)
+	for _, artboard := range artboards {
+		if !artboard.Visible {
+			continue
+		}
+		minX = math.Min(minX, artboard.X)
+		minY = math.Min(minY, artboard.Y)
+		maxX = math.Max(maxX, artboard.X+float64(artboard.Width))
+		maxY = math.Max(maxY, artboard.Y+float64(artboard.Height))
+	}
+	if math.IsInf(minX, 0) {
+		return RenderScene{}, ErrInvalidDocument
+	}
+	originX, originY := math.Floor(minX), math.Floor(minY)
+	canvas := Canvas{Width: int(math.Ceil(maxX) - originX), Height: int(math.Ceil(maxY) - originY)}
+	if !validCanvas(canvas) {
+		return RenderScene{}, ErrInvalidDocument
+	}
+	nodes := make([]RenderNode, 0)
+	for _, artboard := range artboards {
+		if !artboard.Visible || len(artboard.Nodes) == 0 {
+			continue
+		}
+		scene, compileErr := CompileV3ArtboardRenderScene(document, artboard.ID)
+		if compileErr != nil {
+			return RenderScene{}, compileErr
+		}
+		translation := [6]float64{1, 0, 0, 1, artboard.X - originX, artboard.Y - originY}
+		for _, node := range scene.Nodes {
+			node.Transform = MultiplyTransforms(translation, node.Transform)
+			node.Order = len(nodes)
+			nodes = append(nodes, node)
+		}
+	}
+	result := RenderScene{Canvas: canvas, Nodes: nodes}
+	return result, result.Validate()
 }
 
 func CompileV1RenderScene(document Document) (RenderScene, error) {

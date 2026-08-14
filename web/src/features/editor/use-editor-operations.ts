@@ -29,6 +29,7 @@ type UseEditorOperationsOptions = {
   initialOperationID?: string
   activeLayerSet?: LayerSet
   getRevision: () => number
+  getActiveArtboardID: () => string
   flushSaves: () => Promise<void>
   onLayerSetReady: (layerSet: LayerSet, sourceRevision: number) => void
   onNotice: (message: string) => void
@@ -220,6 +221,7 @@ export function useEditorOperations(options: UseEditorOperationsOptions) {
             headers: { 'Idempotency-Key': crypto.randomUUID() },
             body: JSON.stringify({
               expected_revision: callbacksRef.current.getRevision(),
+              artboard_id: callbacksRef.current.getActiveArtboardID(),
               prompt: settings.prompt,
               resolution: settings.resolution,
               prompt_optimization_mode: settings.mode,
@@ -238,27 +240,37 @@ export function useEditorOperations(options: UseEditorOperationsOptions) {
     [canDecompose, options.projectID],
   )
 
-  const publish = useCallback(async () => {
-    try {
-      await callbacksRef.current.flushSaves()
-      const result = await api<{ id: string }>(
-        `/api/v1/editor-projects/${options.projectID}/publish`,
-        {
-          method: 'POST',
-          headers: { 'Idempotency-Key': crypto.randomUUID() },
-          body: JSON.stringify({
-            expected_revision: callbacksRef.current.getRevision(),
-          }),
-        },
-      )
-      setOperationID(result.id)
-      callbacksRef.current.onNotice('正在保存为新图片')
-    } catch (error) {
-      callbacksRef.current.onNotice(
-        error instanceof Error ? error.message : '保存新图片失败',
-      )
-    }
-  }, [options.projectID])
+  const publish = useCallback(
+    async (selection?: {
+      mode: 'single' | 'composite'
+      artboardIDs: string[]
+    }) => {
+      try {
+        await callbacksRef.current.flushSaves()
+        const result = await api<{ id: string }>(
+          `/api/v1/editor-projects/${options.projectID}/publish`,
+          {
+            method: 'POST',
+            headers: { 'Idempotency-Key': crypto.randomUUID() },
+            body: JSON.stringify({
+              expected_revision: callbacksRef.current.getRevision(),
+              mode: selection?.mode ?? 'single',
+              artboard_ids: selection?.artboardIDs ?? [
+                callbacksRef.current.getActiveArtboardID(),
+              ],
+            }),
+          },
+        )
+        setOperationID(result.id)
+        callbacksRef.current.onNotice('正在保存为新图片')
+      } catch (error) {
+        callbacksRef.current.onNotice(
+          error instanceof Error ? error.message : '保存新图片失败',
+        )
+      }
+    },
+    [options.projectID],
+  )
 
   const publishLayer = useCallback(
     async (layerSetID: string, itemID: string) => {

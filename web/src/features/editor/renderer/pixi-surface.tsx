@@ -61,10 +61,12 @@ export function PixiSurface({
     const isDisposed = () => disposed || failed
     let renderer: EditorRenderer | undefined
     let initializationTimeout = 0
+    let contextTimeout = 0
     const fail = (error: unknown) => {
       if (disposed || failed) return
       failed = true
       window.clearTimeout(initializationTimeout)
+      window.clearTimeout(contextTimeout)
       renderer?.destroy()
       rendererRef.current = undefined
       setReady(false)
@@ -88,7 +90,14 @@ export function PixiSurface({
           height: Math.max(1, Math.round(rect.height)),
           resolution: Math.min(window.devicePixelRatio || 1, 2),
           onContextChange: (lost) => {
-            onPresentedChangeRef.current(!lost)
+            window.clearTimeout(contextTimeout)
+            if (lost) {
+              onPresentedChangeRef.current(false)
+              contextTimeout = window.setTimeout(
+                () => fail(new Error('图形上下文恢复超时，请重新加载画布')),
+                12_000,
+              )
+            } else onPresentedChangeRef.current(true)
           },
           onError: fail,
         })
@@ -104,6 +113,7 @@ export function PixiSurface({
     return () => {
       disposed = true
       window.clearTimeout(initializationTimeout)
+      window.clearTimeout(contextTimeout)
       onPresentedChangeRef.current(false)
       setReady(false)
       rendererRef.current = undefined

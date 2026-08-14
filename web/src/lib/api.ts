@@ -1,5 +1,6 @@
 import type { EditorDocument } from '#/features/editor/domain/document'
 import type { EditorDocumentV2 } from '#/features/editor/domain/document-v2'
+import type { EditorDocumentV3 } from '#/features/editor/domain/document-v3'
 
 export type User = {
   id: string
@@ -68,7 +69,7 @@ export type EditorProject = {
   id: string
   source_asset_id: string
   name: string
-  document: EditorDocument | EditorDocumentV2
+  document: EditorDocument | EditorDocumentV2 | EditorDocumentV3
   revision: number
   active_layer_set_id?: string
   active_layer_set?: LayerSet
@@ -94,6 +95,7 @@ export type LayerSet = {
   items: LayerSetItem[]
   package_ready: boolean
   applied_to_project: boolean
+  artboard_id?: string
 }
 
 export type AssetOperation = {
@@ -104,6 +106,15 @@ export type AssetOperation = {
   source_revision: number
   resolution?: string
   prompt_optimization_mode?: string
+  source_artboard_id?: string
+  export_artboard_ids?: string[]
+  export_mode?: 'single' | 'composite'
+  estimated_wait?: {
+    lower_seconds: number
+    upper_seconds: number
+    sample_size: number
+    basis: string
+  }
   error_code?: string
   error_message?: string
   message?: string

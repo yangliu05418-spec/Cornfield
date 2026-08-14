@@ -1565,7 +1565,207 @@
 .structured-editor-body {
   display: grid;
   min-height: 0;
-  grid-template-columns: 48px minmax(0, 1fr) 320px;
+  grid-template-columns: 220px 48px minmax(0, 1fr) 320px;
+}
+.structured-artboard-panel {
+  display: grid;
+  min-width: 0;
+  min-height: 0;
+  grid-template-rows: auto auto minmax(0, 1fr) auto auto auto;
+  border-right: 1px solid var(--line);
+  background: var(--surface);
+}
+.structured-artboard-panel > header {
+  display: flex;
+  min-height: 48px;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--line);
+}
+.structured-artboard-panel > header > div {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+.structured-artboard-panel > header strong {
+  font-size: 11px;
+}
+.structured-artboard-panel > header span {
+  color: var(--muted);
+  font-size: 9px;
+}
+.structured-artboard-panel button {
+  color: var(--muted);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-2);
+}
+.structured-artboard-panel > header button {
+  display: grid;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  place-items: center;
+}
+.structured-new-artboard {
+  display: grid;
+  gap: 8px;
+  padding: 10px;
+  border-bottom: 1px solid var(--line);
+}
+.structured-new-artboard > div,
+.structured-artboard-position {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+}
+.structured-artboard-meta {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 28px 28px;
+  gap: 5px;
+  padding: 0 10px 10px;
+}
+.structured-artboard-meta input {
+  min-width: 0;
+  height: 28px;
+  padding: 0 7px;
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: #111315;
+  font-size: 10px;
+}
+.structured-artboard-meta button {
+  display: grid;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  place-items: center;
+}
+.structured-artboard-hint {
+  padding: 0 10px 10px;
+  color: var(--muted);
+  font-size: 9px;
+  line-height: 1.45;
+}
+.structured-new-artboard label,
+.structured-artboard-position label {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 5px;
+  color: var(--muted);
+  font-size: 9px;
+}
+.structured-new-artboard input,
+.structured-artboard-position input {
+  min-width: 0;
+  width: 100%;
+  height: 28px;
+  padding: 0 7px;
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: #111315;
+  font-size: 10px;
+}
+.structured-new-artboard > button {
+  min-height: 30px;
+  color: #10130b;
+  border-color: var(--lime);
+  background: var(--lime);
+  font-size: 10px;
+}
+.structured-artboard-list {
+  min-height: 0;
+  overflow: auto;
+  padding: 7px;
+}
+.structured-artboard-row {
+  display: grid;
+  grid-template-columns: 16px minmax(0, 1fr) 20px;
+  align-items: center;
+  gap: 3px;
+  margin-bottom: 4px;
+  border: 1px solid transparent;
+  border-radius: 9px;
+  transition:
+    160ms ease transform,
+    160ms ease border-color,
+    160ms ease background;
+}
+.structured-artboard-row:hover {
+  background: var(--surface-2);
+}
+.structured-artboard-row.active {
+  border-color: color-mix(in srgb, var(--lime) 55%, var(--line));
+  background: color-mix(in srgb, var(--lime) 7%, var(--surface-2));
+}
+.structured-artboard-row > svg {
+  color: var(--muted);
+  cursor: grab;
+}
+.structured-artboard-select {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: 24px minmax(0, 1fr);
+  grid-template-rows: auto auto;
+  padding: 7px 2px;
+  text-align: left;
+  border: 0 !important;
+  background: transparent !important;
+}
+.structured-artboard-select > span {
+  grid-row: 1 / 3;
+  color: var(--lime);
+  font: 500 9px/1.2 var(--font-ui);
+}
+.structured-artboard-select strong,
+.structured-artboard-select small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.structured-artboard-select strong {
+  color: var(--text);
+  font-size: 10px;
+}
+.structured-artboard-select small {
+  color: var(--muted);
+  font-size: 9px;
+}
+.structured-artboard-row input {
+  accent-color: var(--lime);
+}
+.structured-artboard-position {
+  padding: 9px 10px;
+  border-top: 1px solid var(--line);
+}
+.editor-mode-switch {
+  display: flex;
+  gap: 2px;
+  padding: 2px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: #111315;
+}
+.editor-mode-switch button {
+  min-height: 28px;
+  padding: 0 8px;
+  color: var(--muted);
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  font-size: 10px;
+  white-space: nowrap;
+}
+.editor-mode-switch button.active {
+  color: #10130b;
+  background: var(--lime);
+}
+.structured-order-controls {
+  display: none;
 }
 .structured-tool-rail {
   display: flex;
@@ -1628,6 +1828,9 @@
 .structured-actions.is-locked {
   pointer-events: none;
   opacity: 0.38;
+}
+.structured-actions.is-basic > button:not(:nth-of-type(2)):not(:last-child) {
+  display: none;
 }
 .structured-canvas {
   position: relative;
@@ -1764,6 +1967,9 @@
     color-mix(in srgb, var(--text) 42%, transparent);
   box-shadow: 0 24px 80px rgb(0 0 0 / 0.46);
   pointer-events: none;
+}
+.structured-artboard-outline.active {
+  outline-color: var(--lime);
 }
 .structured-selection-outline {
   position: absolute;
@@ -2227,7 +2433,7 @@
 
 @media (max-width: 860px) {
   .structured-editor-body {
-    grid-template-columns: 48px minmax(0, 1fr) 272px;
+    grid-template-columns: 180px 48px minmax(0, 1fr) 272px;
   }
   .raster-mask-options label:nth-of-type(2),
   .raster-mask-options label:nth-of-type(3) {
@@ -2243,6 +2449,23 @@
   }
   .structured-actions button svg {
     flex: 0 0 auto;
+    color: var(--text);
+  }
+}
+@media (max-width: 680px) {
+  .structured-editor-body {
+    grid-template-columns: 48px minmax(0, 1fr) 240px;
+  }
+  .structured-artboard-panel {
+    display: none;
+  }
+  .editor-mode-switch button {
+    width: 30px;
+    padding: 0;
+    overflow: hidden;
+    color: transparent;
+  }
+  .editor-mode-switch button::first-letter {
     color: var(--text);
   }
 }

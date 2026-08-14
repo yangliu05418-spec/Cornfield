@@ -1,4 +1,4 @@
-import { useQuery } from '@tanstack/react-query'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   ArrowDown,
   ArrowLeft,
@@ -12,11 +12,14 @@ import {
   FolderMinus,
   FolderPlus,
   Layers,
+  GripVertical,
+  ImagePlus,
   Link,
   Link2Off,
   Lock,
   Maximize,
   MousePointer2,
+  Plus,
   CircleDashed,
   Redo2,
   Save,
@@ -34,6 +37,7 @@ import { ConfirmDialog } from '#/components/confirm-dialog'
 import { api, APIError } from '#/lib/api'
 import type { Asset, EditorProject, LayerSet } from '#/lib/api'
 import { fitArtboard } from '#/lib/editor-transform'
+import { mergeAssetIntoCaches } from '#/lib/asset-cache'
 import { EditorOperationWaiting } from './editor-operation-waiting'
 import {
   attachEditorMask,
@@ -44,6 +48,14 @@ import {
   ungroupEditorNode,
 } from './domain/authoring-v2'
 import type { EditorDocumentV2, EditorNodeV2 } from './domain/document-v2'
+import type { EditorDocumentV3 } from './domain/document-v3'
+import {
+  activeEditorArtboard,
+  artboardAsDocumentV2,
+  createBlankEditorArtboard,
+  migrateEditorDocumentToV3,
+  replaceEditorArtboard,
+} from './domain/document-v3'
 import {
   editorBlendModesV2,
   editorEffectDefinitionsV2,
@@ -78,7 +90,7 @@ type SaveState =
   'saved' | 'dirty' | 'saving' | 'offline' | 'conflict' | 'invalid'
 
 type StructuredEditorProps = {
-  project: EditorProject & { document: EditorDocumentV2 }
+  project: EditorProject & { document: EditorDocumentV2 | EditorDocumentV3 }
   onBack: () => void
   onProjectChange: (project: EditorProject) => void
 }
@@ -88,9 +100,29 @@ export function StructuredEditor({
   onBack,
   onProjectChange,
 }: StructuredEditorProps) {
-  const [document, setDocument] = useState(() =>
-    structuredClone(project.document),
+  const queryClient = useQueryClient()
+  const [projectDocument, setProjectDocument] = useState<EditorDocumentV3>(
+    () =>
+      project.document.schema_version === 3
+        ? structuredClone(project.document)
+        : migrateEditorDocumentToV3(project.document),
   )
+  const initialArtboard = activeEditorArtboard(projectDocument)
+  const [document, setDocument] = useState(() =>
+    artboardAsDocumentV2(initialArtboard),
+  )
+  const [editorMode, setEditorMode] = useState<'basic' | 'professional'>(
+    'professional',
+  )
+  const [newArtboardOpen, setNewArtboardOpen] = useState(false)
+  const [uploadingArtboard, setUploadingArtboard] = useState(false)
+  const [newArtboardSize, setNewArtboardSize] = useState({
+    width: 2048,
+    height: 2048,
+  })
+  const [selectedExportArtboards, setSelectedExportArtboards] = useState<
+    Set<string>
+  >(new Set([initialArtboard.id]))
   const [selectedIDs, setSelectedIDs] = useState<Set<string>>(new Set())
   const [shapeTool, setShapeTool] = useState<'rectangle' | 'ellipse'>()
   const [activeID, setActiveID] = useState('')
@@ -105,6 +137,7 @@ export function StructuredEditor({
   const [rerunConfirm, setRerunConfirm] = useState(false)
   const [pendingLayerSet, setPendingLayerSet] = useState<LayerSet>()
   const draggedLayerIDsRef = useRef<string[]>([])
+  const draggedArtboardIDRef = useRef('')
   const [layerDrop, setLayerDrop] = useState<{
     id: string
     position: EditorLayerDropPosition
@@ -115,7 +148,10 @@ export function StructuredEditor({
     mode: 'standard',
   })
   const viewportRef = useRef<HTMLDivElement>(null)
+  const layerTreeRef = useRef<HTMLDivElement>(null)
+  const artboardUploadRef = useRef<HTMLInputElement>(null)
   const documentRef = useRef(document)
+  const projectDocumentRef = useRef(projectDocument)
   const historyRef = useRef(new EditorHistoryV2(100))
   const revisionRef = useRef(project.revision)
   const saveTimerRef = useRef<number | undefined>(undefined)
@@ -129,6 +165,16 @@ export function StructuredEditor({
     () => buildVisibleEditorLayerRows(document, collapsed),
     [document, collapsed],
   )
+  const activeArtboard = activeEditorArtboard(projectDocument)
+  const orderedArtboards = useMemo(
+    () =>
+      [...projectDocument.artboards].sort(
+        (left, right) =>
+          left.order_key.localeCompare(right.order_key) ||
+          left.id.localeCompare(right.id),
+      ),
+    [projectDocument.artboards],
+  )
   const activeNode = document.nodes.find((node) => node.id === activeID)
   const selectedNodes = document.nodes.filter((node) =>
     selectedIDs.has(node.id),
@@ -137,12 +183,14 @@ export function StructuredEditor({
     () =>
       [
         ...new Set(
-          document.nodes.flatMap((node) =>
-            node.type === 'raster' && node.asset_id ? [node.asset_id] : [],
+          projectDocument.artboards.flatMap((artboard) =>
+            artboard.nodes.flatMap((node) =>
+              node.type === 'raster' && node.asset_id ? [node.asset_id] : [],
+            ),
           ),
         ),
       ].sort(),
-    [document],
+    [projectDocument],
   )
   const assetsQuery = useQuery({
     queryKey: ['editor-assets-resolved', ...assetIDs],
@@ -165,7 +213,7 @@ export function StructuredEditor({
     if (saveBlockedRef.current)
       throw new Error('structured editor save is blocked')
     if (saveTailRef.current) return saveTailRef.current
-    const snapshot = structuredClone(documentRef.current)
+    const snapshot = structuredClone(projectDocumentRef.current)
     const signature = JSON.stringify(snapshot)
     setSaveState('saving')
     const task = saveStructuredDocument(
@@ -175,7 +223,7 @@ export function StructuredEditor({
     )
       .then((result) => {
         revisionRef.current = result.revision
-        if (JSON.stringify(documentRef.current) === signature) {
+        if (JSON.stringify(projectDocumentRef.current) === signature) {
           dirtyRef.current = false
           setSaveState('saved')
         } else {
@@ -235,6 +283,14 @@ export function StructuredEditor({
     )
       setHistoryRevision((value) => value + 1)
     documentRef.current = next
+    const activeArtboardID = projectDocumentRef.current.active_artboard_id
+    const nextProject = replaceEditorArtboard(
+      projectDocumentRef.current,
+      activeArtboardID,
+      next,
+    )
+    projectDocumentRef.current = nextProject
+    setProjectDocument(nextProject)
     setDocument(next)
     scheduleSave()
     return true
@@ -243,6 +299,13 @@ export function StructuredEditor({
   function previewDocument(next: EditorDocumentV2) {
     if (operationsRef.current) return
     documentRef.current = next
+    const nextProject = replaceEditorArtboard(
+      projectDocumentRef.current,
+      projectDocumentRef.current.active_artboard_id,
+      next,
+    )
+    projectDocumentRef.current = nextProject
+    setProjectDocument(nextProject)
     setDocument(next)
   }
 
@@ -253,6 +316,13 @@ export function StructuredEditor({
   ) {
     if (operationsRef.current) return
     documentRef.current = next
+    const nextProject = replaceEditorArtboard(
+      projectDocumentRef.current,
+      projectDocumentRef.current.active_artboard_id,
+      next,
+    )
+    projectDocumentRef.current = nextProject
+    setProjectDocument(nextProject)
     setDocument(next)
     if (historyRef.current.commit(initial, next, { mergeKey }))
       setHistoryRevision((value) => value + 1)
@@ -272,6 +342,45 @@ export function StructuredEditor({
     }
   }
 
+  function runLayerOrderCommand(
+    command: () => EditorDocumentV2,
+    message: string,
+  ) {
+    const root = layerTreeRef.current
+    const before = new Map(
+      [...(root?.querySelectorAll<HTMLElement>('[data-layer-id]') ?? [])].map(
+        (element) => [
+          element.dataset.layerId ?? '',
+          element.getBoundingClientRect().top,
+        ],
+      ),
+    )
+    const changed = runCommand(command, message)
+    if (
+      !changed ||
+      window.matchMedia('(prefers-reduced-motion: reduce)').matches
+    )
+      return changed
+    requestAnimationFrame(() => {
+      for (const element of root?.querySelectorAll<HTMLElement>(
+        '[data-layer-id]',
+      ) ?? []) {
+        const previous = before.get(element.dataset.layerId ?? '')
+        if (previous === undefined) continue
+        const delta = previous - element.getBoundingClientRect().top
+        if (Math.abs(delta) < 1) continue
+        element.animate(
+          [
+            { transform: `translateY(${delta}px)` },
+            { transform: 'translateY(0)' },
+          ],
+          { duration: 180, easing: 'cubic-bezier(.2,.8,.2,1)' },
+        )
+      }
+    })
+    return changed
+  }
+
   function updateNode(
     id: string,
     update: (node: EditorNodeV2) => EditorNodeV2,
@@ -286,6 +395,44 @@ export function StructuredEditor({
       },
       { mergeKey },
     )
+  }
+
+  function replaceActiveDocument(next: EditorDocumentV2) {
+    documentRef.current = next
+    const nextProject = replaceEditorArtboard(
+      projectDocumentRef.current,
+      projectDocumentRef.current.active_artboard_id,
+      next,
+    )
+    projectDocumentRef.current = nextProject
+    setProjectDocument(nextProject)
+    setDocument(next)
+  }
+
+  function activateArtboard(id: string) {
+    if (
+      operationsRef.current ||
+      id === projectDocumentRef.current.active_artboard_id
+    )
+      return
+    const artboard = projectDocumentRef.current.artboards.find(
+      (item) => item.id === id,
+    )
+    if (!artboard) return
+    const nextProject = {
+      ...projectDocumentRef.current,
+      active_artboard_id: id,
+    }
+    projectDocumentRef.current = nextProject
+    setProjectDocument(nextProject)
+    const next = artboardAsDocumentV2(artboard)
+    documentRef.current = next
+    setDocument(next)
+    setSelectedIDs(new Set())
+    setActiveID('')
+    historyRef.current.clear()
+    setHistoryRevision((value) => value + 1)
+    scheduleSave()
   }
 
   function selectNode(id: string, additive = false) {
@@ -374,8 +521,7 @@ export function StructuredEditor({
   function undo() {
     if (!historyRef.current.canUndo) return
     const next = historyRef.current.undo(documentRef.current)
-    documentRef.current = next
-    setDocument(next)
+    replaceActiveDocument(next)
     setHistoryRevision((value) => value + 1)
     scheduleSave()
   }
@@ -383,8 +529,7 @@ export function StructuredEditor({
   function redo() {
     if (!historyRef.current.canRedo) return
     const next = historyRef.current.redo(documentRef.current)
-    documentRef.current = next
-    setDocument(next)
+    replaceActiveDocument(next)
     setHistoryRevision((value) => value + 1)
     scheduleSave()
   }
@@ -392,15 +537,31 @@ export function StructuredEditor({
   const fitCanvas = useCallback(() => {
     const viewport = viewportRef.current
     if (!viewport) return
-    setView(
-      fitArtboard(
-        viewport.clientWidth,
-        viewport.clientHeight,
-        document.canvas.width,
-        document.canvas.height,
-      ),
+    const boards = projectDocumentRef.current.artboards.filter(
+      (artboard) => artboard.visible,
     )
-  }, [document.canvas.height, document.canvas.width])
+    if (!boards.length) return
+    const left = Math.min(...boards.map((artboard) => artboard.x))
+    const top = Math.min(...boards.map((artboard) => artboard.y))
+    const right = Math.max(
+      ...boards.map((artboard) => artboard.x + artboard.width),
+    )
+    const bottom = Math.max(
+      ...boards.map((artboard) => artboard.y + artboard.height),
+    )
+    const fitted = fitArtboard(
+      viewport.clientWidth,
+      viewport.clientHeight,
+      right - left,
+      bottom - top,
+    )
+    const scale = fitted.zoom / 100
+    setView({
+      ...fitted,
+      panX: -((left + right) / 2) * scale,
+      panY: -((top + bottom) / 2) * scale,
+    })
+  }, [])
 
   useEffect(() => {
     requestAnimationFrame(fitCanvas)
@@ -455,10 +616,13 @@ export function StructuredEditor({
     (next: EditorDocumentV2, revision: number) => {
       revisionRef.current = revision
       dirtyRef.current = false
-      documentRef.current = next
-      setDocument(next)
+      replaceActiveDocument(next)
       setSaveState('saved')
-      onProjectChange({ ...project, document: next, revision })
+      onProjectChange({
+        ...project,
+        document: projectDocumentRef.current,
+        revision,
+      })
     },
     [onProjectChange, project],
   )
@@ -466,6 +630,9 @@ export function StructuredEditor({
   const rasterMask = useRasterMaskEditor({
     projectID: project.id,
     document,
+    referenceNodes: projectDocument.artboards.flatMap(
+      (artboard) => artboard.nodes,
+    ),
     activeNode,
     assets,
     getRevision: () => revisionRef.current,
@@ -476,9 +643,12 @@ export function StructuredEditor({
   rasterFlushRef.current = rasterMask.flush
   const rasterEditing = rasterMask.tool !== 'select'
 
-  function buildLayerSetDocument(layerSet: LayerSet): EditorDocumentV2 {
+  function buildLayerSetDocument(
+    layerSet: LayerSet,
+    base = documentRef.current,
+  ): EditorDocumentV2 {
     return {
-      ...documentRef.current,
+      ...base,
       nodes: [
         {
           id: `base-${layerSet.id}`,
@@ -521,8 +691,23 @@ export function StructuredEditor({
   }
 
   function applyLayerSet(layerSet: LayerSet) {
-    const next = buildLayerSetDocument(layerSet)
-    if (!applyDocument(next)) return
+    const targetID = layerSet.artboard_id || activeArtboard.id
+    const target = projectDocumentRef.current.artboards.find(
+      (artboard) => artboard.id === targetID,
+    )
+    if (!target) {
+      setNotice('目标画板已不存在，本次结果未应用')
+      return
+    }
+    const next = buildLayerSetDocument(layerSet, artboardAsDocumentV2(target))
+    if (targetID === projectDocumentRef.current.active_artboard_id) {
+      if (!applyDocument(next)) return
+    } else {
+      updateProjectDocument(
+        replaceEditorArtboard(projectDocumentRef.current, targetID, next),
+        targetID,
+      )
+    }
     const selected = next.nodes.at(-1)?.id ?? ''
     setActiveID(selected)
     setSelectedIDs(new Set(selected ? [selected] : []))
@@ -535,6 +720,7 @@ export function StructuredEditor({
     initialOperationID: project.latest_operation_id,
     activeLayerSet: project.active_layer_set,
     getRevision: () => revisionRef.current,
+    getActiveArtboardID: () => projectDocumentRef.current.active_artboard_id,
     flushSaves,
     onLayerSetReady: (layerSet, sourceRevision) => {
       if (sourceRevision === revisionRef.current && layerSet.applied_to_project)
@@ -545,6 +731,179 @@ export function StructuredEditor({
   })
   operationsRef.current = operations.running
 
+  function updateProjectDocument(next: EditorDocumentV3, activate?: string) {
+    const selected = activate ? { ...next, active_artboard_id: activate } : next
+    projectDocumentRef.current = selected
+    setProjectDocument(selected)
+    if (activate) {
+      const artboard = selected.artboards.find((item) => item.id === activate)
+      if (artboard) {
+        const active = artboardAsDocumentV2(artboard)
+        documentRef.current = active
+        setDocument(active)
+        setSelectedIDs(new Set())
+        setActiveID('')
+        historyRef.current.clear()
+      }
+    }
+    scheduleSave()
+  }
+
+  function addBlankArtboard() {
+    const width = Math.round(newArtboardSize.width)
+    const height = Math.round(newArtboardSize.height)
+    if (
+      width < 1 ||
+      height < 1 ||
+      width > 8192 ||
+      height > 8192 ||
+      width * height > 36_000_000
+    ) {
+      setNotice('画板尺寸需在 8192px 和 3600 万像素以内')
+      return
+    }
+    if (projectDocumentRef.current.artboards.length >= 32) {
+      setNotice('每个工程最多 32 个画板')
+      return
+    }
+    const artboard = createBlankEditorArtboard(projectDocumentRef.current, {
+      width,
+      height,
+    })
+    updateProjectDocument(
+      {
+        ...projectDocumentRef.current,
+        artboards: [...projectDocumentRef.current.artboards, artboard],
+      },
+      artboard.id,
+    )
+    setSelectedExportArtboards((current) => new Set(current).add(artboard.id))
+    setNewArtboardOpen(false)
+    requestAnimationFrame(fitCanvas)
+  }
+
+  function updateArtboard(
+    id: string,
+    update: (
+      artboard: EditorDocumentV3['artboards'][number],
+    ) => EditorDocumentV3['artboards'][number],
+  ) {
+    updateProjectDocument({
+      ...projectDocumentRef.current,
+      artboards: projectDocumentRef.current.artboards.map((artboard) =>
+        artboard.id === id ? update(artboard) : artboard,
+      ),
+    })
+  }
+
+  function reorderArtboard(sourceID: string, targetID: string) {
+    if (!sourceID || sourceID === targetID) return
+    const ordered = [...projectDocumentRef.current.artboards].sort((a, b) =>
+      a.order_key.localeCompare(b.order_key),
+    )
+    const sourceIndex = ordered.findIndex((item) => item.id === sourceID)
+    const targetIndex = ordered.findIndex((item) => item.id === targetID)
+    if (sourceIndex < 0 || targetIndex < 0) return
+    const [source] = ordered.splice(sourceIndex, 1)
+    ordered.splice(targetIndex, 0, source)
+    updateProjectDocument({
+      ...projectDocumentRef.current,
+      artboards: ordered.map((artboard, index) => ({
+        ...artboard,
+        order_key: String(index + 1).padStart(6, '0'),
+      })),
+    })
+  }
+
+  async function importArtboard(file?: File) {
+    if (!file || operations.running || uploadingArtboard) return
+    if (!['image/jpeg', 'image/png', 'image/webp'].includes(file.type)) {
+      setNotice('仅支持 JPEG、PNG 或 WebP 图片')
+      return
+    }
+    if (file.size > 25 << 20) {
+      setNotice('图片不能超过 25 MiB')
+      return
+    }
+    if (projectDocumentRef.current.artboards.length >= 32) {
+      setNotice('每个工程最多 32 个画板')
+      return
+    }
+    setUploadingArtboard(true)
+    try {
+      const session = await api<{ id: string; content_url: string }>(
+        '/api/v1/uploads',
+        {
+          method: 'POST',
+          body: JSON.stringify({
+            filename: file.name,
+            media_type: file.type,
+            size: file.size,
+          }),
+        },
+      )
+      await api(session.content_url, { method: 'PUT', body: file })
+      const deadline = Date.now() + 120_000
+      let assetID = ''
+      while (Date.now() < deadline) {
+        const state = await api<{ status: string; asset_id?: string }>(
+          `/api/v1/uploads/${session.id}`,
+        )
+        if (state.status === 'ready' && state.asset_id) {
+          assetID = state.asset_id
+          break
+        }
+        if (state.status === 'failed') throw new Error('图片验证失败')
+        await new Promise((resolve) => window.setTimeout(resolve, 750))
+      }
+      if (!assetID) throw new Error('图片仍在验证，请稍后重试')
+      const asset = await api<Asset>(`/api/v1/assets/${assetID}`)
+      mergeAssetIntoCaches(queryClient, asset)
+      const scale = Math.min(
+        1,
+        8192 / asset.width,
+        8192 / asset.height,
+        Math.sqrt(36_000_000 / (asset.width * asset.height)),
+      )
+      const width = Math.max(1, Math.round(asset.width * scale))
+      const height = Math.max(1, Math.round(asset.height * scale))
+      const artboard = createBlankEditorArtboard(projectDocumentRef.current, {
+        name: file.name.replace(/\.[^.]+$/, '').slice(0, 64),
+        width,
+        height,
+      })
+      artboard.nodes = [
+        {
+          id: crypto.randomUUID(),
+          type: 'raster',
+          name: artboard.name,
+          parent_id: null,
+          order_key: '00000001',
+          transform: [scale, 0, 0, scale, 0, 0],
+          opacity: 1,
+          blend_mode: 'normal',
+          visible: true,
+          locked: false,
+          asset_id: asset.id,
+        },
+      ]
+      updateProjectDocument(
+        {
+          ...projectDocumentRef.current,
+          artboards: [...projectDocumentRef.current.artboards, artboard],
+        },
+        artboard.id,
+      )
+      setSelectedExportArtboards((current) => new Set(current).add(artboard.id))
+      requestAnimationFrame(fitCanvas)
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : '无法导入图片')
+    } finally {
+      setUploadingArtboard(false)
+      if (artboardUploadRef.current) artboardUploadRef.current.value = ''
+    }
+  }
+
   async function requestDecomposition(confirmed = false) {
     if (operations.currentLayerSet && !confirmed) {
       setRerunConfirm(true)
@@ -554,9 +913,12 @@ export function StructuredEditor({
   }
 
   function downloadDocument() {
-    const blob = new Blob([JSON.stringify(documentRef.current, null, 2)], {
-      type: 'application/json',
-    })
+    const blob = new Blob(
+      [JSON.stringify(projectDocumentRef.current, null, 2)],
+      {
+        type: 'application/json',
+      },
+    )
     const href = URL.createObjectURL(blob)
     const link = window.document.createElement('a')
     link.href = href
@@ -612,9 +974,25 @@ export function StructuredEditor({
             >
               <Redo2 size={16} />
             </button>
+            <div className="editor-mode-switch" aria-label="画布模式">
+              <button
+                type="button"
+                className={editorMode === 'basic' ? 'active' : undefined}
+                onClick={() => setEditorMode('basic')}
+              >
+                基础模式
+              </button>
+              <button
+                type="button"
+                className={editorMode === 'professional' ? 'active' : undefined}
+                onClick={() => setEditorMode('professional')}
+              >
+                专业模式
+              </button>
+            </div>
           </div>
           <div
-            className={`editor-topbar-group structured-actions${rasterEditing ? ' is-locked' : ''}`}
+            className={`editor-topbar-group structured-actions is-${editorMode}${rasterEditing ? ' is-locked' : ''}`}
             aria-disabled={rasterEditing}
             inert={rasterEditing ? true : undefined}
           >
@@ -742,7 +1120,14 @@ export function StructuredEditor({
               type="button"
               className="editor-publish"
               disabled={operations.running}
-              onClick={() => void operations.publish()}
+              onClick={() => {
+                const ids = [...selectedExportArtboards]
+                const selected = ids.length ? ids : [activeArtboard.id]
+                void operations.publish({
+                  mode: selected.length > 1 ? 'composite' : 'single',
+                  artboardIDs: selected,
+                })
+              }}
             >
               <Save size={16} /> 保存为新图片
             </button>
@@ -750,6 +1135,208 @@ export function StructuredEditor({
         </header>
 
         <section className="structured-editor-body">
+          <aside className="structured-artboard-panel" aria-label="画板">
+            <header>
+              <div>
+                <strong>画板</strong>
+                <span>{projectDocument.artboards.length} / 32</span>
+              </div>
+              <div>
+                <button
+                  type="button"
+                  title="导入图片为新画板"
+                  aria-label="导入图片为新画板"
+                  disabled={uploadingArtboard || operations.running}
+                  onClick={() => artboardUploadRef.current?.click()}
+                >
+                  <ImagePlus size={14} />
+                </button>
+                <button
+                  type="button"
+                  title="新建空白画板"
+                  aria-label="新建空白画板"
+                  disabled={operations.running}
+                  onClick={() => setNewArtboardOpen((value) => !value)}
+                >
+                  <Plus size={14} />
+                </button>
+              </div>
+              <input
+                ref={artboardUploadRef}
+                type="file"
+                hidden
+                multiple
+                accept="image/jpeg,image/png,image/webp"
+                onChange={(event) => {
+                  const files = [...(event.target.files ?? [])]
+                  void (async () => {
+                    for (const file of files) await importArtboard(file)
+                  })()
+                }}
+              />
+            </header>
+            {newArtboardOpen && (
+              <div className="structured-new-artboard">
+                <div>
+                  <label>
+                    <span>宽</span>
+                    <input
+                      type="number"
+                      min="1"
+                      max="8192"
+                      value={newArtboardSize.width}
+                      onChange={(event) =>
+                        setNewArtboardSize((value) => ({
+                          ...value,
+                          width: Number(event.target.value),
+                        }))
+                      }
+                    />
+                  </label>
+                  <label>
+                    <span>高</span>
+                    <input
+                      type="number"
+                      min="1"
+                      max="8192"
+                      value={newArtboardSize.height}
+                      onChange={(event) =>
+                        setNewArtboardSize((value) => ({
+                          ...value,
+                          height: Number(event.target.value),
+                        }))
+                      }
+                    />
+                  </label>
+                </div>
+                <button type="button" onClick={addBlankArtboard}>
+                  创建画板
+                </button>
+              </div>
+            )}
+            <div className="structured-artboard-list" role="listbox">
+              {orderedArtboards.map((artboard, index) => (
+                <div
+                  key={artboard.id}
+                  className={`structured-artboard-row${artboard.id === activeArtboard.id ? ' active' : ''}`}
+                  role="option"
+                  aria-selected={artboard.id === activeArtboard.id}
+                  draggable={!operations.running}
+                  onDragStart={(event) => {
+                    draggedArtboardIDRef.current = artboard.id
+                    event.dataTransfer.effectAllowed = 'move'
+                  }}
+                  onDragOver={(event) => {
+                    if (draggedArtboardIDRef.current) event.preventDefault()
+                  }}
+                  onDrop={(event) => {
+                    event.preventDefault()
+                    reorderArtboard(draggedArtboardIDRef.current, artboard.id)
+                    draggedArtboardIDRef.current = ''
+                  }}
+                >
+                  <GripVertical size={13} aria-hidden="true" />
+                  <button
+                    type="button"
+                    className="structured-artboard-select"
+                    onClick={() => activateArtboard(artboard.id)}
+                  >
+                    <span>{String(index + 1).padStart(2, '0')}</span>
+                    <strong>{artboard.name}</strong>
+                    <small>
+                      {artboard.width}×{artboard.height}
+                    </small>
+                  </button>
+                  <label title="包含在本次导出">
+                    <input
+                      type="checkbox"
+                      checked={selectedExportArtboards.has(artboard.id)}
+                      onChange={(event) => {
+                        setSelectedExportArtboards((current) => {
+                          const next = new Set(current)
+                          if (event.target.checked) next.add(artboard.id)
+                          else next.delete(artboard.id)
+                          return next
+                        })
+                      }}
+                    />
+                  </label>
+                </div>
+              ))}
+            </div>
+            <div className="structured-artboard-position">
+              {(['x', 'y'] as const).map((axis) => (
+                <label key={axis}>
+                  <span>{axis.toUpperCase()}</span>
+                  <input
+                    type="number"
+                    value={activeArtboard[axis]}
+                    disabled={activeArtboard.locked || operations.running}
+                    onChange={(event) =>
+                      updateArtboard(activeArtboard.id, (artboard) => ({
+                        ...artboard,
+                        [axis]: Math.max(
+                          -1_000_000,
+                          Math.min(1_000_000, Number(event.target.value)),
+                        ),
+                      }))
+                    }
+                  />
+                </label>
+              ))}
+            </div>
+            <div className="structured-artboard-meta">
+              <input
+                aria-label="画板名称"
+                value={activeArtboard.name}
+                maxLength={64}
+                disabled={operations.running}
+                onChange={(event) =>
+                  updateArtboard(activeArtboard.id, (artboard) => ({
+                    ...artboard,
+                    name: event.target.value,
+                  }))
+                }
+              />
+              <button
+                type="button"
+                aria-label={activeArtboard.visible ? '隐藏画板' : '显示画板'}
+                title={activeArtboard.visible ? '隐藏画板' : '显示画板'}
+                onClick={() =>
+                  updateArtboard(activeArtboard.id, (artboard) => ({
+                    ...artboard,
+                    visible: !artboard.visible,
+                  }))
+                }
+              >
+                {activeArtboard.visible ? (
+                  <Eye size={13} />
+                ) : (
+                  <EyeOff size={13} />
+                )}
+              </button>
+              <button
+                type="button"
+                aria-label={activeArtboard.locked ? '解锁画板' : '锁定画板'}
+                title={activeArtboard.locked ? '解锁画板' : '锁定画板'}
+                onClick={() =>
+                  updateArtboard(activeArtboard.id, (artboard) => ({
+                    ...artboard,
+                    locked: !artboard.locked,
+                  }))
+                }
+              >
+                {activeArtboard.locked ? (
+                  <Lock size={13} />
+                ) : (
+                  <Unlock size={13} />
+                )}
+              </button>
+            </div>
+            <small className="structured-artboard-hint">
+              Alt + 拖动画板 · 勾选后可拼合导出
+            </small>
+          </aside>
           <nav className="structured-tool-rail" aria-label="画布工具">
             <button
               type="button"
@@ -790,7 +1377,22 @@ export function StructuredEditor({
               <Eraser size={18} />
             </button>
           </nav>
-          <div className="structured-canvas" ref={viewportRef}>
+          <div
+            className="structured-canvas"
+            ref={viewportRef}
+            onDragOver={(event) => {
+              if (event.dataTransfer.types.includes('Files'))
+                event.preventDefault()
+            }}
+            onDrop={(event) => {
+              if (!event.dataTransfer.files.length) return
+              event.preventDefault()
+              const files = [...event.dataTransfer.files]
+              void (async () => {
+                for (const file of files) await importArtboard(file)
+              })()
+            }}
+          >
             {rasterEditing && (
               <div className="raster-mask-options" aria-label="蒙版画笔参数">
                 <label>
@@ -867,7 +1469,7 @@ export function StructuredEditor({
             )}
             <PixiSurface
               enabled
-              document={document}
+              document={projectDocument}
               assets={assets}
               rasterMasks={rasterMask.resources}
               viewport={view}
@@ -884,6 +1486,15 @@ export function StructuredEditor({
             />
             <StructuredCanvasInteraction
               document={document}
+              artboardOffset={{ x: activeArtboard.x, y: activeArtboard.y }}
+              artboards={projectDocument.artboards.map((artboard) => ({
+                id: artboard.id,
+                x: artboard.x,
+                y: artboard.y,
+                width: artboard.width,
+                height: artboard.height,
+                active: artboard.id === activeArtboard.id,
+              }))}
               assets={assets}
               view={view}
               selectedIDs={selectedIDs}
@@ -899,6 +1510,19 @@ export function StructuredEditor({
               onFit={fitCanvas}
               shapeSelection={shapeTool}
               onShapeSelection={applyShapeMask}
+              onArtboardMove={(delta) =>
+                updateArtboard(activeArtboard.id, (artboard) => ({
+                  ...artboard,
+                  x: Math.max(
+                    -1_000_000,
+                    Math.min(1_000_000, artboard.x + delta.x),
+                  ),
+                  y: Math.max(
+                    -1_000_000,
+                    Math.min(1_000_000, artboard.y + delta.y),
+                  ),
+                }))
+              }
             />
             {rasterEditing &&
               activeNode?.type === 'raster' &&
@@ -935,6 +1559,16 @@ export function StructuredEditor({
                   >
                     重新加载画布
                   </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setEditorMode('basic')
+                      setRendererError('')
+                      setRendererAttempt((value) => value + 1)
+                    }}
+                  >
+                    切换基础模式
+                  </button>
                   <button type="button" onClick={onBack}>
                     返回工作区
                   </button>
@@ -954,6 +1588,7 @@ export function StructuredEditor({
                 status={operations.operation?.status}
                 message={operations.operation?.message}
                 elapsed={operations.elapsed}
+                estimate={operations.operation?.estimated_wait}
               />
             )}
             {pendingLayerSet && (
@@ -974,14 +1609,21 @@ export function StructuredEditor({
           >
             <header>
               <div>
-                <strong>图层</strong>
-                <span>{document.nodes.length} / 500</span>
+                <strong>{activeArtboard.name} · 图层</strong>
+                <span>
+                  {projectDocument.artboards.reduce(
+                    (total, artboard) => total + artboard.nodes.length,
+                    0,
+                  )}{' '}
+                  / 500
+                </span>
               </div>
               <button type="button" title="适应画布" onClick={fitCanvas}>
                 <Maximize size={15} />
               </button>
             </header>
             <div
+              ref={layerTreeRef}
               className="structured-layer-tree"
               role="tree"
               aria-label="图层结构"
@@ -995,6 +1637,7 @@ export function StructuredEditor({
                 return (
                   <div
                     key={node.id}
+                    data-layer-id={node.id}
                     className={`structured-layer-row${selectedIDs.has(node.id) ? ' active' : ''}`}
                     data-drop-position={
                       layerDrop?.id === node.id ? layerDrop.position : undefined
@@ -1030,7 +1673,7 @@ export function StructuredEditor({
                       setLayerDrop(undefined)
                       draggedLayerIDsRef.current = []
                       if (!ids.length) return
-                      runCommand(
+                      runLayerOrderCommand(
                         () =>
                           moveEditorNodesByDrop(
                             documentRef.current,
@@ -1116,6 +1759,44 @@ export function StructuredEditor({
                       </span>
                     </button>
                     <div className="structured-layer-controls">
+                      <button
+                        type="button"
+                        disabled={operations.running}
+                        aria-label="上移图层"
+                        title="上移图层"
+                        onClick={() =>
+                          runLayerOrderCommand(
+                            () =>
+                              reorderEditorNodeRelative(
+                                documentRef.current,
+                                node.id,
+                                1,
+                              ),
+                            '已上移图层',
+                          )
+                        }
+                      >
+                        <ArrowUp size={12} />
+                      </button>
+                      <button
+                        type="button"
+                        disabled={operations.running}
+                        aria-label="下移图层"
+                        title="下移图层"
+                        onClick={() =>
+                          runLayerOrderCommand(
+                            () =>
+                              reorderEditorNodeRelative(
+                                documentRef.current,
+                                node.id,
+                                -1,
+                              ),
+                            '已下移图层',
+                          )
+                        }
+                      >
+                        <ArrowDown size={12} />
+                      </button>
                       <button
                         type="button"
                         disabled={operations.running}
@@ -1545,7 +2226,7 @@ function commandErrorMessage(error: unknown) {
 async function saveStructuredDocument(
   projectID: string,
   expectedRevision: number,
-  document: EditorDocumentV2,
+  document: EditorDocumentV2 | EditorDocumentV3,
 ) {
   for (let attempt = 0; ; attempt++) {
     try {

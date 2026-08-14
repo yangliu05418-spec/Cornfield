@@ -48,6 +48,14 @@ type SceneNode = {
   maskVersion?: number
   maskGeneration?: number
   colorFilter?: ColorMatrixFilter
+  artboardID?: string
+}
+
+type SceneArtboard = {
+  container: Container
+  content: Container
+  mask: Graphics
+  background: Graphics
 }
 
 type RenderResources = {
@@ -67,6 +75,7 @@ export class PixiEditorRenderer implements EditorRenderer {
   #world = new Container()
   #content = new Container()
   #artboardMask = new Graphics()
+  #artboards = new Map<string, SceneArtboard>()
   #nodes = new Map<string, SceneNode>()
   #textures = new ReferenceCountedResourceCache<TextureResource>((resource) => {
     resource.texture.destroy(true)
@@ -171,24 +180,29 @@ export class PixiEditorRenderer implements EditorRenderer {
     if (this.#destroyed) return
     const scene = compileEditorRenderScene(document)
     const { assets, rasterMasks } = resources
+    const sceneNodes = this.#visibleSceneNodes(scene)
     const plan = planEditorSceneAssetVariants(
-      scene,
+      { ...scene, nodes: sceneNodes },
       assets,
       this.#viewport,
       this.#resolution,
       this.#textureBudgetBytes,
     )
     this.#textureBudgetExceeded = plan.budgetExceeded
-    this.#artboardMask
-      .clear()
-      .rect(0, 0, scene.canvas.width, scene.canvas.height)
-      .fill(0xffffff)
-    const live = new Set(scene.nodes.map((object) => object.id))
+    const live = new Set(sceneNodes.map((object) => object.id))
     for (const [id, node] of this.#nodes) {
       if (live.has(id)) continue
       this.#removeNode(id, node)
     }
-    await mapWithConcurrency(scene.nodes, 6, async (object) => {
+    if (scene.artboards) this.#syncArtboards(scene.artboards)
+    else {
+      this.#clearArtboards()
+      this.#artboardMask
+        .clear()
+        .rect(0, 0, scene.canvas.width, scene.canvas.height)
+        .fill(0xffffff)
+    }
+    await mapWithConcurrency(sceneNodes, 6, async (object) => {
       const asset = assets.get(object.assetID)
       const variant = plan.variants.get(object.id)
       const rasterMask = object.pixelMask
@@ -201,17 +215,20 @@ export class PixiEditorRenderer implements EditorRenderer {
         if (node) this.#removeNode(object.id, node)
       }
     })
-    this.#syncAlphaMasks(scene.nodes)
+    this.#syncAlphaMasks(sceneNodes)
     this.#textures.prune(this.#textureBudgetBytes)
     this.#applyViewport()
     this.render()
   }
 
   setViewport(viewport: EditorViewport) {
-    const zoomChanged = viewport.zoom !== this.#viewport.zoom
+    const viewChanged =
+      viewport.zoom !== this.#viewport.zoom ||
+      viewport.panX !== this.#viewport.panX ||
+      viewport.panY !== this.#viewport.panY
     this.#viewport = viewport
     this.#applyViewport()
-    if (zoomChanged) this.#scheduleResourceReconcile()
+    if (viewChanged) this.#scheduleResourceReconcile()
   }
 
   resize(width: number, height: number) {
@@ -258,6 +275,7 @@ export class PixiEditorRenderer implements EditorRenderer {
     window.clearTimeout(this.#resourceTimer)
     this.#syncs.close()
     for (const [id, node] of this.#nodes) this.#removeNode(id, node)
+    this.#clearArtboards()
     this.#textures.clear()
     if (this.#canvas) {
       this.#canvas.removeEventListener('webglcontextlost', this.#lostHandler)
@@ -337,7 +355,10 @@ export class PixiEditorRenderer implements EditorRenderer {
         visual = sprite
         container.addChild(sprite)
       }
-      this.#content.addChild(container)
+      const target = object.artboardID
+        ? this.#artboards.get(object.artboardID)?.content
+        : this.#content
+      target?.addChild(container)
       node = {
         container,
         visual,
@@ -348,8 +369,15 @@ export class PixiEditorRenderer implements EditorRenderer {
         maskResourceID,
         maskVersion: rasterMask?.version,
         maskGeneration: rasterMask?.generation,
+        artboardID: object.artboardID,
       }
       this.#nodes.set(object.id, node)
+    } else if (node.artboardID !== object.artboardID) {
+      const target = object.artboardID
+        ? this.#artboards.get(object.artboardID)?.content
+        : this.#content
+      target?.addChild(node.container)
+      node.artboardID = object.artboardID
     } else if (
       rasterMask &&
       node.rasterSurface &&
@@ -498,6 +526,88 @@ export class PixiEditorRenderer implements EditorRenderer {
     node.container.removeFromParent()
     node.container.destroy({ children: true })
     this.#textures.release(node.variantURL)
+  }
+
+  #syncArtboards(
+    definitions: NonNullable<
+      ReturnType<typeof compileEditorRenderScene>['artboards']
+    >,
+  ) {
+    this.#content.visible = false
+    this.#artboardMask.visible = false
+    const live = new Set(definitions.map((definition) => definition.id))
+    for (const [id, artboard] of this.#artboards) {
+      if (live.has(id)) continue
+      artboard.container.removeFromParent()
+      artboard.container.destroy({ children: true })
+      this.#artboards.delete(id)
+    }
+    for (const definition of definitions) {
+      let artboard = this.#artboards.get(definition.id)
+      if (!artboard) {
+        const container = new Container()
+        const background = new Graphics()
+        const content = new Container()
+        const mask = new Graphics()
+        content.sortableChildren = true
+        content.mask = mask
+        container.addChild(background, content, mask)
+        this.#world.addChild(container)
+        artboard = { container, content, mask, background }
+        this.#artboards.set(definition.id, artboard)
+      }
+      artboard.container.position.set(definition.x, definition.y)
+      artboard.container.zIndex = definition.order
+      artboard.container.visible = definition.visible
+      artboard.background
+        .clear()
+        .rect(0, 0, definition.width, definition.height)
+        .fill(0xf7f7f8)
+      artboard.mask
+        .clear()
+        .rect(0, 0, definition.width, definition.height)
+        .fill(0xffffff)
+    }
+  }
+
+  #clearArtboards() {
+    for (const [id, node] of this.#nodes) {
+      if (node.artboardID) this.#removeNode(id, node)
+    }
+    for (const artboard of this.#artboards.values()) {
+      artboard.container.removeFromParent()
+      artboard.container.destroy({ children: true })
+    }
+    this.#artboards.clear()
+    this.#content.visible = true
+    this.#artboardMask.visible = true
+  }
+
+  #visibleSceneNodes(
+    scene: ReturnType<typeof compileEditorRenderScene>,
+  ): EditorSceneRasterNode[] {
+    if (!scene.artboards || !this.#app) return scene.nodes
+    const scale = this.#viewport.zoom / 100
+    const margin = 512
+    const visible = new Set(
+      scene.artboards
+        .filter((artboard) => {
+          const left = this.#viewport.panX + artboard.x * scale
+          const top = this.#viewport.panY + artboard.y * scale
+          const right = left + artboard.width * scale
+          const bottom = top + artboard.height * scale
+          return (
+            right >= -margin &&
+            bottom >= -margin &&
+            left <= this.#app!.screen.width + margin &&
+            top <= this.#app!.screen.height + margin
+          )
+        })
+        .map((artboard) => artboard.id),
+    )
+    return scene.nodes.filter(
+      (node) => !node.artboardID || visible.has(node.artboardID),
+    )
   }
 
   #scheduleResourceReconcile() {

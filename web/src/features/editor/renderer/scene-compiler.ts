@@ -11,6 +11,11 @@ import type {
   EditorShapeMaskV2,
 } from '../domain/document-v2'
 import { validateEditorDocumentV2 } from '../domain/document-v2'
+import type { EditorDocumentV3 } from '../domain/document-v3'
+import {
+  artboardAsDocumentV2,
+  validateEditorDocumentV3,
+} from '../domain/document-v3'
 import {
   compileEditorColorMatrixV1,
   compileEditorColorMatrixWithStrengthV1,
@@ -18,7 +23,8 @@ import {
 } from './color-effects'
 import type { EditorColorMatrixV1 } from './color-effects'
 
-export type EditorRenderDocument = EditorDocumentV1 | EditorDocumentV2
+export type EditorRenderDocument =
+  EditorDocumentV1 | EditorDocumentV2 | EditorDocumentV3
 
 export type EditorSceneRasterNode = {
   id: string
@@ -35,11 +41,21 @@ export type EditorSceneRasterNode = {
   colorMatrix: EditorColorMatrixV1
   shapeMask?: EditorShapeMaskV2
   pixelMask?: EditorPixelMaskV2
+  artboardID?: string
 }
 
 export type EditorRenderScene = {
   canvas: { width: number; height: number }
   nodes: EditorSceneRasterNode[]
+  artboards?: Array<{
+    id: string
+    x: number
+    y: number
+    width: number
+    height: number
+    order: number
+    visible: boolean
+  }>
 }
 
 export class UnsupportedEditorRenderSemanticsError extends Error {
@@ -53,7 +69,46 @@ export function compileEditorRenderScene(
   document: EditorRenderDocument,
 ): EditorRenderScene {
   if (document.schema_version === 1) return compileV1(document)
+  if (document.schema_version === 3) return compileV3(document)
   return compileV2(document)
+}
+
+function compileV3(document: EditorDocumentV3): EditorRenderScene {
+  if (validateEditorDocumentV3(document).length > 0)
+    throw new TypeError('Invalid editor document V3')
+  const ordered = [...document.artboards].sort(
+    (left, right) =>
+      left.order_key.localeCompare(right.order_key) ||
+      left.id.localeCompare(right.id),
+  )
+  const nodes: EditorSceneRasterNode[] = []
+  ordered.forEach((artboard, artboardOrder) => {
+    const scene = compileV2(artboardAsDocumentV2(artboard))
+    nodes.push(
+      ...scene.nodes.map((node) => ({
+        ...node,
+        artboardID: artboard.id,
+        order: artboardOrder * 1_000 + node.order,
+      })),
+    )
+  })
+  const right = Math.max(...ordered.map((item) => item.x + item.width))
+  const bottom = Math.max(...ordered.map((item) => item.y + item.height))
+  const left = Math.min(...ordered.map((item) => item.x))
+  const top = Math.min(...ordered.map((item) => item.y))
+  return {
+    canvas: { width: right - left, height: bottom - top },
+    nodes,
+    artboards: ordered.map((artboard, order) => ({
+      id: artboard.id,
+      x: artboard.x,
+      y: artboard.y,
+      width: artboard.width,
+      height: artboard.height,
+      order,
+      visible: artboard.visible,
+    })),
+  }
 }
 
 function compileV1(document: EditorDocumentV1): EditorRenderScene {

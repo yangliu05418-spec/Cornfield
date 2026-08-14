@@ -30,6 +30,7 @@ export type RasterBrushSettings = {
 type Inputs = {
   projectID: string
   document: EditorDocumentV2
+  referenceNodes?: readonly EditorNodeV2[]
   activeNode?: EditorNodeV2
   assets: ReadonlyMap<string, Asset>
   getRevision: () => number
@@ -55,6 +56,7 @@ type PendingTile = { generation: number; tile: RasterMaskTileSnapshot }
 export function useRasterMaskEditor({
   projectID,
   document,
+  referenceNodes,
   activeNode,
   assets,
   getRevision,
@@ -114,7 +116,7 @@ export function useRasterMaskEditor({
   const maskReferences = useMemo(
     () => [
       ...new Map(
-        document.nodes.flatMap((node) =>
+        (referenceNodes ?? document.nodes).flatMap((node) =>
           node.type === 'raster' && node.pixel_mask
             ? [
                 [
@@ -126,7 +128,7 @@ export function useRasterMaskEditor({
         ),
       ).values(),
     ],
-    [document.nodes],
+    [document.nodes, referenceNodes],
   )
 
   useEffect(() => {

@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest'
 
 import type { EditorDocumentV1, EditorTransform } from '../domain/document'
 import type { EditorDocumentV2 } from '../domain/document-v2'
+import type { EditorDocumentV3 } from '../domain/document-v3'
 import {
   compileEditorColorMatrixV1,
   compileEditorColorMatrixWithStrengthV1,
@@ -17,6 +18,48 @@ import {
 const identity: EditorTransform = [1, 0, 0, 1, 0, 0]
 
 describe('editor scene compiler', () => {
+  it('keeps V3 nodes inside independently positioned artboards', () => {
+    const document: EditorDocumentV3 = {
+      schema_version: 3,
+      renderer_semantics_version: 2,
+      active_artboard_id: 'board-a',
+      artboards: [
+        {
+          id: 'board-a',
+          name: 'A',
+          order_key: '000001',
+          x: 0,
+          y: 0,
+          width: 100,
+          height: 100,
+          visible: true,
+          locked: false,
+          nodes: [raster('a', null, '000001', identity, 1)],
+        },
+        {
+          id: 'board-b',
+          name: 'B',
+          order_key: '000002',
+          x: 180,
+          y: 40,
+          width: 80,
+          height: 120,
+          visible: true,
+          locked: false,
+          nodes: [raster('b', null, '000001', [1, 0, 0, 1, 4, 6], 1)],
+        },
+      ],
+    }
+    const scene = compileEditorRenderScene(document)
+    expect(scene.artboards).toMatchObject([
+      { id: 'board-a', x: 0, y: 0 },
+      { id: 'board-b', x: 180, y: 40 },
+    ])
+    expect(scene.nodes.map((node) => [node.id, node.artboardID])).toEqual([
+      ['a', 'board-a'],
+      ['b', 'board-b'],
+    ])
+  })
   it('preserves V1 ordering and renderer semantics', () => {
     const document: EditorDocumentV1 = {
       schema_version: 1,

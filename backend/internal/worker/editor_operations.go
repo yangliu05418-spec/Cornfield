@@ -103,6 +103,9 @@ type assetOperationRecord struct {
 	Prompt                 *string
 	Resolution             *string
 	PromptOptimizationMode *string
+	SourceArtboardID       *string
+	ExportArtboardIDs      []string
+	ExportMode             *string
 	ProviderID             *string
 	ProviderModel          *string
 	ProviderRequestID      *string
@@ -184,15 +187,23 @@ func operationTerminal(status string) bool {
 	return status == "succeeded" || status == "failed" || status == "cancelled" || status == "submission_uncertain"
 }
 
+func stringValue(value *string) string {
+	if value == nil {
+		return ""
+	}
+	return *value
+}
+
 func (w *AssetOperationWorker) loadAssetOperation(ctx context.Context, id uuid.UUID) (assetOperationRecord, error) {
 	var record assetOperationRecord
 	err := w.DB.QueryRow(ctx, `SELECT id,owner_user_id,editor_project_id,operation_type,status,source_revision,source_document,
 		snapshot_asset_id,layer_set_id,model_id,capability_revision,prompt,resolution,prompt_optimization_mode,provider_id,provider_model,
-		provider_request_id,COALESCE(staged_manifest,'null'::jsonb),retry_count
+		source_artboard_id,export_artboard_ids,export_mode,provider_request_id,COALESCE(staged_manifest,'null'::jsonb),retry_count
 		FROM asset_operations WHERE id=$1`, id).Scan(
 		&record.ID, &record.OwnerID, &record.ProjectID, &record.Type, &record.Status, &record.SourceRevision,
 		&record.SourceDocument, &record.SnapshotAssetID, &record.LayerSetID, &record.ModelID, &record.CapabilityRevision, &record.Prompt,
 		&record.Resolution, &record.PromptOptimizationMode, &record.ProviderID, &record.ProviderModel,
+		&record.SourceArtboardID, &record.ExportArtboardIDs, &record.ExportMode,
 		&record.ProviderRequestID, &record.StagedManifest, &record.RetryCount,
 	)
 	return record, err
@@ -323,7 +334,7 @@ func (w *AssetOperationWorker) decompose(ctx context.Context, record assetOperat
 }
 
 func (w *AssetOperationWorker) renderAndStoreSnapshot(ctx context.Context, record assetOperationRecord) (uuid.UUID, error) {
-	scene, err := studioEditor.DecodeRenderScene(record.SourceDocument)
+	scene, err := studioEditor.DecodeRenderSceneForSelection(record.SourceDocument, stringValue(record.SourceArtboardID), record.ExportArtboardIDs, stringValue(record.ExportMode))
 	if err != nil {
 		return uuid.Nil, w.failOperationAndCancel(ctx, record, "INVALID_EDITOR_DOCUMENT", "当前画布无法处理，请撤销最近修改")
 	}
@@ -955,8 +966,8 @@ func (w *AssetOperationWorker) ingestLayers(ctx context.Context, record assetOpe
 		return errors.New("layer result has no base asset")
 	}
 	var layerSetID uuid.UUID
-	if err = tx.QueryRow(ctx, `INSERT INTO layer_sets(owner_user_id,editor_project_id,asset_operation_id,source_revision,base_asset_id)
-		VALUES($1,$2,$3,$4,$5) RETURNING id`, record.OwnerID, record.ProjectID, record.ID, record.SourceRevision, baseID).Scan(&layerSetID); err != nil {
+	if err = tx.QueryRow(ctx, `INSERT INTO layer_sets(owner_user_id,editor_project_id,asset_operation_id,source_revision,base_asset_id,artboard_id)
+		VALUES($1,$2,$3,$4,$5,$6) RETURNING id`, record.OwnerID, record.ProjectID, record.ID, record.SourceRevision, baseID, record.SourceArtboardID).Scan(&layerSetID); err != nil {
 		return err
 	}
 	for _, item := range prepared {
@@ -978,11 +989,16 @@ func (w *AssetOperationWorker) ingestLayers(ctx context.Context, record assetOpe
 		return err
 	}
 	applied := command.RowsAffected() == 1
+	if applied {
+		if _, err = tx.Exec(ctx, `UPDATE layer_sets SET applied_revision=$2 WHERE id=$1`, layerSetID, record.SourceRevision); err != nil {
+			return err
+		}
+	}
 	if _, err = tx.Exec(ctx, `UPDATE asset_operations SET status='succeeded',dispatch_state='finished',staged_manifest=NULL,completed_at=now(),updated_at=now(),error_code=NULL,error_message=NULL
 		WHERE id=$1`, record.ID); err != nil {
 		return err
 	}
-	payload, _ := json.Marshal(map[string]any{"id": record.ID, "status": "succeeded", "editor_project_id": record.ProjectID, "layer_set_id": layerSetID, "layer_count": len(prepared) - 1, "applied": applied})
+	payload, _ := json.Marshal(map[string]any{"id": record.ID, "status": "succeeded", "editor_project_id": record.ProjectID, "source_artboard_id": record.SourceArtboardID, "layer_set_id": layerSetID, "layer_count": len(prepared) - 1, "applied": applied})
 	if _, err = tx.Exec(ctx, `INSERT INTO job_events(owner_user_id,asset_operation_id,editor_project_id,event_type,payload)
 		VALUES($1,$2,$3,'asset_operation.succeeded',$4)`, record.OwnerID, record.ID, record.ProjectID, payload); err != nil {
 		return err
@@ -1015,7 +1031,7 @@ func (w *AssetOperationWorker) persistPreparedLayerManifest(ctx context.Context,
 }
 
 func (w *AssetOperationWorker) publishEditorDocument(ctx context.Context, record assetOperationRecord) error {
-	scene, err := studioEditor.DecodeRenderScene(record.SourceDocument)
+	scene, err := studioEditor.DecodeRenderSceneForSelection(record.SourceDocument, stringValue(record.SourceArtboardID), record.ExportArtboardIDs, stringValue(record.ExportMode))
 	if err != nil {
 		return w.failOperation(ctx, record, "INVALID_EDITOR_DOCUMENT", "当前画布无法发布")
 	}
@@ -1397,7 +1413,7 @@ func (w *AssetOperationWorker) setOperationStatus(ctx context.Context, record as
 	if _, err = tx.Exec(ctx, `UPDATE asset_operations SET status=$2,updated_at=now() WHERE id=$1`, record.ID, status); err != nil {
 		return err
 	}
-	payload, _ := json.Marshal(map[string]any{"id": record.ID, "status": status, "editor_project_id": record.ProjectID, "message": message})
+	payload, _ := json.Marshal(map[string]any{"id": record.ID, "status": status, "editor_project_id": record.ProjectID, "source_artboard_id": record.SourceArtboardID, "message": message})
 	if _, err = tx.Exec(ctx, `INSERT INTO job_events(owner_user_id,asset_operation_id,editor_project_id,event_type,payload) VALUES($1,$2,$3,'asset_operation.updated',$4)`, record.OwnerID, record.ID, record.ProjectID, payload); err != nil {
 		return err
 	}
@@ -1407,7 +1423,7 @@ func (w *AssetOperationWorker) setOperationStatus(ctx context.Context, record as
 func (w *AssetOperationWorker) failOperation(ctx context.Context, record assetOperationRecord, code, message string) error {
 	_, err := w.DB.Exec(ctx, `UPDATE asset_operations SET status='failed',dispatch_state='finished',error_code=$2,error_message=$3,completed_at=now(),updated_at=now() WHERE id=$1 AND status NOT IN ('succeeded','cancelled')`, record.ID, code, message)
 	if err == nil {
-		payload, _ := json.Marshal(map[string]any{"id": record.ID, "status": "failed", "editor_project_id": record.ProjectID, "error_code": code, "error_message": message})
+		payload, _ := json.Marshal(map[string]any{"id": record.ID, "status": "failed", "editor_project_id": record.ProjectID, "source_artboard_id": record.SourceArtboardID, "error_code": code, "error_message": message})
 		_, err = w.DB.Exec(ctx, `INSERT INTO job_events(owner_user_id,asset_operation_id,editor_project_id,event_type,payload) VALUES($1,$2,$3,'asset_operation.failed',$4)`, record.OwnerID, record.ID, record.ProjectID, payload)
 	}
 	return err
@@ -1425,7 +1441,7 @@ func (w *AssetOperationWorker) setOperationSucceeded(ctx context.Context, record
 	if err != nil {
 		return err
 	}
-	extra["id"], extra["status"], extra["editor_project_id"] = record.ID, "succeeded", record.ProjectID
+	extra["id"], extra["status"], extra["editor_project_id"], extra["source_artboard_id"] = record.ID, "succeeded", record.ProjectID, record.SourceArtboardID
 	payload, _ := json.Marshal(extra)
 	_, err = w.DB.Exec(ctx, `INSERT INTO job_events(owner_user_id,asset_operation_id,editor_project_id,event_type,payload) VALUES($1,$2,$3,'asset_operation.succeeded',$4)`, record.OwnerID, record.ID, record.ProjectID, payload)
 	return err

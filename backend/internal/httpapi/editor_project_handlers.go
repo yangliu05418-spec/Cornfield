@@ -1,11 +1,12 @@
 package httpapi
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
-	"fmt"
+	"math"
 	"net/http"
 	"path/filepath"
 	"strings"
@@ -45,6 +46,10 @@ type assetOperationResponse struct {
 	SourceRevision         int64             `json:"source_revision"`
 	Resolution             *string           `json:"resolution,omitempty"`
 	PromptOptimizationMode *string           `json:"prompt_optimization_mode,omitempty"`
+	SourceArtboardID       *string           `json:"source_artboard_id,omitempty"`
+	ExportArtboardIDs      []string          `json:"export_artboard_ids,omitempty"`
+	ExportMode             *string           `json:"export_mode,omitempty"`
+	EstimatedWait          *waitEstimate     `json:"estimated_wait,omitempty"`
 	ErrorCode              *string           `json:"error_code,omitempty"`
 	ErrorMessage           *string           `json:"error_message,omitempty"`
 	SubmissionUncertain    bool              `json:"submission_uncertain"`
@@ -62,6 +67,14 @@ type layerSetResponse struct {
 	Items            []layerItemResponse `json:"items"`
 	PackageReady     bool                `json:"package_ready"`
 	AppliedToProject bool                `json:"applied_to_project"`
+	ArtboardID       *string             `json:"artboard_id,omitempty"`
+}
+
+type waitEstimate struct {
+	LowerSeconds int    `json:"lower_seconds"`
+	UpperSeconds int    `json:"upper_seconds"`
+	SampleSize   int    `json:"sample_size"`
+	Basis        string `json:"basis"`
 }
 
 type layerItemResponse struct {
@@ -196,7 +209,7 @@ func (s *Server) saveEditorProject(w http.ResponseWriter, r *http.Request) {
 	}
 	document, err := studioEditor.DecodeAny(input.Document)
 	if errors.Is(err, studioEditor.ErrDocumentTooLarge) {
-		writeError(w, http.StatusRequestEntityTooLarge, "EDITOR_DOCUMENT_TOO_LARGE", "V1 编辑工程不能超过 256 KiB，V2 不能超过 2 MiB", false, r)
+		writeError(w, http.StatusRequestEntityTooLarge, "EDITOR_DOCUMENT_TOO_LARGE", "V1 编辑工程不能超过 256 KiB，V2/V3 不能超过 2 MiB", false, r)
 		return
 	}
 	if err != nil || input.ExpectedRevision < 0 {
@@ -375,6 +388,7 @@ func (s *Server) createLayerDecomposition(w http.ResponseWriter, r *http.Request
 	}
 	var input struct {
 		ExpectedRevision       int64  `json:"expected_revision"`
+		ArtboardID             string `json:"artboard_id"`
 		Prompt                 string `json:"prompt"`
 		Resolution             string `json:"resolution"`
 		PromptOptimizationMode string `json:"prompt_optimization_mode"`
@@ -416,10 +430,15 @@ func (s *Server) createLayerDecomposition(w http.ResponseWriter, r *http.Request
 	defer tx.Rollback(r.Context())
 	var existing assetOperationResponse
 	var createdAt, updatedAt time.Time
-	err = tx.QueryRow(r.Context(), `SELECT id,editor_project_id,operation_type,status,source_revision,resolution,prompt_optimization_mode,error_code,error_message,submission_uncertain,created_at,updated_at
+	var existingLower, existingUpper *int
+	var existingSamples int
+	err = tx.QueryRow(r.Context(), `SELECT id,editor_project_id,operation_type,status,source_revision,resolution,prompt_optimization_mode,
+		source_artboard_id,estimated_wait_lower_seconds,estimated_wait_upper_seconds,estimate_sample_size,
+		error_code,error_message,submission_uncertain,created_at,updated_at
 		FROM asset_operations WHERE owner_user_id=$1 AND idempotency_key=$2`, currentSession(r).UserID, idempotencyKey).Scan(
 		&existing.ID, &existing.ProjectID, &existing.Type, &existing.Status, &existing.SourceRevision,
-		&existing.Resolution, &existing.PromptOptimizationMode, &existing.ErrorCode, &existing.ErrorMessage,
+		&existing.Resolution, &existing.PromptOptimizationMode, &existing.SourceArtboardID,
+		&existingLower, &existingUpper, &existingSamples, &existing.ErrorCode, &existing.ErrorMessage,
 		&existing.SubmissionUncertain, &createdAt, &updatedAt,
 	)
 	if err == nil {
@@ -429,6 +448,9 @@ func (s *Server) createLayerDecomposition(w http.ResponseWriter, r *http.Request
 			return
 		}
 		existing.CreatedAt, existing.UpdatedAt = editorTime(createdAt), editorTime(updatedAt)
+		if existingLower != nil && existingUpper != nil {
+			existing.EstimatedWait = &waitEstimate{LowerSeconds: *existingLower, UpperSeconds: *existingUpper, SampleSize: existingSamples, Basis: "stored"}
+		}
 		_ = tx.Commit(r.Context())
 		writeJSON(w, http.StatusOK, existing)
 		return
@@ -448,7 +470,7 @@ func (s *Server) createLayerDecomposition(w http.ResponseWriter, r *http.Request
 		writeError(w, http.StatusConflict, "EDITOR_PROJECT_CONFLICT", "请先完成最新工程保存后再启动分层", false, r)
 		return
 	}
-	if _, err = studioEditor.DecodeRenderScene(sourceDocument); err != nil {
+	if _, err = studioEditor.DecodeRenderSceneForSelection(sourceDocument, input.ArtboardID, nil, "single"); err != nil {
 		writeError(w, http.StatusUnprocessableEntity, "EDITOR_DOCUMENT_SEMANTICS_UNSUPPORTED", "当前工程包含尚未支持导出的图层结构，请先简化图层后再智能分层", false, r)
 		return
 	}
@@ -468,19 +490,22 @@ func (s *Server) createLayerDecomposition(w http.ResponseWriter, r *http.Request
 		writeError(w, http.StatusTooManyRequests, "LAYER_OPERATION_LIMIT", "当前智能分层任务较多，请稍后再试", true, r)
 		return
 	}
+	estimate := calculateLayerWaitEstimate(r.Context(), tx, input.Resolution, input.PromptOptimizationMode)
 	var operationID uuid.UUID
 	err = tx.QueryRow(r.Context(), `INSERT INTO asset_operations(
 		owner_user_id,editor_project_id,operation_type,source_revision,source_document,model_id,capability_revision,prompt,resolution,
-		prompt_optimization_mode,request_hash,idempotency_key,provider_id,provider_model)
-		SELECT $1,$2,'layer_decomposition',$3,p.document,$4,$5,$6,$7,$8,$9,$10,$11,$12
+		prompt_optimization_mode,source_artboard_id,estimated_wait_lower_seconds,estimated_wait_upper_seconds,estimate_sample_size,
+		request_hash,idempotency_key,provider_id,provider_model)
+		SELECT $1,$2,'layer_decomposition',$3,p.document,$4,$5,$6,$7,$8,NULLIF($9,''),$10,$11,$12,$13,$14,$15,$16
 		FROM image_editor_projects p WHERE p.id=$2 AND p.owner_user_id=$1 RETURNING id`,
 		currentSession(r).UserID, projectID, currentRevision, model.ID, s.catalog.Hash, strings.TrimSpace(input.Prompt),
-		input.Resolution, input.PromptOptimizationMode, requestHash, idempotencyKey, model.Provider, model.ProviderModel).Scan(&operationID)
+		input.Resolution, input.PromptOptimizationMode, input.ArtboardID, estimate.LowerSeconds, estimate.UpperSeconds, estimate.SampleSize,
+		requestHash, idempotencyKey, model.Provider, model.ProviderModel).Scan(&operationID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "LAYER_OPERATION_CREATE_FAILED", "无法创建智能分层任务", true, r)
 		return
 	}
-	payload, _ := json.Marshal(map[string]any{"id": operationID, "status": "queued", "editor_project_id": projectID})
+	payload, _ := json.Marshal(map[string]any{"id": operationID, "status": "queued", "editor_project_id": projectID, "source_artboard_id": input.ArtboardID, "estimated_wait": estimate})
 	if _, err = tx.Exec(r.Context(), `INSERT INTO job_events(owner_user_id,asset_operation_id,editor_project_id,event_type,payload)
 		VALUES($1,$2,$3,'asset_operation.queued',$4)`, currentSession(r).UserID, operationID, projectID, payload); err != nil {
 		writeError(w, http.StatusInternalServerError, "LAYER_OPERATION_CREATE_FAILED", "无法创建智能分层任务", true, r)
@@ -491,7 +516,7 @@ func (s *Server) createLayerDecomposition(w http.ResponseWriter, r *http.Request
 		writeError(w, http.StatusInternalServerError, "LAYER_OPERATION_CREATE_FAILED", "无法创建智能分层任务", true, r)
 		return
 	}
-	writeJSON(w, http.StatusAccepted, map[string]any{"id": operationID, "status": "queued", "editor_project_id": projectID, "source_revision": currentRevision})
+	writeJSON(w, http.StatusAccepted, map[string]any{"id": operationID, "status": "queued", "editor_project_id": projectID, "source_revision": currentRevision, "source_artboard_id": input.ArtboardID, "estimated_wait": estimate})
 }
 
 func (s *Server) getAssetOperation(w http.ResponseWriter, r *http.Request) {
@@ -515,10 +540,16 @@ func (s *Server) loadAssetOperation(r *http.Request, id uuid.UUID) (assetOperati
 	var item assetOperationResponse
 	var createdAt, updatedAt time.Time
 	var startedAt *time.Time
-	err := s.db.QueryRow(r.Context(), `SELECT id,editor_project_id,operation_type,status,source_revision,resolution,prompt_optimization_mode,error_code,error_message,submission_uncertain,result_asset_id,started_at,created_at,updated_at
+	var estimateLower, estimateUpper *int
+	var estimateSamples int
+	err := s.db.QueryRow(r.Context(), `SELECT id,editor_project_id,operation_type,status,source_revision,resolution,prompt_optimization_mode,
+		source_artboard_id,export_artboard_ids,export_mode,estimated_wait_lower_seconds,estimated_wait_upper_seconds,estimate_sample_size,
+		error_code,error_message,submission_uncertain,result_asset_id,started_at,created_at,updated_at
 		FROM asset_operations WHERE id=$1 AND owner_user_id=$2`, id, currentSession(r).UserID).Scan(
 		&item.ID, &item.ProjectID, &item.Type, &item.Status, &item.SourceRevision, &item.Resolution,
-		&item.PromptOptimizationMode, &item.ErrorCode, &item.ErrorMessage, &item.SubmissionUncertain, &item.ResultAssetID, &startedAt, &createdAt, &updatedAt,
+		&item.PromptOptimizationMode, &item.SourceArtboardID, &item.ExportArtboardIDs, &item.ExportMode,
+		&estimateLower, &estimateUpper, &estimateSamples, &item.ErrorCode, &item.ErrorMessage, &item.SubmissionUncertain,
+		&item.ResultAssetID, &startedAt, &createdAt, &updatedAt,
 	)
 	if err != nil {
 		return item, err
@@ -527,6 +558,9 @@ func (s *Server) loadAssetOperation(r *http.Request, id uuid.UUID) (assetOperati
 	if startedAt != nil {
 		value := editorTime(*startedAt)
 		item.StartedAt = &value
+	}
+	if estimateLower != nil && estimateUpper != nil {
+		item.EstimatedWait = &waitEstimate{LowerSeconds: *estimateLower, UpperSeconds: *estimateUpper, SampleSize: estimateSamples, Basis: "stored"}
 	}
 	if item.Status == "succeeded" {
 		item.LayerSet, err = s.loadLayerSet(r, id, item.ProjectID, item.SourceRevision)
@@ -542,8 +576,9 @@ func (s *Server) loadLayerSet(r *http.Request, operationID, projectID uuid.UUID,
 	var baseID uuid.UUID
 	var packageAssetID *uuid.UUID
 	var packageReadyAt *time.Time
-	err := s.db.QueryRow(r.Context(), `SELECT id,base_asset_id,package_asset_id,package_ready_at FROM layer_sets
-		WHERE asset_operation_id=$1 AND owner_user_id=$2`, operationID, currentSession(r).UserID).Scan(&response.ID, &baseID, &packageAssetID, &packageReadyAt)
+	var appliedRevision *int64
+	err := s.db.QueryRow(r.Context(), `SELECT id,base_asset_id,package_asset_id,package_ready_at,artboard_id,applied_revision FROM layer_sets
+		WHERE asset_operation_id=$1 AND owner_user_id=$2`, operationID, currentSession(r).UserID).Scan(&response.ID, &baseID, &packageAssetID, &packageReadyAt, &response.ArtboardID, &appliedRevision)
 	if err != nil {
 		return nil, err
 	}
@@ -551,7 +586,7 @@ func (s *Server) loadLayerSet(r *http.Request, operationID, projectID uuid.UUID,
 	response.PackageReady = packageAssetID != nil && packageReadyAt != nil
 	var active *uuid.UUID
 	_ = s.db.QueryRow(r.Context(), `SELECT active_layer_set_id FROM image_editor_projects WHERE id=$1 AND owner_user_id=$2`, projectID, currentSession(r).UserID).Scan(&active)
-	response.AppliedToProject = active != nil && *active == response.ID
+	response.AppliedToProject = appliedRevision != nil || (active != nil && *active == response.ID)
 	base, _, err := s.loadAsset(r, baseID)
 	if err != nil {
 		return nil, err
@@ -753,7 +788,9 @@ func (s *Server) createSimpleEditorOperation(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	var input struct {
-		ExpectedRevision int64 `json:"expected_revision"`
+		ExpectedRevision int64    `json:"expected_revision"`
+		Mode             string   `json:"mode"`
+		ArtboardIDs      []string `json:"artboard_ids"`
 	}
 	if !decodeJSON(w, r, &input) {
 		return
@@ -763,7 +800,19 @@ func (s *Server) createSimpleEditorOperation(w http.ResponseWriter, r *http.Requ
 		writeError(w, http.StatusBadRequest, "IDEMPOTENCY_KEY_REQUIRED", "需要有效的 Idempotency-Key", false, r)
 		return
 	}
-	hash := sha256.Sum256([]byte(fmt.Sprintf("%s:%s:%d", operationType, projectID, input.ExpectedRevision)))
+	if input.Mode == "" {
+		input.Mode = "single"
+	}
+	if input.Mode != "single" && input.Mode != "composite" {
+		writeError(w, http.StatusUnprocessableEntity, "EDITOR_EXPORT_SELECTION_INVALID", "请选择有效的画板导出方式", false, r)
+		return
+	}
+	hashInput, _ := json.Marshal(struct {
+		OperationType string    `json:"operation_type"`
+		ProjectID     uuid.UUID `json:"project_id"`
+		Input         any       `json:"input"`
+	}{operationType, projectID, input})
+	hash := sha256.Sum256(hashInput)
 	requestHash := hex.EncodeToString(hash[:])
 	tx, err := s.db.Begin(r.Context())
 	if err != nil {
@@ -800,13 +849,22 @@ func (s *Server) createSimpleEditorOperation(w http.ResponseWriter, r *http.Requ
 		writeError(w, http.StatusInternalServerError, "EDITOR_PUBLISH_FAILED", "无法读取待发布工程", true, r)
 		return
 	}
-	if _, err = studioEditor.DecodeRenderScene(sourceDocument); err != nil {
+	artboardID := ""
+	if input.Mode == "single" && len(input.ArtboardIDs) == 1 {
+		artboardID = input.ArtboardIDs[0]
+	} else if len(input.ArtboardIDs) > 0 && input.Mode == "single" {
+		writeError(w, http.StatusUnprocessableEntity, "EDITOR_EXPORT_SELECTION_INVALID", "单画板导出只能选择一个画板", false, r)
+		return
+	}
+	if _, err = studioEditor.DecodeRenderSceneForSelection(sourceDocument, artboardID, input.ArtboardIDs, input.Mode); err != nil {
 		writeError(w, http.StatusUnprocessableEntity, "EDITOR_DOCUMENT_SEMANTICS_UNSUPPORTED", "当前工程包含尚未支持导出的图层结构，请先简化图层后再发布", false, r)
 		return
 	}
-	err = tx.QueryRow(r.Context(), `INSERT INTO asset_operations(owner_user_id,editor_project_id,operation_type,source_revision,source_document,request_hash,idempotency_key)
-		SELECT $1,p.id,$3,$4,p.document,$5,$6 FROM image_editor_projects p WHERE p.id=$2 AND p.owner_user_id=$1 AND p.revision=$4
-		ON CONFLICT(owner_user_id,idempotency_key) DO NOTHING RETURNING id`, currentSession(r).UserID, projectID, operationType, input.ExpectedRevision, requestHash, key).Scan(&operationID)
+	err = tx.QueryRow(r.Context(), `INSERT INTO asset_operations(owner_user_id,editor_project_id,operation_type,source_revision,source_document,
+		source_artboard_id,export_artboard_ids,export_mode,request_hash,idempotency_key)
+		SELECT $1,p.id,$3,$4,p.document,NULLIF($5,''),$6,$7,$8,$9 FROM image_editor_projects p WHERE p.id=$2 AND p.owner_user_id=$1 AND p.revision=$4
+		ON CONFLICT(owner_user_id,idempotency_key) DO NOTHING RETURNING id`, currentSession(r).UserID, projectID, operationType, input.ExpectedRevision,
+		artboardID, input.ArtboardIDs, input.Mode, requestHash, key).Scan(&operationID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		err = tx.QueryRow(r.Context(), `SELECT id,request_hash FROM asset_operations WHERE owner_user_id=$1 AND idempotency_key=$2`, currentSession(r).UserID, key).Scan(&operationID, &existingHash)
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -828,6 +886,44 @@ func (s *Server) createSimpleEditorOperation(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	writeJSON(w, http.StatusAccepted, map[string]any{"id": operationID, "status": "queued"})
+}
+
+func calculateLayerWaitEstimate(ctx context.Context, tx pgx.Tx, resolution, mode string) waitEstimate {
+	estimate := waitEstimate{LowerSeconds: 60, UpperSeconds: 100, Basis: "fallback"}
+	var p50, p90 float64
+	err := tx.QueryRow(ctx, `WITH recent AS (
+		SELECT resolution,prompt_optimization_mode,extract(epoch FROM completed_at-created_at) AS seconds
+		FROM asset_operations
+		WHERE operation_type='layer_decomposition' AND status='succeeded' AND completed_at>=now()-interval '30 days'
+		ORDER BY completed_at DESC LIMIT 100
+	), buckets AS (
+		SELECT 1 priority,'exact' basis,count(*)::int samples,
+			percentile_cont(0.5) WITHIN GROUP (ORDER BY seconds) p50,
+			percentile_cont(0.9) WITHIN GROUP (ORDER BY seconds) p90
+		FROM recent WHERE resolution=$1 AND prompt_optimization_mode=$2
+		UNION ALL
+		SELECT 2,'mode',count(*)::int,percentile_cont(0.5) WITHIN GROUP (ORDER BY seconds),
+			percentile_cont(0.9) WITHIN GROUP (ORDER BY seconds)
+		FROM recent WHERE prompt_optimization_mode=$2
+		UNION ALL
+		SELECT 3,'global',count(*)::int,percentile_cont(0.5) WITHIN GROUP (ORDER BY seconds),
+			percentile_cont(0.9) WITHIN GROUP (ORDER BY seconds) FROM recent
+	) SELECT basis,samples,p50,p90 FROM buckets
+	WHERE (priority=1 AND samples>=5) OR (priority=2 AND samples>=10) OR (priority=3 AND samples>=10)
+	ORDER BY priority LIMIT 1`, resolution, mode).Scan(&estimate.Basis, &estimate.SampleSize, &p50, &p90)
+	if err != nil || p50 <= 0 || p90 <= 0 {
+		return estimate
+	}
+	return roundedWaitEstimate(estimate.Basis, estimate.SampleSize, p50, p90)
+}
+
+func roundedWaitEstimate(basis string, samples int, p50, p90 float64) waitEstimate {
+	if samples < 1 || math.IsNaN(p50) || math.IsNaN(p90) || math.IsInf(p50, 0) || math.IsInf(p90, 0) || p50 <= 0 || p90 <= 0 {
+		return waitEstimate{LowerSeconds: 60, UpperSeconds: 100, Basis: "fallback"}
+	}
+	lower := max(5, int(math.Floor(p50/5))*5)
+	upper := max(lower, int(math.Ceil(p90/5))*5)
+	return waitEstimate{LowerSeconds: lower, UpperSeconds: upper, SampleSize: samples, Basis: basis}
 }
 
 func truncateRunes(value string, maximum int) string {

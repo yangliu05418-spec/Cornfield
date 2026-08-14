@@ -29,6 +29,7 @@ type DecodedDocument struct {
 	SchemaVersion int
 	V1            *Document
 	V2            *DocumentV2
+	V3            *DocumentV3
 }
 
 func DecodeAny(raw []byte) (DecodedDocument, error) {
@@ -57,6 +58,12 @@ func DecodeAny(raw []byte) (DecodedDocument, error) {
 			return DecodedDocument{}, err
 		}
 		return DecodedDocument{SchemaVersion: 2, V2: &document}, nil
+	case 3:
+		document, err := DecodeV3(raw)
+		if err != nil {
+			return DecodedDocument{}, err
+		}
+		return DecodedDocument{SchemaVersion: 3, V3: &document}, nil
 	default:
 		return DecodedDocument{}, ErrInvalidDocument
 	}
@@ -82,6 +89,8 @@ func (d DecodedDocument) RenderableV1() (Document, error) {
 			return Document{}, ErrInvalidDocument
 		}
 		return d.V2.ToV1()
+	case 3:
+		return Document{}, ErrUnsupportedDocumentSemantics
 	default:
 		return Document{}, ErrInvalidDocument
 	}
@@ -97,11 +106,18 @@ func (d DecodedDocument) AssetIDs() []uuid.UUID {
 		if d.V2 != nil {
 			return d.V2.AssetIDs()
 		}
+	case 3:
+		if d.V3 != nil {
+			return d.V3.AssetIDs()
+		}
 	}
 	return nil
 }
 
 func (d DecodedDocument) PixelMaskReferences() []PixelMaskReferenceV2 {
+	if d.SchemaVersion == 3 && d.V3 != nil {
+		return d.V3.PixelMaskReferences()
+	}
 	if d.SchemaVersion != 2 || d.V2 == nil {
 		return nil
 	}

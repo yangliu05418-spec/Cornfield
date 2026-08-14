@@ -1588,7 +1588,7 @@ export function StructuredEditor({
                 status={operations.operation?.status}
                 message={operations.operation?.message}
                 elapsed={operations.elapsed}
-                estimate={operations.operation?.estimated_wait}
+                estimate={operations.estimatedWait}
               />
             )}
             {pendingLayerSet && (
@@ -2013,42 +2013,6 @@ export function StructuredEditor({
                     </button>
                   </div>
                 )}
-                <div className="structured-order-controls">
-                  <button
-                    type="button"
-                    disabled={operations.running}
-                    onClick={() =>
-                      runCommand(
-                        () =>
-                          reorderEditorNodeRelative(
-                            documentRef.current,
-                            activeNode.id,
-                            1,
-                          ),
-                        '已上移图层',
-                      )
-                    }
-                  >
-                    <ArrowUp size={14} /> 上移
-                  </button>
-                  <button
-                    type="button"
-                    disabled={operations.running}
-                    onClick={() =>
-                      runCommand(
-                        () =>
-                          reorderEditorNodeRelative(
-                            documentRef.current,
-                            activeNode.id,
-                            -1,
-                          ),
-                        '已下移图层',
-                      )
-                    }
-                  >
-                    <ArrowDown size={14} /> 下移
-                  </button>
-                </div>
                 {operations.currentLayerSet?.items.some(
                   (item) => item.id === activeNode.id,
                 ) && (

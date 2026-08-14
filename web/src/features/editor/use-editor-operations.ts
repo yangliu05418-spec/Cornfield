@@ -43,6 +43,8 @@ export function useEditorOperations(options: UseEditorOperationsOptions) {
   const [packageOperationID, setPackageOperationID] = useState<string>()
   const [lastLayerSet, setLastLayerSet] = useState(options.activeLayerSet)
   const [elapsed, setElapsed] = useState(0)
+  const [initialEstimate, setInitialEstimate] =
+    useState<AssetOperation['estimated_wait']>()
   const handledLayerSetRef = useRef('')
   const handledPublishRef = useRef('')
 
@@ -214,7 +216,10 @@ export function useEditorOperations(options: UseEditorOperationsOptions) {
       }
       try {
         await callbacksRef.current.flushSaves()
-        const result = await api<{ id: string }>(
+        const result = await api<{
+          id: string
+          estimated_wait?: AssetOperation['estimated_wait']
+        }>(
           `/api/v1/editor-projects/${options.projectID}/layer-decompositions`,
           {
             method: 'POST',
@@ -228,6 +233,7 @@ export function useEditorOperations(options: UseEditorOperationsOptions) {
             }),
           },
         )
+        setInitialEstimate(result.estimated_wait)
         setOperationID(result.id)
         return true
       } catch (error) {
@@ -326,6 +332,7 @@ export function useEditorOperations(options: UseEditorOperationsOptions) {
     operationID,
     running,
     elapsed,
+    estimatedWait: operation?.estimated_wait ?? initialEstimate,
     currentLayerSet,
     canDecompose,
     capabilityMessage: capability?.availability.message,

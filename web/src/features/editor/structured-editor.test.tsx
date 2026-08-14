@@ -118,6 +118,40 @@ afterEach(() => {
 })
 
 describe('StructuredEditor', () => {
+  it('uses one unified workbench with an instrument rail and export-only product actions', async () => {
+    apiMock.mockImplementation((path: string) => {
+      if (path === '/api/v1/assets/resolve')
+        return Promise.resolve({ items: [firstAsset, secondAsset] })
+      if (path === '/api/v1/models')
+        return Promise.resolve({ revision: 'test', models: [] })
+      return Promise.resolve({})
+    })
+    render(
+      <QueryClientProvider
+        client={
+          new QueryClient({ defaultOptions: { queries: { retry: false } } })
+        }
+      >
+        <StructuredEditor
+          project={project()}
+          onBack={vi.fn()}
+          onProjectChange={vi.fn()}
+        />
+      </QueryClientProvider>,
+    )
+
+    expect(
+      await screen.findByRole('navigation', { name: '画布工具' }),
+    ).toBeTruthy()
+    expect(screen.queryByText('基础模式')).toBeNull()
+    expect(screen.queryByText('专业模式')).toBeNull()
+    expect(screen.getByText('导出')).toBeTruthy()
+    expect(screen.getByRole('button', { name: /下载到本地/ })).toBeTruthy()
+    expect(screen.getByRole('button', { name: /放入灵感墙/ })).toBeTruthy()
+    expect(screen.getByRole('button', { name: '智能分层' })).toBeTruthy()
+    expect(screen.getByRole('button', { name: '新建空白画板' })).toBeTruthy()
+  })
+
   it('exposes a focused mask tool rail only for an editable raster layer', async () => {
     apiMock.mockImplementation((path: string) => {
       if (path === '/api/v1/assets/resolve')
@@ -330,7 +364,8 @@ describe('StructuredEditor', () => {
       </QueryClientProvider>,
     )
     fireEvent.click((await screen.findAllByText('人物'))[0])
-    expect(screen.getAllByText('椭圆蒙版')).toHaveLength(2)
+    expect(screen.getByRole('button', { name: '椭圆蒙版' })).toBeTruthy()
+    expect(screen.getByText('椭圆蒙版')).toBeTruthy()
     fireEvent.click(screen.getByRole('button', { name: '反相' }))
     expect(screen.getByText('椭圆蒙版 · 已反相')).toBeTruthy()
     await vi.advanceTimersByTimeAsync(1_100)

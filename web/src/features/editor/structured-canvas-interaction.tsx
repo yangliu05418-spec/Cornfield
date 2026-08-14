@@ -2,7 +2,12 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import type { CSSProperties, PointerEvent as ReactPointerEvent } from 'react'
 
 import type { Asset } from '#/lib/api'
-import { screenPointToWorld, zoomAtScreenPoint } from '#/lib/editor-transform'
+import {
+  screenPointToWorld,
+  snapBoundsTranslation,
+  zoomAtScreenPoint,
+} from '#/lib/editor-transform'
+import type { ObjectBounds, SnapGuide } from '#/lib/editor-transform'
 import type { EditorDocumentV2, EditorShapeMaskV2 } from './domain/document-v2'
 import type { EditorTransform } from './domain/document'
 import {
@@ -31,6 +36,7 @@ type Props = {
   selectedIDs: ReadonlySet<string>
   activeID: string
   disabled?: boolean
+  forcePan?: boolean
   onViewChange: (view: EditorViewport) => void
   onSelectionChange: (ids: ReadonlySet<string>, activeID: string) => void
   onPreview: (document: EditorDocumentV2) => void
@@ -55,6 +61,7 @@ export function StructuredCanvasInteraction({
   selectedIDs,
   activeID,
   disabled,
+  forcePan,
   onViewChange,
   onSelectionChange,
   onPreview,
@@ -70,6 +77,7 @@ export function StructuredCanvasInteraction({
   const [spacePressed, setSpacePressed] = useState(false)
   const [dragging, setDragging] = useState(false)
   const [marquee, setMarquee] = useState<ShapeMarquee>()
+  const [snapGuides, setSnapGuides] = useState<SnapGuide[]>([])
   const selectionBounds = useMemo(
     () => editorSelectionBounds(document, assets, selectedIDs),
     [assets, document, selectedIDs],
@@ -101,7 +109,7 @@ export function StructuredCanvasInteraction({
     if (!root || event.button > 1) return
     root.focus({ preventScroll: true })
     const rect = root.getBoundingClientRect()
-    const pan = spacePressed || event.button === 1
+    const pan = forcePan || spacePressed || event.button === 1
     event.preventDefault()
     if (pan) {
       const initialView = view
@@ -229,6 +237,27 @@ export function StructuredCanvasInteraction({
 
     const initialDocument = document
     const start = point
+    const movingBounds = editorSelectionBounds(
+      initialDocument,
+      assets,
+      nextSelection,
+    )
+    const snapTargets: ObjectBounds[] = [
+      boundsFromRect(0, 0, document.canvas.width, document.canvas.height),
+      ...initialDocument.nodes.flatMap((node) => {
+        if (
+          !node.visible ||
+          editorSelectionContainsNode(initialDocument, nextSelection, node.id)
+        )
+          return []
+        const bounds = editorSelectionBounds(
+          initialDocument,
+          assets,
+          new Set([node.id]),
+        )
+        return bounds ? [bounds] : []
+      }),
+    ]
     let finalDocument = document
     let changed = false
     const move = (moveEvent: PointerEvent) => {
@@ -237,6 +266,18 @@ export function StructuredCanvasInteraction({
       )
       const delta = { x: current.x - start.x, y: current.y - start.y }
       if (!changed && Math.hypot(delta.x, delta.y) * scale < 2) return
+      if (movingBounds && !moveEvent.altKey) {
+        const snapped = snapBoundsTranslation(
+          translateBounds(movingBounds, delta.x, delta.y),
+          snapTargets,
+          8 / scale,
+        )
+        delta.x += snapped.dx
+        delta.y += snapped.dy
+        setSnapGuides(snapped.guides)
+      } else {
+        setSnapGuides([])
+      }
       try {
         finalDocument = translateEditorNodes(
           initialDocument,
@@ -253,6 +294,7 @@ export function StructuredCanvasInteraction({
     const stop = (commit: boolean) => {
       finish(move, pointerUp, pointerCancel)
       cancelPointerSessionRef.current = () => undefined
+      setSnapGuides([])
       if (!commit && changed) onPreview(initialDocument)
       if (commit && changed) onCommit(initialDocument, finalDocument)
     }
@@ -390,6 +432,7 @@ export function StructuredCanvasInteraction({
       ref={rootRef}
       className="structured-canvas-interaction"
       data-panning={spacePressed || dragging || undefined}
+      data-hand-tool={forcePan || undefined}
       data-shape-tool={shapeSelection}
       role="region"
       aria-label={ariaLabel}
@@ -582,6 +625,22 @@ export function StructuredCanvasInteraction({
           </div>
         </div>
       )}
+      {snapGuides.map((guide) => (
+        <span
+          key={`${guide.axis}:${guide.position}`}
+          className={`structured-snap-guide is-${guide.axis}`}
+          style={
+            guide.axis === 'x'
+              ? {
+                  left: `calc(50% + ${view.panX + (guide.position + artboardOffset.x) * scale}px)`,
+                }
+              : {
+                  top: `calc(50% + ${view.panY + (guide.position + artboardOffset.y) * scale}px)`,
+                }
+          }
+          aria-hidden="true"
+        />
+      ))}
       {marquee && (
         <div
           className="structured-selection-world"
@@ -675,4 +734,38 @@ function applyTransform(transform: EditorTransform, x: number, y: number) {
 
 function clamp(value: number) {
   return Math.max(0, Math.min(1, value))
+}
+
+function boundsFromRect(
+  left: number,
+  top: number,
+  width: number,
+  height: number,
+): ObjectBounds {
+  return {
+    left,
+    top,
+    right: left + width,
+    bottom: top + height,
+    centerX: left + width / 2,
+    centerY: top + height / 2,
+    width,
+    height,
+  }
+}
+
+function translateBounds(
+  bounds: ObjectBounds,
+  dx: number,
+  dy: number,
+): ObjectBounds {
+  return {
+    ...bounds,
+    left: bounds.left + dx,
+    right: bounds.right + dx,
+    centerX: bounds.centerX + dx,
+    top: bounds.top + dy,
+    bottom: bounds.bottom + dy,
+    centerY: bounds.centerY + dy,
+  }
 }

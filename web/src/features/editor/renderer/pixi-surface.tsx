@@ -88,7 +88,9 @@ export function PixiSurface({
         await renderer.init(canvas, {
           width: Math.max(1, Math.round(rect.width)),
           height: Math.max(1, Math.round(rect.height)),
-          resolution: Math.min(window.devicePixelRatio || 1, 2),
+          // The editor is interaction-first: 1.5x is visually crisp while
+          // avoiding the 4x framebuffer cost of a 2x DPR display.
+          resolution: Math.min(window.devicePixelRatio || 1, 1.5),
           onContextChange: (lost) => {
             window.clearTimeout(contextTimeout)
             if (lost) {

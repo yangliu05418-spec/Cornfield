@@ -14,6 +14,7 @@ import type { EditorDocumentV2 } from './domain/document-v2'
 import { StructuredEditor } from './structured-editor'
 import type { Asset, EditorProject } from '#/lib/api'
 import type * as APIModule from '#/lib/api'
+import { APIError } from '#/lib/api'
 
 const apiMock = vi.fn()
 
@@ -301,5 +302,53 @@ describe('StructuredEditor', () => {
     )
     const body = JSON.parse((saveCall?.[1] as RequestInit).body as string)
     expect(body.document.nodes[0].shape_mask).toMatchObject({ inverted: true })
+  })
+
+  it('stops autosave after a revision conflict instead of overwriting newer work', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    apiMock.mockImplementation((path: string, init?: RequestInit) => {
+      if (path === '/api/v1/assets/resolve')
+        return Promise.resolve({ items: [firstAsset, secondAsset] })
+      if (path === '/api/v1/models')
+        return Promise.resolve({ revision: 'test', models: [] })
+      if (String(path).endsWith('/document') && init?.method === 'PUT')
+        return Promise.reject(
+          new APIError(409, 'REVISION_CONFLICT', 'conflict'),
+        )
+      return Promise.resolve({})
+    })
+    render(
+      <QueryClientProvider
+        client={
+          new QueryClient({ defaultOptions: { queries: { retry: false } } })
+        }
+      >
+        <StructuredEditor
+          project={project()}
+          onBack={vi.fn()}
+          onProjectChange={vi.fn()}
+        />
+      </QueryClientProvider>,
+    )
+    fireEvent.click((await screen.findAllByText('人物'))[0])
+    fireEvent.change(screen.getByLabelText('混合模式'), {
+      target: { value: 'multiply' },
+    })
+    await vi.advanceTimersByTimeAsync(1_100)
+    expect(await screen.findByText('版本冲突')).toBeTruthy()
+    const saveCalls = apiMock.mock.calls.filter(
+      ([path, init]) =>
+        String(path).endsWith('/document') &&
+        (init as RequestInit | undefined)?.method === 'PUT',
+    )
+    expect(saveCalls).toHaveLength(1)
+    await vi.advanceTimersByTimeAsync(10_000)
+    expect(
+      apiMock.mock.calls.filter(
+        ([path, init]) =>
+          String(path).endsWith('/document') &&
+          (init as RequestInit | undefined)?.method === 'PUT',
+      ),
+    ).toHaveLength(1)
   })
 })

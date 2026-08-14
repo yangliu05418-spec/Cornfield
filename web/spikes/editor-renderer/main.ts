@@ -15,6 +15,7 @@ type SpikeResult = {
   environment: SpikeEnvironment
   initMs: number
   syncMs: number
+  burstSyncMs: number
   renderP50Ms: number
   renderP95Ms: number
   frameIntervalP95Ms: number
@@ -32,6 +33,7 @@ type SpikeResult = {
   contextLostObserved: boolean
   contextRestoredObserved: boolean
   statsBeforeDestroy: ReturnType<PixiEditorRenderer['stats']>
+  statsAfterRecovery: ReturnType<PixiEditorRenderer['stats']>
   statsAfterDestroy: ReturnType<PixiEditorRenderer['stats']>
   error?: string
 }
@@ -62,6 +64,7 @@ void run().catch((error: unknown) => {
     environment: readEnvironment(canvas),
     initMs: 0,
     syncMs: 0,
+    burstSyncMs: 0,
     renderP50Ms: 0,
     renderP95Ms: 0,
     frameIntervalP95Ms: 0,
@@ -77,6 +80,7 @@ void run().catch((error: unknown) => {
     contextLostObserved: false,
     contextRestoredObserved: false,
     statsBeforeDestroy: emptyStats(),
+    statsAfterRecovery: emptyStats(),
     statsAfterDestroy: emptyStats(),
     error: error instanceof Error ? error.message : String(error),
   }
@@ -90,7 +94,7 @@ async function run() {
     await runV2PixelCorrectnessFixture(v2CorrectnessCanvas)
   const resolutionTransitionBytes = await runResolutionTransitionFixture()
   const assets = await buildAssets(50)
-  const document = buildDocument(assets)
+  const document = buildDocument(assets, 500)
   let contextLostObserved = false
   let contextRestoredObserved = false
   const renderer = new PixiEditorRenderer()
@@ -109,6 +113,13 @@ async function run() {
   const syncStarted = performance.now()
   await renderer.sync(document, assets)
   const syncMs = performance.now() - syncStarted
+  const burstStarted = performance.now()
+  await Promise.all(
+    Array.from({ length: 20 }, (_, index) =>
+      renderer.sync(offsetFirstLayer(document, index + 1), assets),
+    ),
+  )
+  const burstSyncMs = performance.now() - burstStarted
   for (let index = 0; index < 30; index += 1) {
     await nextFrame()
     renderer.setViewport({
@@ -153,8 +164,9 @@ async function run() {
     loseContext.loseContext()
     await delay(100)
     loseContext.restoreContext()
-    await delay(300)
+    await waitFor(() => renderer.stats().contextRecoveries > 0, 2_000)
   }
+  const statsAfterRecovery = renderer.stats()
   renderer.destroy()
   for (const asset of assets.values())
     for (const variant of asset.variants) URL.revokeObjectURL(variant.url)
@@ -163,6 +175,7 @@ async function run() {
     environment,
     initMs,
     syncMs,
+    burstSyncMs,
     renderP50Ms: percentile(renderTimes, 0.5),
     renderP95Ms: percentile(renderTimes, 0.95),
     frameIntervalP95Ms: percentile(frameIntervals, 0.95),
@@ -181,6 +194,7 @@ async function run() {
     contextLostObserved,
     contextRestoredObserved,
     statsBeforeDestroy,
+    statsAfterRecovery,
     statsAfterDestroy: renderer.stats(),
   }
   window.__EDITOR_SPIKE__ = result
@@ -701,32 +715,43 @@ async function buildAssets(count: number) {
 
 function buildDocument(
   assets: ReadonlyMap<string, EditorRenderAsset>,
+  layerCount = assets.size,
 ): EditorDocument {
+  const available = [...assets.values()]
   return {
     schema_version: 1,
     canvas: { width: 6000, height: 6000 },
-    objects: [...assets.values()].map((asset, index) => ({
-      id: `layer-${index}`,
-      name: `Layer ${index + 1}`,
-      asset_id: asset.id,
-      transform: [
-        0.32,
-        0,
-        0,
-        0.32,
-        (index % 8) * 680 - 80,
-        Math.floor(index / 8) * 760 - 120,
-      ],
-      opacity: 0.94,
-      visible: true,
-      locked: false,
-      z_index: index,
-      crop:
-        index % 7 === 0
-          ? { x: 0.08, y: 0.06, width: 0.84, height: 0.88 }
-          : undefined,
-    })),
+    objects: Array.from({ length: layerCount }, (_, index) => {
+      const asset = available[index % available.length]
+      return {
+        id: `layer-${index}`,
+        name: `Layer ${index + 1}`,
+        asset_id: asset.id,
+        transform: [
+          0.32,
+          0,
+          0,
+          0.32,
+          (index % 8) * 680 - 80,
+          Math.floor(index / 8) * 760 - 120,
+        ],
+        opacity: 0.94,
+        visible: true,
+        locked: false,
+        z_index: index,
+        crop:
+          index % 7 === 0
+            ? { x: 0.08, y: 0.06, width: 0.84, height: 0.88 }
+            : undefined,
+      }
+    }),
   }
+}
+
+function offsetFirstLayer(document: EditorDocument, offset: number) {
+  const next = structuredClone(document)
+  next.objects[0].transform[4] += offset
+  return next
 }
 
 function percentile(values: number[], quantile: number) {
@@ -745,14 +770,26 @@ function delay(ms: number) {
   return new Promise<void>((resolve) => setTimeout(resolve, ms))
 }
 
+async function waitFor(predicate: () => boolean, timeoutMs: number) {
+  const deadline = performance.now() + timeoutMs
+  while (!predicate()) {
+    if (performance.now() >= deadline) throw new Error('recovery timed out')
+    await delay(25)
+  }
+}
+
 function emptyStats() {
   return {
     nodes: 0,
+    visibleNodes: 0,
     textures: 0,
     estimatedTextureBytes: 0,
     activeTextureBytes: 0,
     textureBudgetBytes: 256 << 20,
     textureBudgetExceeded: false,
     contextLost: false,
+    contextRecoveries: 0,
+    syncPasses: 0,
+    coalescedSyncs: 0,
   }
 }

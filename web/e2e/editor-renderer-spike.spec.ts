@@ -34,12 +34,16 @@ test('Pixi renderer meets the Stage A correctness and resource gate', async ({
     JSON.stringify(report, null, 2),
   )
   expect(result.error).toBeUndefined()
-  expect(result.statsBeforeDestroy.nodes).toBe(50)
+  expect(result.statsBeforeDestroy.nodes).toBe(500)
+  expect(result.statsBeforeDestroy.visibleNodes).toBeLessThan(75)
   expect(result.statsBeforeDestroy.textures).toBe(50)
   expect(result.statsBeforeDestroy.estimatedTextureBytes).toBeLessThanOrEqual(
     50 * 640 * 640 * 4,
   )
   expect(result.syncMs).toBeLessThan(2_500)
+  expect(result.burstSyncMs).toBeLessThan(2_500)
+  expect(result.statsBeforeDestroy.coalescedSyncs).toBeGreaterThanOrEqual(18)
+  expect(result.statsBeforeDestroy.syncPasses).toBeLessThanOrEqual(3)
   expect(result.renderP95Ms).toBeLessThan(8)
   expect(result.longTasks).toBeGreaterThanOrEqual(0)
   if (timingGateEnforced) {
@@ -67,14 +71,20 @@ test('Pixi renderer meets the Stage A correctness and resource gate', async ({
   expect(result.contextLossSupported).toBe(true)
   expect(result.contextLostObserved).toBe(true)
   expect(result.contextRestoredObserved).toBe(true)
+  expect(result.statsAfterRecovery.contextLost).toBe(false)
+  expect(result.statsAfterRecovery.contextRecoveries).toBe(1)
   expect(result.statsAfterDestroy).toEqual({
     nodes: 0,
+    visibleNodes: 0,
     textures: 0,
     estimatedTextureBytes: 0,
     activeTextureBytes: 0,
     textureBudgetBytes: 256 << 20,
     textureBudgetExceeded: false,
     contextLost: false,
+    contextRecoveries: 0,
+    syncPasses: 0,
+    coalescedSyncs: 0,
   })
 })
 
@@ -95,6 +105,7 @@ declare global {
       }
       initMs: number
       syncMs: number
+      burstSyncMs: number
       renderP50Ms: number
       renderP95Ms: number
       frameIntervalP95Ms: number
@@ -123,21 +134,42 @@ declare global {
       contextRestoredObserved: boolean
       statsBeforeDestroy: {
         nodes: number
+        visibleNodes: number
         textures: number
         estimatedTextureBytes: number
         activeTextureBytes: number
         textureBudgetBytes: number
         textureBudgetExceeded: boolean
         contextLost: boolean
+        contextRecoveries: number
+        syncPasses: number
+        coalescedSyncs: number
+      }
+      statsAfterRecovery: {
+        nodes: number
+        visibleNodes: number
+        textures: number
+        estimatedTextureBytes: number
+        activeTextureBytes: number
+        textureBudgetBytes: number
+        textureBudgetExceeded: boolean
+        contextLost: boolean
+        contextRecoveries: number
+        syncPasses: number
+        coalescedSyncs: number
       }
       statsAfterDestroy: {
         nodes: number
+        visibleNodes: number
         textures: number
         estimatedTextureBytes: number
         activeTextureBytes: number
         textureBudgetBytes: number
         textureBudgetExceeded: boolean
         contextLost: boolean
+        contextRecoveries: number
+        syncPasses: number
+        coalescedSyncs: number
       }
       error?: string
     }

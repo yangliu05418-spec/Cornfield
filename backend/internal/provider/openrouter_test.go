@@ -66,6 +66,70 @@ func TestOpenRouterSubmitCapabilityGatesPayload(t *testing.T) {
 	}
 }
 
+func TestOpenRouterPoolBalancesSequentialRequests(t *testing.T) {
+	var authorizations []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		authorizations = append(authorizations, r.Header.Get("Authorization"))
+		_, _ = w.Write([]byte(`{"data":[{"b64_json":"cG5n","media_type":"image/png"}]}`))
+	}))
+	defer server.Close()
+	adapter := NewOpenRouterPoolWithSubmitTimeout([]string{"key-a", "key-b", "key-c"}, "", time.Minute)
+	adapter.BaseURL = server.URL
+	adapter.Client = server.Client()
+	for range 6 {
+		if _, err := adapter.Submit(context.Background(), CanonicalRequest{Model: "model", Prompt: "prompt", ExpectedImages: 1}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	want := []string{"Bearer key-a", "Bearer key-b", "Bearer key-c", "Bearer key-a", "Bearer key-b", "Bearer key-c"}
+	if fmt.Sprint(authorizations) != fmt.Sprint(want) {
+		t.Fatalf("authorizations = %v, want %v", authorizations, want)
+	}
+}
+
+func TestOpenRouterPoolFailsOverOnlyAfterDefiniteCredentialRejection(t *testing.T) {
+	var authorizations []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		authorizations = append(authorizations, r.Header.Get("Authorization"))
+		if len(authorizations) == 1 {
+			w.Header().Set("Retry-After", "30")
+			w.WriteHeader(http.StatusTooManyRequests)
+			_, _ = w.Write([]byte(`{"error":{"message":"account rate limited"}}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"data":[{"b64_json":"cG5n","media_type":"image/png"}]}`))
+	}))
+	defer server.Close()
+	adapter := NewOpenRouterPoolWithSubmitTimeout([]string{"key-a", "key-b"}, "", time.Minute)
+	adapter.BaseURL = server.URL
+	adapter.Client = server.Client()
+	if _, err := adapter.Submit(context.Background(), CanonicalRequest{Model: "model", Prompt: "prompt", ExpectedImages: 1}); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"Bearer key-a", "Bearer key-b"}
+	if fmt.Sprint(authorizations) != fmt.Sprint(want) {
+		t.Fatalf("authorizations = %v, want %v", authorizations, want)
+	}
+}
+
+func TestOpenRouterPoolDoesNotFailOverAmbiguousSubmission(t *testing.T) {
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		requests++
+		w.WriteHeader(http.StatusInternalServerError)
+		_, _ = w.Write([]byte(`{"error":{"message":"unknown upstream state"}}`))
+	}))
+	defer server.Close()
+	adapter := NewOpenRouterPoolWithSubmitTimeout([]string{"key-a", "key-b", "key-c"}, "", time.Minute)
+	adapter.BaseURL = server.URL
+	adapter.Client = server.Client()
+	_, err := adapter.Submit(context.Background(), CanonicalRequest{Model: "model", Prompt: "prompt", ExpectedImages: 1})
+	var providerErr *Error
+	if !errors.As(err, &providerErr) || !providerErr.SubmissionUncertain || requests != 1 {
+		t.Fatalf("error=%#v requests=%d", err, requests)
+	}
+}
+
 func TestOpenRouterConnectFailureBeforeWriteIsSafelyRetryable(t *testing.T) {
 	adapter := NewOpenRouter("test-key", "")
 	adapter.Client = &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {

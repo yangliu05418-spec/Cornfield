@@ -12,16 +12,20 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 	"unicode/utf8"
 )
 
 type OpenRouter struct {
+	// APIKey is retained for compatibility with diagnostics and older tests.
+	// Requests are always leased from keyPool.
 	APIKey    string
 	PublicURL string
 	BaseURL   string
 	Client    *http.Client
+	keyPool   *openRouterKeyPool
 }
 
 func NewOpenRouter(apiKey, publicURL string) *OpenRouter {
@@ -29,13 +33,132 @@ func NewOpenRouter(apiKey, publicURL string) *OpenRouter {
 }
 
 func NewOpenRouterWithSubmitTimeout(apiKey, publicURL string, submitTimeout time.Duration) *OpenRouter {
+	return NewOpenRouterPoolWithSubmitTimeout([]string{apiKey}, publicURL, submitTimeout)
+}
+
+func NewOpenRouterPoolWithSubmitTimeout(apiKeys []string, publicURL string, submitTimeout time.Duration) *OpenRouter {
 	if submitTimeout < time.Second {
 		submitTimeout = 5 * time.Minute
 	}
+	keys := make([]string, 0, len(apiKeys))
+	for _, key := range apiKeys {
+		if key = strings.TrimSpace(key); key != "" {
+			keys = append(keys, key)
+		}
+	}
+	first := ""
+	if len(keys) > 0 {
+		first = keys[0]
+	}
 	return &OpenRouter{
-		APIKey: apiKey, PublicURL: publicURL, BaseURL: "https://openrouter.ai",
+		APIKey: first, PublicURL: publicURL, BaseURL: "https://openrouter.ai", keyPool: newOpenRouterKeyPool(keys),
 		Client: newHTTPClient(submitTimeout+20*time.Second, submitTimeout+10*time.Second),
 	}
+}
+
+type openRouterKeyState struct {
+	value         string
+	inflight      int
+	dispatches    uint64
+	cooldownUntil time.Time
+}
+
+type openRouterKeyPool struct {
+	mu     sync.Mutex
+	keys   []openRouterKeyState
+	cursor uint64
+	now    func() time.Time
+}
+
+type openRouterKeyLease struct {
+	pool  *openRouterKeyPool
+	index int
+	value string
+	once  sync.Once
+}
+
+func newOpenRouterKeyPool(keys []string) *openRouterKeyPool {
+	states := make([]openRouterKeyState, len(keys))
+	for index, key := range keys {
+		states[index].value = key
+	}
+	return &openRouterKeyPool{keys: states, now: time.Now}
+}
+
+func (p *openRouterKeyPool) lease(excluded map[int]struct{}) (*openRouterKeyLease, time.Duration) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	now := p.now()
+	best := -1
+	var nextReady time.Time
+	for offset := range len(p.keys) {
+		index := int((p.cursor + uint64(offset)) % uint64(len(p.keys)))
+		if _, skip := excluded[index]; skip {
+			continue
+		}
+		key := p.keys[index]
+		if key.cooldownUntil.After(now) {
+			if nextReady.IsZero() || key.cooldownUntil.Before(nextReady) {
+				nextReady = key.cooldownUntil
+			}
+			continue
+		}
+		if best < 0 || key.inflight < p.keys[best].inflight ||
+			(key.inflight == p.keys[best].inflight && key.dispatches < p.keys[best].dispatches) {
+			best = index
+		}
+	}
+	if best < 0 {
+		if nextReady.After(now) {
+			return nil, nextReady.Sub(now)
+		}
+		return nil, 0
+	}
+	p.keys[best].inflight++
+	p.keys[best].dispatches++
+	p.cursor = uint64(best+1) % uint64(len(p.keys))
+	return &openRouterKeyLease{pool: p, index: best, value: p.keys[best].value}, 0
+}
+
+func (l *openRouterKeyLease) release() {
+	if l == nil {
+		return
+	}
+	l.once.Do(func() {
+		l.pool.mu.Lock()
+		defer l.pool.mu.Unlock()
+		if l.pool.keys[l.index].inflight > 0 {
+			l.pool.keys[l.index].inflight--
+		}
+	})
+}
+
+func (p *openRouterKeyPool) coolDown(index int, duration time.Duration) {
+	if duration <= 0 {
+		duration = 30 * time.Second
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	until := p.now().Add(duration)
+	if until.After(p.keys[index].cooldownUntil) {
+		p.keys[index].cooldownUntil = until
+	}
+}
+
+func (p *openRouterKeyPool) markHealthy(index int) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.keys[index].cooldownUntil = time.Time{}
+}
+
+func (p *openRouterKeyPool) secrets() []string {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	values := make([]string, len(p.keys))
+	for index := range p.keys {
+		values[index] = p.keys[index].value
+	}
+	return values
 }
 
 func BuildOpenRouterPrompt(input CanonicalRequest) string {
@@ -104,38 +227,69 @@ func (o *OpenRouter) Submit(ctx context.Context, input CanonicalRequest) (Submis
 	if err != nil {
 		return Submission{}, err
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(o.BaseURL, "/")+"/api/v1/images", bytes.NewReader(body))
-	if err != nil {
-		return Submission{}, err
-	}
-	req.Header.Set("Authorization", "Bearer "+o.APIKey)
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("HTTP-Referer", o.PublicURL)
-	req.Header.Set("X-Title", "Cornfield")
-	var requestWritten atomic.Bool
-	req = req.WithContext(httptrace.WithClientTrace(req.Context(), &httptrace.ClientTrace{
-		WroteRequest: func(httptrace.WroteRequestInfo) { requestWritten.Store(true) },
-	}))
 	started := time.Now()
-	res, err := o.Client.Do(req)
-	if err != nil {
-		if !requestWritten.Load() {
-			return Submission{}, &Error{Code: "PROVIDER_CONNECT_FAILED", Message: "provider connection failed before the request was written", Retryable: true}
+	allSecrets := o.keyPool.secrets()
+	excluded := make(map[int]struct{}, len(allSecrets))
+	var res *http.Response
+	for {
+		lease, retryAfter := o.keyPool.lease(excluded)
+		if lease == nil {
+			return Submission{}, &Error{Code: "OPENROUTER_KEYS_BUSY", Message: "all OpenRouter credentials are temporarily unavailable", Retryable: true, RetryAfter: retryAfter}
 		}
-		return Submission{}, &Error{Code: "SUBMISSION_UNCERTAIN", Message: err.Error(), SubmissionUncertain: true}
+		excluded[lease.index] = struct{}{}
+		req, requestErr := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(o.BaseURL, "/")+"/api/v1/images", bytes.NewReader(body))
+		if requestErr != nil {
+			lease.release()
+			return Submission{}, requestErr
+		}
+		req.Header.Set("Authorization", "Bearer "+lease.value)
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("HTTP-Referer", o.PublicURL)
+		req.Header.Set("X-Title", "Cornfield")
+		var requestWritten atomic.Bool
+		req = req.WithContext(httptrace.WithClientTrace(req.Context(), &httptrace.ClientTrace{
+			WroteRequest: func(httptrace.WroteRequestInfo) { requestWritten.Store(true) },
+		}))
+		res, err = o.Client.Do(req)
+		lease.release()
+		if err != nil {
+			if !requestWritten.Load() {
+				return Submission{}, &Error{Code: "PROVIDER_CONNECT_FAILED", Message: "provider connection failed before the request was written", Retryable: true}
+			}
+			return Submission{}, &Error{Code: "SUBMISSION_UNCERTAIN", Message: err.Error(), SubmissionUncertain: true}
+		}
+		if res.StatusCode >= 200 && res.StatusCode < 300 {
+			o.keyPool.markHealthy(lease.index)
+			break
+		}
+		providerErr := openRouterSubmissionError(res, allSecrets...)
+		res.Body.Close()
+		if res.StatusCode != http.StatusUnauthorized && res.StatusCode != http.StatusPaymentRequired && res.StatusCode != http.StatusTooManyRequests {
+			return Submission{}, providerErr
+		}
+		cooldown := 5 * time.Minute
+		if typed, ok := providerErr.(*Error); ok && typed.RetryAfter > 0 {
+			cooldown = typed.RetryAfter
+		} else if res.StatusCode == http.StatusTooManyRequests {
+			cooldown = 30 * time.Second
+		}
+		o.keyPool.coolDown(lease.index, cooldown)
+		if len(excluded) >= len(allSecrets) {
+			if typed, ok := providerErr.(*Error); ok {
+				typed.PauseProvider = res.StatusCode != http.StatusTooManyRequests
+			}
+			return Submission{}, providerErr
+		}
 	}
 	defer res.Body.Close()
-	if res.StatusCode < 200 || res.StatusCode >= 300 {
-		return Submission{}, openRouterSubmissionError(res, o.APIKey)
-	}
 	responseID, images, usage, err := decodeOpenRouterResponse(res.Body)
 	if err != nil {
-		return Submission{}, &Error{Code: "SUBMISSION_UNCERTAIN", Message: "OpenRouter accepted the request but returned an invalid response", SubmissionUncertain: true, Telemetry: responseTelemetryExcluding(res, []string{o.APIKey})}
+		return Submission{}, &Error{Code: "SUBMISSION_UNCERTAIN", Message: "OpenRouter accepted the request but returned an invalid response", SubmissionUncertain: true, Telemetry: responseTelemetryExcluding(res, allSecrets)}
 	}
-	responseID = normalizeProviderIdentifier(responseID, o.APIKey)
-	telemetry := responseTelemetryExcluding(res, []string{o.APIKey}, responseID)
+	responseID = normalizeProviderIdentifier(responseID, allSecrets...)
+	telemetry := responseTelemetryExcluding(res, allSecrets, responseID)
 	if responseID == "" {
-		responseID = normalizeProviderIdentifier(res.Header.Get("X-Generation-Id"), o.APIKey)
+		responseID = normalizeProviderIdentifier(res.Header.Get("X-Generation-Id"), allSecrets...)
 	}
 	result := Result{Status: "completed", Usage: usage, Images: images, Telemetry: telemetry}
 	if result.Usage == nil {
@@ -256,30 +410,50 @@ func (o *OpenRouter) Cancel(context.Context, Submission) (CancelResult, error) {
 }
 
 func (o *OpenRouter) Probe(ctx context.Context) Health {
-	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimRight(o.BaseURL, "/")+"/api/v1/key", nil)
-	req.Header.Set("Authorization", "Bearer "+o.APIKey)
-	res, err := o.Client.Do(req)
-	if err != nil {
-		return Health{Message: err.Error()}
+	secrets := o.keyPool.secrets()
+	if len(secrets) == 0 {
+		return Health{Message: "no OpenRouter credentials configured"}
 	}
-	defer res.Body.Close()
-	if res.StatusCode < 200 || res.StatusCode >= 300 {
-		return Health{Message: res.Status}
+	healthy := 0
+	lastMessage := "all OpenRouter credentials unavailable"
+	for index, key := range secrets {
+		req, _ := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimRight(o.BaseURL, "/")+"/api/v1/key", nil)
+		req.Header.Set("Authorization", "Bearer "+key)
+		res, err := o.Client.Do(req)
+		if err != nil {
+			lastMessage = "key status request failed"
+			continue
+		}
+		var envelope struct {
+			Data struct {
+				Limit          *float64 `json:"limit"`
+				Usage          float64  `json:"usage"`
+				LimitRemaining *float64 `json:"limit_remaining"`
+			} `json:"data"`
+		}
+		decodeErr := json.NewDecoder(io.LimitReader(res.Body, 1<<20)).Decode(&envelope)
+		res.Body.Close()
+		if res.StatusCode < 200 || res.StatusCode >= 300 {
+			lastMessage = res.Status
+			o.keyPool.coolDown(index, 5*time.Minute)
+			continue
+		}
+		if decodeErr != nil {
+			lastMessage = "invalid key status response"
+			continue
+		}
+		if (envelope.Data.LimitRemaining != nil && *envelope.Data.LimitRemaining <= 0) || (envelope.Data.Limit != nil && envelope.Data.Usage >= *envelope.Data.Limit) {
+			lastMessage = "quota exhausted"
+			o.keyPool.coolDown(index, 10*time.Minute)
+			continue
+		}
+		healthy++
+		o.keyPool.markHealthy(index)
 	}
-	var envelope struct {
-		Data struct {
-			Limit          *float64 `json:"limit"`
-			Usage          float64  `json:"usage"`
-			LimitRemaining *float64 `json:"limit_remaining"`
-		} `json:"data"`
+	if healthy == 0 {
+		return Health{Message: lastMessage}
 	}
-	if err := json.NewDecoder(io.LimitReader(res.Body, 1<<20)).Decode(&envelope); err != nil {
-		return Health{Message: "invalid key status response"}
-	}
-	if (envelope.Data.LimitRemaining != nil && *envelope.Data.LimitRemaining <= 0) || (envelope.Data.Limit != nil && envelope.Data.Usage >= *envelope.Data.Limit) {
-		return Health{Message: "quota exhausted"}
-	}
-	return Health{Healthy: true, Message: res.Status}
+	return Health{Healthy: true, Message: fmt.Sprintf("%d/%d credentials healthy", healthy, len(secrets))}
 }
 
 func httpProviderError(res *http.Response, secrets ...string) error {

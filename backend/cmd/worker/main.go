@@ -88,7 +88,7 @@ func main() {
 		decomposers["byteplus"] = mock
 	} else {
 		adapters["legnext"] = provider.NewLegnext(cfg.LegnextAPIKey)
-		adapters["openrouter"] = provider.NewOpenRouterWithSubmitTimeout(cfg.OpenRouterAPIKey, cfg.PublicURL, maxSubmitTimeout)
+		adapters["openrouter"] = provider.NewOpenRouterPoolWithSubmitTimeout(cfg.OpenRouterAPIKeys, cfg.PublicURL, maxSubmitTimeout)
 		adapters["bfl"] = provider.NewBFL(cfg.BFLAPIKey)
 		bytePlus := provider.NewBytePlusWithSubmitTimeout(cfg.BytePlusAPIKey, maxSubmitTimeout)
 		adapters["byteplus"] = bytePlus

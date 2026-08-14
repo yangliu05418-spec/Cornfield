@@ -77,7 +77,7 @@ printf '%s' 'ci-owner-password-0000000000000000000000000000' > "${POSTGRES_OWNER
 printf '%s' 'ci-api-password-000000000000000000000000000000' > "${POSTGRES_API_PASSWORD_SECRET_SOURCE}"
 printf '%s' 'ci-worker-password-0000000000000000000000000000' > "${POSTGRES_WORKER_PASSWORD_SECRET_SOURCE}"
 printf '%s' 'ci-legnext-key' > "${LEGNEXT_API_KEY_SECRET_SOURCE}"
-printf '%s' 'ci-openrouter-key' > "${OPENROUTER_API_KEY_SECRET_SOURCE}"
+printf '%s\n' 'ci-openrouter-key-a' 'ci-openrouter-key-b' 'ci-openrouter-key-c' > "${OPENROUTER_API_KEY_SECRET_SOURCE}"
 printf '%s' 'ci-bfl-key-000000' > "${BFL_API_KEY_SECRET_SOURCE}"
 printf '%s' 'ci-byteplus-key-000000' > "${BYTEPLUS_API_KEY_SECRET_SOURCE}"
 printf '%s' 'ci-callback-secret-00000000000000000000000000000000' > "${PROVIDER_CALLBACK_SECRET_SOURCE}"

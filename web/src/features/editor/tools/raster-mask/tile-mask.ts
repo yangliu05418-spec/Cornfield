@@ -157,6 +157,28 @@ export class RasterMaskBuffer {
     return snapshots
   }
 
+  replaceTiles(snapshots: readonly RasterMaskTileSnapshot[]) {
+    if (this.#activeStroke)
+      throw new Error('cannot replace tiles during an active stroke')
+    const seen = new Set<number>()
+    for (const snapshot of snapshots) {
+      const dimensions = this.#tileDimensions(snapshot.tileX, snapshot.tileY)
+      const key = this.#key(snapshot.tileX, snapshot.tileY)
+      if (
+        seen.has(key) ||
+        !dimensions ||
+        snapshot.width !== dimensions.width ||
+        snapshot.height !== dimensions.height ||
+        snapshot.alpha.length !== dimensions.width * dimensions.height
+      )
+        throw new TypeError('invalid raster mask tile snapshot')
+      seen.add(key)
+      const tile = this.#mutableTile(snapshot.tileX, snapshot.tileY)
+      tile.data.set(snapshot.alpha)
+      this.#compact(snapshot.tileX, snapshot.tileY)
+    }
+  }
+
   beginStroke(brush: RasterMaskBrush, point: RasterMaskPoint) {
     if (this.#activeStroke)
       throw new Error('a raster mask stroke is already active')

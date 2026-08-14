@@ -146,6 +146,33 @@ func TestDocumentV2ValidatesShapeMaskWithoutSilentV1Downgrade(t *testing.T) {
 	}
 }
 
+func TestDocumentV2ValidatesImmutablePixelMaskReference(t *testing.T) {
+	v2, err := MigrateV1ToV2(New(uuid.New(), 512, 256))
+	if err != nil {
+		t.Fatal(err)
+	}
+	maskID := uuid.New()
+	v2.Nodes[0].PixelMask = &PixelMaskV2{ResourceID: maskID, Version: 3}
+	if err = v2.Validate(); err != nil {
+		t.Fatalf("valid pixel mask rejected: %v", err)
+	}
+	references := (DecodedDocument{SchemaVersion: 2, V2: &v2}).PixelMaskReferences()
+	if len(references) != 1 || references[0].NodeID != v2.Nodes[0].ID || references[0].AssetID != *v2.Nodes[0].AssetID || references[0].ResourceID != maskID || references[0].Version != 3 {
+		t.Fatalf("pixel mask authorization references = %#v", references)
+	}
+	scene, err := CompileV2RenderScene(v2)
+	if err != nil || scene.Nodes[0].PixelMask == nil || scene.Nodes[0].PixelMask.ResourceID != maskID || scene.Nodes[0].PixelMask.Version != 3 {
+		t.Fatalf("pixel mask render reference = %#v, %v", scene.Nodes[0].PixelMask, err)
+	}
+	if _, err = v2.ToV1(); !errors.Is(err, ErrUnsupportedDocumentSemantics) {
+		t.Fatalf("pixel mask downgrade error = %v", err)
+	}
+	v2.Nodes[0].PixelMask = &PixelMaskV2{Version: -1}
+	if err = v2.Validate(); !errors.Is(err, ErrInvalidDocument) {
+		t.Fatalf("invalid pixel mask error = %v", err)
+	}
+}
+
 func TestDecodeV2RejectsUnknownFieldsAndExcessiveDepth(t *testing.T) {
 	v2, err := MigrateV1ToV2(New(uuid.New(), 32, 32))
 	if err != nil {

@@ -101,6 +101,23 @@ func (d DecodedDocument) AssetIDs() []uuid.UUID {
 	return nil
 }
 
+func (d DecodedDocument) PixelMaskReferences() []PixelMaskReferenceV2 {
+	if d.SchemaVersion != 2 || d.V2 == nil {
+		return nil
+	}
+	references := make([]PixelMaskReferenceV2, 0)
+	for _, node := range d.V2.Nodes {
+		if node.PixelMask == nil {
+			continue
+		}
+		references = append(references, PixelMaskReferenceV2{
+			NodeID: node.ID, AssetID: *node.AssetID,
+			ResourceID: node.PixelMask.ResourceID, Version: node.PixelMask.Version,
+		})
+	}
+	return references
+}
+
 type DocumentV2 struct {
 	SchemaVersion            int      `json:"schema_version"`
 	RendererSemanticsVersion int      `json:"renderer_semantics_version"`
@@ -125,6 +142,19 @@ type NodeV2 struct {
 	Effects   []EffectV2   `json:"effects"`
 	TargetID  *string      `json:"target_id,omitempty"`
 	ShapeMask *ShapeMaskV2 `json:"shape_mask,omitempty"`
+	PixelMask *PixelMaskV2 `json:"pixel_mask,omitempty"`
+}
+
+type PixelMaskV2 struct {
+	ResourceID uuid.UUID `json:"resource_id"`
+	Version    int64     `json:"version"`
+}
+
+type PixelMaskReferenceV2 struct {
+	NodeID     string
+	AssetID    uuid.UUID
+	ResourceID uuid.UUID
+	Version    int64
 }
 
 type ShapeMaskV2 struct {
@@ -194,7 +224,7 @@ func (d DocumentV2) ToV1() (Document, error) {
 	}
 	nodes := append([]NodeV2(nil), d.Nodes...)
 	for _, node := range nodes {
-		if node.Type != "raster" || node.ParentID != nil || node.MaskID != nil || node.ShapeMask != nil || node.BlendMode != "normal" || len(node.Effects) != 0 || node.AssetID == nil {
+		if node.Type != "raster" || node.ParentID != nil || node.MaskID != nil || node.ShapeMask != nil || node.PixelMask != nil || node.BlendMode != "normal" || len(node.Effects) != 0 || node.AssetID == nil {
 			return Document{}, ErrUnsupportedDocumentSemantics
 		}
 	}
@@ -247,14 +277,14 @@ func (d DocumentV2) Validate() error {
 			return ErrInvalidDocument
 		}
 		if node.Type == "raster" {
-			if node.AssetID == nil || *node.AssetID == uuid.Nil || node.TargetID != nil || !validCrop(node.Crop) || !validEffects(node.Effects) || !validShapeMaskV2(node.ShapeMask) || (node.ShapeMask != nil && (node.Crop != nil || node.MaskID != nil)) {
+			if node.AssetID == nil || *node.AssetID == uuid.Nil || node.TargetID != nil || !validCrop(node.Crop) || !validEffects(node.Effects) || !validShapeMaskV2(node.ShapeMask) || !validPixelMaskV2(node.PixelMask) || (node.ShapeMask != nil && (node.Crop != nil || node.MaskID != nil || node.PixelMask != nil)) || (node.PixelMask != nil && node.MaskID != nil) {
 				return ErrInvalidDocument
 			}
 		} else if node.Type == "group" {
-			if node.AssetID != nil || node.Crop != nil || node.TargetID != nil || node.ShapeMask != nil || len(node.Effects) != 0 {
+			if node.AssetID != nil || node.Crop != nil || node.TargetID != nil || node.ShapeMask != nil || node.PixelMask != nil || len(node.Effects) != 0 {
 				return ErrInvalidDocument
 			}
-		} else if node.AssetID != nil || node.Crop != nil || node.MaskID != nil || node.ShapeMask != nil || node.TargetID == nil || *node.TargetID == node.ID || node.Transform != [6]float64{1, 0, 0, 1, 0, 0} || node.BlendMode != "normal" || !validEffects(node.Effects) {
+		} else if node.AssetID != nil || node.Crop != nil || node.MaskID != nil || node.ShapeMask != nil || node.PixelMask != nil || node.TargetID == nil || *node.TargetID == node.ID || node.Transform != [6]float64{1, 0, 0, 1, 0, 0} || node.BlendMode != "normal" || !validEffects(node.Effects) {
 			return ErrInvalidDocument
 		}
 		nodes[node.ID] = node
@@ -284,6 +314,13 @@ func (d DocumentV2) Validate() error {
 			}
 		}
 		if node.ShapeMask != nil {
+			for _, candidate := range d.Nodes {
+				if candidate.MaskID != nil && *candidate.MaskID == node.ID {
+					return ErrInvalidDocument
+				}
+			}
+		}
+		if node.PixelMask != nil {
 			for _, candidate := range d.Nodes {
 				if candidate.MaskID != nil && *candidate.MaskID == node.ID {
 					return ErrInvalidDocument
@@ -376,6 +413,10 @@ func validShapeMaskV2(mask *ShapeMaskV2) bool {
 	}
 	sum := mask.X + mask.Y + mask.Width + mask.Height
 	return (mask.Type == "rectangle" || mask.Type == "ellipse") && mask.X >= 0 && mask.Y >= 0 && mask.Width > 0 && mask.Height > 0 && mask.X+mask.Width <= 1 && mask.Y+mask.Height <= 1 && !math.IsNaN(sum) && !math.IsInf(sum, 0)
+}
+
+func validPixelMaskV2(mask *PixelMaskV2) bool {
+	return mask == nil || (mask.ResourceID != uuid.Nil && mask.Version >= 0)
 }
 
 func validEffects(effects []EffectV2) bool {

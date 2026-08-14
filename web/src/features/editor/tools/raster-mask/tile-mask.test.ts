@@ -92,6 +92,21 @@ describe('RasterMaskBuffer', () => {
     expect(mask.allocatedTileCount).toBe(0)
   })
 
+  it('hydrates sparse immutable tile snapshots without allocating defaults', () => {
+    const mask = new RasterMaskBuffer(300, 300)
+    const alpha = new Uint8Array(256 * 256)
+    alpha.fill(255)
+    alpha[10 * 256 + 12] = 0
+    mask.replaceTiles([{ tileX: 0, tileY: 0, width: 256, height: 256, alpha }])
+    expect(mask.readAlpha(12, 10)).toBe(0)
+    expect(mask.readAlpha(270, 270)).toBe(255)
+    expect(mask.allocatedTileCount).toBe(1)
+
+    alpha.fill(255)
+    mask.replaceTiles([{ tileX: 0, tileY: 0, width: 256, height: 256, alpha }])
+    expect(mask.allocatedTileCount).toBe(0)
+  })
+
   it('rejects full-canvas allocation and concurrent strokes', () => {
     expect(() => new RasterMaskBuffer(8192, 8192)).toThrow(
       'invalid raster mask dimensions',

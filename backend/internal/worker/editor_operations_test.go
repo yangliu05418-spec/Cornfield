@@ -441,6 +441,73 @@ func TestCompositeEditorSceneTilesProcessedLayersWithoutSeams(t *testing.T) {
 	}
 }
 
+func TestCompositeEditorSceneAppliesSparseRasterMaskWithoutFullCanvasAllocation(t *testing.T) {
+	assetID, maskID := uuid.New(), uuid.New()
+	source := solidNRGBA(4, 2, color.NRGBA{R: 255, A: 255})
+	mask := &sparseRasterMask{
+		bounds: image.Rect(0, 0, 4, 2), defaultAlpha: 0,
+		tiles: map[[2]int]sparseRasterMaskTile{
+			{0, 0}: {width: 4, height: 2, pixels: []byte{0, 255, 255, 0, 0, 255, 255, 0}},
+		},
+	}
+	scene := studioEditor.RenderScene{
+		Canvas: studioEditor.Canvas{Width: 8, Height: 4},
+		Nodes: []studioEditor.RenderNode{{
+			ID: "content", AssetID: assetID, Transform: [6]float64{1, 0, 0, 1, 2, 1},
+			Opacity: 1, Visible: true, Order: 0, Role: studioEditor.RenderRoleContent,
+			BlendMode: "normal", ColorMatrix: studioEditor.IdentityColorMatrixV1(),
+			PixelMask: &studioEditor.PixelMaskV2{ResourceID: maskID, Version: 4},
+		}},
+	}
+	loads := 0
+	canvas, err := compositeEditorSceneWithPixelMasks(context.Background(), scene, func(id uuid.UUID) (image.Image, error) {
+		if id != assetID {
+			t.Fatalf("asset load = %s", id)
+		}
+		return source, nil
+	}, func(reference studioEditor.PixelMaskV2) (image.Image, error) {
+		loads++
+		if reference.ResourceID != maskID || reference.Version != 4 {
+			t.Fatalf("mask reference = %#v", reference)
+		}
+		return mask, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loads != 1 {
+		t.Fatalf("mask loads = %d, want 1", loads)
+	}
+	for _, point := range []image.Point{image.Pt(3, 1), image.Pt(4, 1), image.Pt(3, 2), image.Pt(4, 2)} {
+		if _, _, _, alpha := canvas.At(point.X, point.Y).RGBA(); alpha == 0 {
+			t.Fatalf("masked pixel %v is transparent", point)
+		}
+	}
+	for _, point := range []image.Point{image.Pt(2, 1), image.Pt(5, 1), image.Pt(2, 2), image.Pt(5, 2)} {
+		if _, _, _, alpha := canvas.At(point.X, point.Y).RGBA(); alpha != 0 {
+			t.Fatalf("hidden pixel %v leaked", point)
+		}
+	}
+}
+
+func TestSparseRasterMaskUsesDefaultAlphaOutsideMaterializedTiles(t *testing.T) {
+	mask := &sparseRasterMask{
+		bounds: image.Rect(0, 0, 300, 300), defaultAlpha: 217,
+		tiles: map[[2]int]sparseRasterMaskTile{
+			{0, 0}: {width: 256, height: 256, pixels: make([]byte, 256*256)},
+		},
+	}
+	if got := color.AlphaModel.Convert(mask.At(10, 10)).(color.Alpha).A; got != 0 {
+		t.Fatalf("materialized alpha = %d", got)
+	}
+	if got := color.AlphaModel.Convert(mask.At(270, 270)).(color.Alpha).A; got != 217 {
+		t.Fatalf("default alpha = %d", got)
+	}
+	if got := color.AlphaModel.Convert(mask.At(-1, -1)).(color.Alpha).A; got != 0 {
+		t.Fatalf("out-of-bounds alpha = %d", got)
+	}
+}
+
 func solidNRGBA(width, height int, value color.NRGBA) *image.NRGBA {
 	result := image.NewNRGBA(image.Rect(0, 0, width, height))
 	for y := 0; y < height; y++ {

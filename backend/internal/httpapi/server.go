@@ -40,6 +40,7 @@ type Server struct {
 	durationMS        atomic.Uint64
 	activeSSE         atomic.Int64
 	metricsData       *httpMetrics
+	rasterMaskWrites  chan struct{}
 	dummyPasswordHash string
 }
 
@@ -73,6 +74,7 @@ func New(ctx context.Context, cfg config.Config, db *pgxpool.Pool, catalog *mode
 		rateLimiter:       newLoginLimiter(),
 		hub:               newEventHub(),
 		metricsData:       newHTTPMetrics(),
+		rasterMaskWrites:  make(chan struct{}, 4),
 		dummyPasswordHash: dummyPasswordHash,
 	}
 	go server.listenNotifications(ctx)
@@ -123,6 +125,10 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /api/v1/assets/deletions", s.requireAuth(s.requireCSRF(http.HandlerFunc(s.deleteAssetsBulk))))
 	mux.Handle("GET /api/v1/editor-projects/{id}", s.requireAuth(http.HandlerFunc(s.getEditorProject)))
 	mux.Handle("PUT /api/v1/editor-projects/{id}/document", s.requireAuth(s.requireCSRF(http.HandlerFunc(s.saveEditorProject))))
+	mux.Handle("POST /api/v1/editor-projects/{id}/raster-masks", s.requireAuth(s.requireCSRF(http.HandlerFunc(s.createEditorRasterMask))))
+	mux.Handle("POST /api/v1/editor-projects/{id}/raster-masks/{maskID}/versions", s.requireAuth(s.requireCSRF(http.HandlerFunc(s.commitEditorRasterMask))))
+	mux.Handle("GET /api/v1/editor-projects/{id}/raster-masks/{maskID}/versions/{version}", s.requireAuth(http.HandlerFunc(s.getEditorRasterMaskVersion)))
+	mux.Handle("GET /api/v1/editor-projects/{id}/raster-masks/{maskID}/versions/{version}/tiles/{tileX}/{tileY}/content", s.requireAuth(http.HandlerFunc(s.editorRasterMaskTileContent)))
 	mux.Handle("PATCH /api/v1/editor-projects/{id}", s.requireAuth(s.requireCSRF(http.HandlerFunc(s.renameEditorProject))))
 	mux.Handle("DELETE /api/v1/editor-projects/{id}", s.requireAuth(s.requireCSRF(http.HandlerFunc(s.deleteEditorProject))))
 	mux.Handle("POST /api/v1/editor-projects/{id}/layer-decompositions", s.requireAuth(s.requireCSRF(http.HandlerFunc(s.createLayerDecomposition))))

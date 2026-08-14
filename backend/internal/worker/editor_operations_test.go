@@ -2,6 +2,8 @@ package worker
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"image"
 	"image/color"
 	"image/png"
@@ -371,6 +373,34 @@ func TestCompositeEditorSceneAppliesRectangleEllipseAndInvertedShapeMasks(t *tes
 				t.Fatalf("hidden point leaked: %v", test.hidden)
 			}
 		})
+	}
+}
+
+func TestCompositeEditorSceneHonorsCancellationAtMaximumNodeCount(t *testing.T) {
+	assetID := uuid.New()
+	nodes := make([]studioEditor.RenderNode, studioEditor.MaxNodesV2)
+	for index := range nodes {
+		nodes[index] = studioEditor.RenderNode{
+			ID: fmt.Sprintf("layer-%03d", index), AssetID: assetID,
+			Transform: [6]float64{1, 0, 0, 1, float64(index % 16), float64(index / 16)},
+			Opacity:   1, Visible: true, Order: index, Role: studioEditor.RenderRoleContent,
+			BlendMode: "normal", ColorMatrix: studioEditor.IdentityColorMatrixV1(),
+		}
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	loads := 0
+	_, err := compositeEditorScene(ctx, studioEditor.RenderScene{
+		Canvas: studioEditor.Canvas{Width: 64, Height: 64}, Nodes: nodes,
+	}, func(uuid.UUID) (image.Image, error) {
+		loads++
+		return solidNRGBA(1, 1, color.NRGBA{R: 255, A: 255}), nil
+	})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("error = %v, want context canceled", err)
+	}
+	if loads > 1 {
+		t.Fatalf("loaded %d assets after cancellation", loads)
 	}
 }
 

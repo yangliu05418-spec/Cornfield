@@ -2,6 +2,7 @@ import {
   Application,
   ColorMatrixFilter,
   Container,
+  CullerPlugin,
   DarkenBlend,
   extensions,
   Graphics,
@@ -9,12 +10,14 @@ import {
   LightenBlend,
   Matrix,
   OverlayBlend,
+  Rectangle,
   Sprite,
   Texture,
 } from 'pixi.js'
 
 import { ReferenceCountedResourceCache } from '../resources/resource-cache'
 import { planEditorSceneAssetVariants } from '../resources/variant-plan'
+import { LatestSyncCoordinator } from './sync-coordinator'
 import { compileEditorRenderScene } from './scene-compiler'
 import { isIdentityEditorColorMatrixV1 } from './color-effects'
 import type {
@@ -43,7 +46,7 @@ type TextureResource = {
   bitmap: ImageBitmap
 }
 
-extensions.add(DarkenBlend, LightenBlend, OverlayBlend)
+extensions.add(DarkenBlend, LightenBlend, OverlayBlend, CullerPlugin)
 
 export class PixiEditorRenderer implements EditorRenderer {
   #app?: Application
@@ -63,7 +66,13 @@ export class PixiEditorRenderer implements EditorRenderer {
   #resourceTimer?: number
   #latestDocument?: EditorRenderDocument
   #latestAssets?: ReadonlyMap<string, EditorRenderAsset>
-  #syncTail: Promise<void> = Promise.resolve()
+  #syncs = new LatestSyncCoordinator(
+    (
+      document: EditorRenderDocument,
+      assets: ReadonlyMap<string, EditorRenderAsset>,
+    ) => this.#syncScene(document, assets),
+  )
+  #contextRecoveries = 0
   #destroyed = false
   #contextLost = false
   #onContextChange?: (lost: boolean) => void
@@ -76,12 +85,18 @@ export class PixiEditorRenderer implements EditorRenderer {
   }
   #restoredHandler = () => {
     this.#contextLost = false
-    this.#onContextChange?.(false)
     if (this.#latestDocument && this.#latestAssets) {
-      void this.sync(this.#latestDocument, this.#latestAssets).catch(
-        this.#onError,
-      )
-    } else this.render()
+      void this.sync(this.#latestDocument, this.#latestAssets)
+        .then(() => {
+          this.#contextRecoveries += 1
+          this.#onContextChange?.(false)
+        })
+        .catch(this.#onError)
+    } else {
+      this.render()
+      this.#contextRecoveries += 1
+      this.#onContextChange?.(false)
+    }
   }
 
   async init(canvas: HTMLCanvasElement, options: EditorRendererOptions) {
@@ -109,6 +124,7 @@ export class PixiEditorRenderer implements EditorRenderer {
       gcActive: true,
       gcMaxUnusedTime: 10_000,
       gcFrequency: 2_000,
+      culler: { updateTransform: true },
     })
     this.#world.sortableChildren = true
     this.#content.sortableChildren = true
@@ -125,9 +141,7 @@ export class PixiEditorRenderer implements EditorRenderer {
     this.#assertReady()
     this.#latestDocument = document
     this.#latestAssets = assets
-    const task = this.#syncTail.then(() => this.#syncScene(document, assets))
-    this.#syncTail = task.catch(() => undefined)
-    return task
+    return this.#syncs.enqueue(document, assets)
   }
 
   async #syncScene(
@@ -189,25 +203,35 @@ export class PixiEditorRenderer implements EditorRenderer {
 
   render() {
     if (!this.#app || this.#contextLost) return
-    this.#app.renderer.render(this.#app.stage)
+    this.#app.render()
   }
 
   stats(): EditorRendererStats {
     const resources = this.#textures.stats()
+    const syncs = this.#syncs.stats()
+    let visibleNodes = 0
+    for (const node of this.#nodes.values()) {
+      if (node.container.visible && !node.container.culled) visibleNodes += 1
+    }
     return {
       nodes: this.#nodes.size,
+      visibleNodes,
       textures: resources.entries,
       estimatedTextureBytes: resources.bytes,
       activeTextureBytes: resources.activeBytes,
       textureBudgetBytes: this.#textureBudgetBytes,
       textureBudgetExceeded: this.#textureBudgetExceeded,
       contextLost: this.#contextLost,
+      contextRecoveries: this.#contextRecoveries,
+      syncPasses: syncs.passes,
+      coalescedSyncs: syncs.coalesced,
     }
   }
 
   destroy() {
     this.#destroyed = true
     window.clearTimeout(this.#resourceTimer)
+    this.#syncs.close()
     for (const [id, node] of this.#nodes) this.#removeNode(id, node)
     this.#textures.clear()
     if (this.#canvas) {
@@ -223,6 +247,10 @@ export class PixiEditorRenderer implements EditorRenderer {
     this.#latestDocument = undefined
     this.#latestAssets = undefined
     this.#textureBudgetExceeded = false
+    this.#syncs = new LatestSyncCoordinator((document, assets) =>
+      this.#syncScene(document, assets),
+    )
+    this.#contextRecoveries = 0
   }
 
   async settleResources() {
@@ -254,6 +282,8 @@ export class PixiEditorRenderer implements EditorRenderer {
       if (node) this.#removeNode(object.id, node)
       const texture = resource.texture
       const container = new Container()
+      container.cullable = true
+      container.cullArea = new Rectangle(0, 0, asset.width, asset.height)
       const sprite = new Sprite(texture)
       sprite.width = asset.width
       sprite.height = asset.height

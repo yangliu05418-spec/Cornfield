@@ -3,6 +3,7 @@ package editor
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -162,5 +163,37 @@ func TestRenderSceneValidateRequiresMaskRole(t *testing.T) {
 	}
 	if err := scene.Validate(); !errors.Is(err, ErrInvalidDocument) {
 		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestCompileV2RenderSceneSupportsMaximumSharedAssetScene(t *testing.T) {
+	assetID := uuid.New()
+	nodes := make([]NodeV2, MaxNodesV2)
+	for index := range nodes {
+		nodes[index] = NodeV2{
+			ID:        fmt.Sprintf("layer-%03d", index),
+			Type:      "raster",
+			OrderKey:  fmt.Sprintf("%08d", index),
+			Transform: [6]float64{1, 0, 0, 1, float64(index % 20), float64(index / 20)},
+			Opacity:   1,
+			BlendMode: "normal",
+			Visible:   true,
+			AssetID:   &assetID,
+		}
+	}
+	scene, err := CompileV2RenderScene(DocumentV2{
+		SchemaVersion: 2, RendererSemanticsVersion: 1,
+		Canvas: Canvas{Width: 64, Height: 64}, Nodes: nodes,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(scene.Nodes) != MaxNodesV2 {
+		t.Fatalf("compiled nodes = %d, want %d", len(scene.Nodes), MaxNodesV2)
+	}
+	for index, node := range scene.Nodes {
+		if node.Order != index || node.AssetID != assetID {
+			t.Fatalf("node %d = %+v", index, node)
+		}
 	}
 }

@@ -21,12 +21,16 @@ export type EditorRenderAsset = {
 
 export type EditorRendererStats = {
   nodes: number
+  visibleNodes: number
   textures: number
   estimatedTextureBytes: number
   activeTextureBytes: number
   textureBudgetBytes: number
   textureBudgetExceeded: boolean
   contextLost: boolean
+  contextRecoveries: number
+  syncPasses: number
+  coalescedSyncs: number
 }
 
 export type EditorRendererOptions = {

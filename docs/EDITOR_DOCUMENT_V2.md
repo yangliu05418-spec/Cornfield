@@ -31,6 +31,13 @@ A raster `shape_mask` is normalized in that raster's local pixel coordinate spac
 - Assets are referenced only by UUID. Adjustment nodes are asset-free. URLs, Base64 data and renderer-private objects are not accepted.
 - Node, effect, crop, transform and blend-mode fields are allow-listed and range checked on the server.
 
+## Performance and recovery contract
+
+- Pixi keeps at most one render sync in flight and coalesces pending updates to the latest document. Every caller resolves after either the running pass or the newest pending pass, so pointer previews cannot create an unbounded stale-frame backlog.
+- The scene owns all 500 display nodes for deterministic ordering, but Pixi culls off-screen local bounds before renderer submission. Shared asset variants retain one reference-counted texture regardless of how many nodes use it.
+- A WebGL context-loss event temporarily hides the accelerated surface. Presentation resumes only after restoration and a successful full sync of the latest document and resources; the structured DOM interaction layer remains available throughout recovery.
+- The fixed-device gate is authoritative for 60fps timing. Shared CI and software GPU runs still enforce 500 nodes, visible-node culling, texture budget, latest-wins bursts, pixel correctness, context recovery and complete disposal without treating software frame intervals as a hardware SLA.
+
 ## Migration
 
 `MigrateV1ToV2` sorts V1 objects by `z_index`, emits flat raster nodes and assigns deterministic zero-padded order keys. `ToV1` is available only for the lossless flat-raster subset.

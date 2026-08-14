@@ -67,7 +67,7 @@ export function PixiSurface({
           height: Math.max(1, Math.round(rect.height)),
           resolution: Math.min(window.devicePixelRatio || 1, 2),
           onContextChange: (lost) => {
-            if (lost) fail(new Error('图形上下文已丢失，已切回兼容渲染'))
+            onPresentedChangeRef.current(!lost)
           },
           onError: fail,
         })

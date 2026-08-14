@@ -29,6 +29,7 @@ type UseEditorOperationsOptions = {
   initialOperationID?: string
   activeLayerSet?: LayerSet
   getRevision: () => number
+  getActiveArtboardID: () => string
   flushSaves: () => Promise<void>
   onLayerSetReady: (layerSet: LayerSet, sourceRevision: number) => void
   onNotice: (message: string) => void
@@ -42,6 +43,8 @@ export function useEditorOperations(options: UseEditorOperationsOptions) {
   const [packageOperationID, setPackageOperationID] = useState<string>()
   const [lastLayerSet, setLastLayerSet] = useState(options.activeLayerSet)
   const [elapsed, setElapsed] = useState(0)
+  const [initialEstimate, setInitialEstimate] =
+    useState<AssetOperation['estimated_wait']>()
   const handledLayerSetRef = useRef('')
   const handledPublishRef = useRef('')
 
@@ -213,19 +216,24 @@ export function useEditorOperations(options: UseEditorOperationsOptions) {
       }
       try {
         await callbacksRef.current.flushSaves()
-        const result = await api<{ id: string }>(
+        const result = await api<{
+          id: string
+          estimated_wait?: AssetOperation['estimated_wait']
+        }>(
           `/api/v1/editor-projects/${options.projectID}/layer-decompositions`,
           {
             method: 'POST',
             headers: { 'Idempotency-Key': crypto.randomUUID() },
             body: JSON.stringify({
               expected_revision: callbacksRef.current.getRevision(),
+              artboard_id: callbacksRef.current.getActiveArtboardID(),
               prompt: settings.prompt,
               resolution: settings.resolution,
               prompt_optimization_mode: settings.mode,
             }),
           },
         )
+        setInitialEstimate(result.estimated_wait)
         setOperationID(result.id)
         return true
       } catch (error) {
@@ -238,27 +246,37 @@ export function useEditorOperations(options: UseEditorOperationsOptions) {
     [canDecompose, options.projectID],
   )
 
-  const publish = useCallback(async () => {
-    try {
-      await callbacksRef.current.flushSaves()
-      const result = await api<{ id: string }>(
-        `/api/v1/editor-projects/${options.projectID}/publish`,
-        {
-          method: 'POST',
-          headers: { 'Idempotency-Key': crypto.randomUUID() },
-          body: JSON.stringify({
-            expected_revision: callbacksRef.current.getRevision(),
-          }),
-        },
-      )
-      setOperationID(result.id)
-      callbacksRef.current.onNotice('正在保存为新图片')
-    } catch (error) {
-      callbacksRef.current.onNotice(
-        error instanceof Error ? error.message : '保存新图片失败',
-      )
-    }
-  }, [options.projectID])
+  const publish = useCallback(
+    async (selection?: {
+      mode: 'single' | 'composite'
+      artboardIDs: string[]
+    }) => {
+      try {
+        await callbacksRef.current.flushSaves()
+        const result = await api<{ id: string }>(
+          `/api/v1/editor-projects/${options.projectID}/publish`,
+          {
+            method: 'POST',
+            headers: { 'Idempotency-Key': crypto.randomUUID() },
+            body: JSON.stringify({
+              expected_revision: callbacksRef.current.getRevision(),
+              mode: selection?.mode ?? 'single',
+              artboard_ids: selection?.artboardIDs ?? [
+                callbacksRef.current.getActiveArtboardID(),
+              ],
+            }),
+          },
+        )
+        setOperationID(result.id)
+        callbacksRef.current.onNotice('正在保存为新图片')
+      } catch (error) {
+        callbacksRef.current.onNotice(
+          error instanceof Error ? error.message : '保存新图片失败',
+        )
+      }
+    },
+    [options.projectID],
+  )
 
   const publishLayer = useCallback(
     async (layerSetID: string, itemID: string) => {
@@ -314,6 +332,7 @@ export function useEditorOperations(options: UseEditorOperationsOptions) {
     operationID,
     running,
     elapsed,
+    estimatedWait: operation?.estimated_wait ?? initialEstimate,
     currentLayerSet,
     canDecompose,
     capabilityMessage: capability?.availability.message,

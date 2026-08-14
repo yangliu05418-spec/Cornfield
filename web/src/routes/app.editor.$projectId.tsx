@@ -41,12 +41,11 @@ import { ConfirmDialog } from '#/components/confirm-dialog'
 import { StructuredEditor } from '#/features/editor/structured-editor'
 import { EditorOperationWaiting } from '#/features/editor/editor-operation-waiting'
 import { EditorHistory } from '#/features/editor/domain/history'
-import {
-  applyFlatEditorViewToV2,
-  projectFlatEditorDocumentV2,
-} from '#/features/editor/domain/flat-authoring-v2'
+import { applyFlatEditorViewToV2 } from '#/features/editor/domain/flat-authoring-v2'
 import { migrateEditorDocumentV1ToV2 } from '#/features/editor/domain/document-v2'
 import type { EditorDocumentV2 } from '#/features/editor/domain/document-v2'
+import type { EditorDocumentV3 } from '#/features/editor/domain/document-v3'
+import { migrateEditorDocumentToV3 } from '#/features/editor/domain/document-v3'
 import { PixiSurface } from '#/features/editor/renderer/pixi-surface'
 import { useEditorOperations } from '#/features/editor/use-editor-operations'
 import type { LayerDecompositionSettings } from '#/features/editor/use-editor-operations'
@@ -109,9 +108,9 @@ function ImageEditorPage() {
   const [documentState, setDocumentState] = useState<EditorDocument | null>(
     null,
   )
-  const [documentUnsupported, setDocumentUnsupported] = useState(false)
+  const [documentUnsupported] = useState(false)
   const [structuredProject, setStructuredProject] = useState<
-    (EditorProject & { document: EditorDocumentV2 }) | null
+    (EditorProject & { document: EditorDocumentV2 | EditorDocumentV3 }) | null
   >(null)
   const [enteringStructured, setEnteringStructured] = useState(false)
   const [, setHistoryRevision] = useState(0)
@@ -150,18 +149,19 @@ function ImageEditorPage() {
   })
   const [pendingLayerSet, setPendingLayerSet] = useState<LayerSet>()
   const revisionRef = useRef(0)
-  const serverDocumentVersionRef = useRef<1 | 2>(1)
+  const serverDocumentVersionRef = useRef<1 | 2 | 3>(1)
   const dirtyRef = useRef(false)
   const saveTimerRef = useRef<number | undefined>(undefined)
   const savePromiseRef = useRef<Promise<void> | null>(null)
   const documentRef = useRef<EditorDocument | null>(null)
-  const persistedDocumentRef = useRef<EditorDocument | EditorDocumentV2 | null>(
-    null,
-  )
+  const persistedDocumentRef = useRef<
+    EditorDocument | EditorDocumentV2 | EditorDocumentV3 | null
+  >(null)
   const historyRef = useRef(new EditorHistory(100))
   const continuousHistoryRef = useRef<EditorDocument | null>(null)
   const viewportRef = useRef<HTMLDivElement>(null)
   const uploadInputRef = useRef<HTMLInputElement>(null)
+  const structuredInitializedRef = useRef(false)
   const uploadEditorImageRef = useRef<
     (file?: File, position?: { x: number; y: number }) => void
   >(() => undefined)
@@ -174,38 +174,20 @@ function ImageEditorPage() {
   }, [])
 
   useEffect(() => {
-    if (!projectQuery.data || documentRef.current) return
+    if (!projectQuery.data || structuredInitializedRef.current) return
+    structuredInitializedRef.current = true
     serverDocumentVersionRef.current = projectQuery.data.document.schema_version
-    if (projectQuery.data.document.schema_version === 2) {
+    if (projectQuery.data.document.schema_version === 1) {
       setStructuredProject({
         ...projectQuery.data,
-        document: structuredClone(projectQuery.data.document),
+        document: migrateEditorDocumentToV3(projectQuery.data.document),
       })
       return
     }
-    const requestedV2 =
-      new URLSearchParams(window.location.search).get('document') === 'v2'
-    const persisted = requestedV2
-      ? migrateEditorDocumentV1ToV2(projectQuery.data.document)
-      : projectQuery.data.document
-    let projectedDocument: EditorDocument
-    try {
-      projectedDocument =
-        persisted.schema_version === 2
-          ? projectFlatEditorDocumentV2(persisted)
-          : persisted
-    } catch {
-      setDocumentUnsupported(true)
-      return
-    }
-    persistedDocumentRef.current = persisted
-    documentRef.current = projectedDocument
-    setDocumentState(projectedDocument)
-    setCanvasDraft(projectedDocument.canvas)
-    revisionRef.current = projectQuery.data.revision
-    const initialSelection = projectedDocument.objects.at(-1)?.id ?? ''
-    setSelectedID(initialSelection)
-    setSelectedIDs(new Set(initialSelection ? [initialSelection] : []))
+    setStructuredProject({
+      ...projectQuery.data,
+      document: structuredClone(projectQuery.data.document),
+    })
   }, [projectQuery.data])
 
   const fitCanvas = useCallback(() => {
@@ -1235,6 +1217,7 @@ function ImageEditorPage() {
     initialOperationID: projectQuery.data?.latest_operation_id,
     activeLayerSet: projectQuery.data?.active_layer_set,
     getRevision: () => revisionRef.current,
+    getActiveArtboardID: () => '',
     flushSaves,
     onLayerSetReady: (layerSet, sourceRevision) => {
       if (sourceRevision === revisionRef.current && layerSet.applied_to_project)
@@ -1515,7 +1498,11 @@ function ImageEditorPage() {
         project={structuredProject}
         onBack={() => void returnToWorkspace()}
         onProjectChange={(project) => {
-          if (project.document.schema_version !== 2) return
+          if (
+            project.document.schema_version !== 2 &&
+            project.document.schema_version !== 3
+          )
+            return
           const next = { ...project, document: project.document }
           setStructuredProject(next)
           queryClient.setQueryData(['editor-project', projectId], next)
@@ -3144,7 +3131,7 @@ function ImageEditorPage() {
 async function saveEditorDocument(
   url: string,
   expectedRevision: number,
-  document: EditorDocument | EditorDocumentV2,
+  document: EditorDocument | EditorDocumentV2 | EditorDocumentV3,
 ): Promise<{ revision: number }> {
   for (let attempt = 0; ; attempt++) {
     try {

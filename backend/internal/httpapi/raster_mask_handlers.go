@@ -422,15 +422,27 @@ func (s *Server) editorRasterMaskTileContent(w http.ResponseWriter, r *http.Requ
 	w.WriteHeader(http.StatusOK)
 }
 
-func editorRasterNode(raw json.RawMessage, nodeID string) (*studioEditor.DocumentV2, *studioEditor.NodeV2, error) {
+func editorRasterNode(raw json.RawMessage, nodeID string) (any, *studioEditor.NodeV2, error) {
 	decoded, err := studioEditor.DecodeAny(raw)
-	if err != nil || decoded.SchemaVersion != 2 || decoded.V2 == nil {
+	if err != nil {
 		return nil, nil, studioEditor.ErrInvalidDocument
 	}
-	for index := range decoded.V2.Nodes {
-		node := &decoded.V2.Nodes[index]
-		if node.ID == nodeID && node.Type == "raster" && node.AssetID != nil {
-			return decoded.V2, node, nil
+	if decoded.SchemaVersion == 2 && decoded.V2 != nil {
+		for index := range decoded.V2.Nodes {
+			node := &decoded.V2.Nodes[index]
+			if node.ID == nodeID && node.Type == "raster" && node.AssetID != nil {
+				return decoded.V2, node, nil
+			}
+		}
+	}
+	if decoded.SchemaVersion == 3 && decoded.V3 != nil {
+		for artboardIndex := range decoded.V3.Artboards {
+			for nodeIndex := range decoded.V3.Artboards[artboardIndex].Nodes {
+				node := &decoded.V3.Artboards[artboardIndex].Nodes[nodeIndex]
+				if node.ID == nodeID && node.Type == "raster" && node.AssetID != nil {
+					return decoded.V3, node, nil
+				}
+			}
 		}
 	}
 	return nil, nil, studioEditor.ErrInvalidDocument

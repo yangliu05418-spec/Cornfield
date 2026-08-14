@@ -17,6 +17,15 @@ import type { EditorViewport } from './renderer/types'
 
 type Props = {
   document: EditorDocumentV2
+  artboardOffset?: { x: number; y: number }
+  artboards?: Array<{
+    id: string
+    x: number
+    y: number
+    width: number
+    height: number
+    active: boolean
+  }>
   assets: ReadonlyMap<string, Asset>
   view: EditorViewport
   selectedIDs: ReadonlySet<string>
@@ -33,10 +42,14 @@ type Props = {
   onFit: () => void
   shapeSelection?: 'rectangle' | 'ellipse'
   onShapeSelection: (mask: EditorShapeMaskV2 | undefined) => void
+  onArtboardMove?: (delta: { x: number; y: number }) => void
+  ariaLabel?: string
 }
 
 export function StructuredCanvasInteraction({
   document,
+  artboardOffset = { x: 0, y: 0 },
+  artboards,
   assets,
   view,
   selectedIDs,
@@ -49,6 +62,8 @@ export function StructuredCanvasInteraction({
   onFit,
   shapeSelection,
   onShapeSelection,
+  onArtboardMove,
+  ariaLabel = '专业图层画布',
 }: Props) {
   const rootRef = useRef<HTMLDivElement>(null)
   const cancelPointerSessionRef = useRef<() => void>(() => undefined)
@@ -60,6 +75,10 @@ export function StructuredCanvasInteraction({
     [assets, document, selectedIDs],
   )
   const scale = view.zoom / 100
+  const toActiveArtboardPoint = (point: { x: number; y: number }) => ({
+    x: point.x - artboardOffset.x,
+    y: point.y - artboardOffset.y,
+  })
 
   useEffect(() => {
     if (!spacePressed) return
@@ -106,6 +125,27 @@ export function StructuredCanvasInteraction({
       return
     }
 
+    if (event.altKey && onArtboardMove && !disabled) {
+      let previous = { x: event.clientX, y: event.clientY }
+      const move = (moveEvent: PointerEvent) => {
+        const next = { x: moveEvent.clientX, y: moveEvent.clientY }
+        onArtboardMove({
+          x: (next.x - previous.x) / scale,
+          y: (next.y - previous.y) / scale,
+        })
+        previous = next
+      }
+      const stop = () => {
+        finish(move, stop)
+        cancelPointerSessionRef.current = () => undefined
+      }
+      cancelPointerSessionRef.current = () => finish(move, stop)
+      window.addEventListener('pointermove', move)
+      window.addEventListener('pointerup', stop)
+      window.addEventListener('pointercancel', stop)
+      return
+    }
+
     if (shapeSelection) {
       const active = document.nodes.find((node) => node.id === activeID)
       const asset = active?.asset_id ? assets.get(active.asset_id) : undefined
@@ -114,14 +154,13 @@ export function StructuredCanvasInteraction({
         new Map(document.nodes.map((node) => [node.id, node])),
         active.id,
       )
-      const start = screenPointToWorld(event.clientX, event.clientY, rect, view)
+      const start = toActiveArtboardPoint(
+        screenPointToWorld(event.clientX, event.clientY, rect, view),
+      )
       let current = start
       const move = (moveEvent: PointerEvent) => {
-        current = screenPointToWorld(
-          moveEvent.clientX,
-          moveEvent.clientY,
-          rect,
-          view,
+        current = toActiveArtboardPoint(
+          screenPointToWorld(moveEvent.clientX, moveEvent.clientY, rect, view),
         )
         const mask = worldPointsToNodeRect(
           worldTransform,
@@ -155,7 +194,9 @@ export function StructuredCanvasInteraction({
       return
     }
 
-    const point = screenPointToWorld(event.clientX, event.clientY, rect, view)
+    const point = toActiveArtboardPoint(
+      screenPointToWorld(event.clientX, event.clientY, rect, view),
+    )
     const hitID = hitTestEditorDocument(document, assets, point)
     if (!hitID) {
       if (!event.shiftKey) onSelectionChange(new Set(), '')
@@ -191,11 +232,8 @@ export function StructuredCanvasInteraction({
     let finalDocument = document
     let changed = false
     const move = (moveEvent: PointerEvent) => {
-      const current = screenPointToWorld(
-        moveEvent.clientX,
-        moveEvent.clientY,
-        rect,
-        view,
+      const current = toActiveArtboardPoint(
+        screenPointToWorld(moveEvent.clientX, moveEvent.clientY, rect, view),
       )
       const delta = { x: current.x - start.x, y: current.y - start.y }
       if (!changed && Math.hypot(delta.x, delta.y) * scale < 2) return
@@ -243,8 +281,16 @@ export function StructuredCanvasInteraction({
     }
     const rect = root.getBoundingClientRect()
     const screenCenter = {
-      x: rect.left + rect.width / 2 + view.panX + center.x * scale,
-      y: rect.top + rect.height / 2 + view.panY + center.y * scale,
+      x:
+        rect.left +
+        rect.width / 2 +
+        view.panX +
+        (center.x + artboardOffset.x) * scale,
+      y:
+        rect.top +
+        rect.height / 2 +
+        view.panY +
+        (center.y + artboardOffset.y) * scale,
     }
     const startDistance = Math.max(
       1,
@@ -346,7 +392,7 @@ export function StructuredCanvasInteraction({
       data-panning={spacePressed || dragging || undefined}
       data-shape-tool={shapeSelection}
       role="region"
-      aria-label="专业图层画布"
+      aria-label={ariaLabel}
       tabIndex={0}
       onPointerDown={beginPointer}
       onWheel={(event) => {
@@ -434,23 +480,37 @@ export function StructuredCanvasInteraction({
         }
       }}
     >
-      <div
-        className="structured-artboard-outline"
-        style={
+      {(
+        artboards ?? [
           {
+            id: 'legacy',
+            x: artboardOffset.x,
+            y: artboardOffset.y,
             width: document.canvas.width,
             height: document.canvas.height,
-            transform: `translate(${view.panX}px, ${view.panY}px) scale(${scale})`,
-            '--editor-zoom': scale,
-          } as CSSProperties
-        }
-        aria-hidden="true"
-      />
+            active: true,
+          },
+        ]
+      ).map((artboard) => (
+        <div
+          key={artboard.id}
+          className={`structured-artboard-outline${artboard.active ? ' active' : ''}`}
+          style={
+            {
+              width: artboard.width,
+              height: artboard.height,
+              transform: `translate(${view.panX}px, ${view.panY}px) scale(${scale}) translate(${artboard.x}px, ${artboard.y}px)`,
+              '--editor-zoom': scale,
+            } as CSSProperties
+          }
+          aria-hidden="true"
+        />
+      ))}
       {selectionBounds && (
         <div
           className="structured-selection-world"
           style={{
-            transform: `translate(${view.panX}px, ${view.panY}px) scale(${scale})`,
+            transform: `translate(${view.panX}px, ${view.panY}px) scale(${scale}) translate(${artboardOffset.x}px, ${artboardOffset.y}px)`,
           }}
         >
           <div
@@ -526,7 +586,7 @@ export function StructuredCanvasInteraction({
         <div
           className="structured-selection-world"
           style={{
-            transform: `translate(${view.panX}px, ${view.panY}px) scale(${scale})`,
+            transform: `translate(${view.panX}px, ${view.panY}px) scale(${scale}) translate(${artboardOffset.x}px, ${artboardOffset.y}px)`,
           }}
         >
           <div

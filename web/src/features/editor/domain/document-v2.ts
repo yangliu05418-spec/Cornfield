@@ -143,8 +143,7 @@ export function validateEditorDocumentV2(document: EditorDocumentV2): string[] {
     pixels > 36_000_000
   )
     errors.push('canvas')
-  if (document.nodes.length < 1 || document.nodes.length > 500)
-    errors.push('nodes')
+  if (document.nodes.length > 500) errors.push('nodes')
 
   const nodes = new Map(document.nodes.map((node) => [node.id, node]))
   if (nodes.size !== document.nodes.length) errors.push('duplicate-id')

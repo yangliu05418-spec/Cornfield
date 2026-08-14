@@ -37,18 +37,33 @@ func (s *Server) deleteAsset(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusConflict, "DERIVED_ASSET_MANAGED", "工作台内部图层由工程统一管理", false, r)
 		return
 	}
+	var multiArtboardAnchor bool
+	err = tx.QueryRow(r.Context(), `SELECT EXISTS(
+		SELECT 1 FROM image_editor_projects p WHERE p.owner_user_id=$1 AND p.source_asset_id=$2
+		AND p.document->>'schema_version'='3' AND jsonb_array_length(p.document->'artboards')>1
+	)`, sess.UserID, assetID).Scan(&multiArtboardAnchor)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "ASSET_DELETE_FAILED", "删除资产失败", true, r)
+		return
+	}
+	if multiArtboardAnchor {
+		writeError(w, http.StatusConflict, "ASSET_ANCHORS_MULTI_ARTBOARD_PROJECT", "该图片关联多画板工程，请先在工作台删除工程", false, r)
+		return
+	}
 	var editorReferences int
 	err = tx.QueryRow(r.Context(), `SELECT count(*) FROM (
 		SELECT p.id::text AS ref FROM image_editor_projects p
 		WHERE p.owner_user_id=$1 AND p.source_asset_id<>$2
 		AND (p.document @> jsonb_build_object('objects',jsonb_build_array(jsonb_build_object('asset_id',$2::text)))
-			OR p.document @> jsonb_build_object('nodes',jsonb_build_array(jsonb_build_object('asset_id',$2::text))))
+			OR p.document @> jsonb_build_object('nodes',jsonb_build_array(jsonb_build_object('asset_id',$2::text)))
+			OR p.document @> jsonb_build_object('artboards',jsonb_build_array(jsonb_build_object('nodes',jsonb_build_array(jsonb_build_object('asset_id',$2::text))))))
 		UNION ALL
 		SELECT o.id::text FROM asset_operations o JOIN image_editor_projects p ON p.id=o.editor_project_id
 		WHERE o.owner_user_id=$1 AND p.source_asset_id<>$2
 		AND o.status NOT IN ('succeeded','failed','cancelled','submission_uncertain')
 		AND (o.source_document @> jsonb_build_object('objects',jsonb_build_array(jsonb_build_object('asset_id',$2::text)))
-			OR o.source_document @> jsonb_build_object('nodes',jsonb_build_array(jsonb_build_object('asset_id',$2::text))))
+			OR o.source_document @> jsonb_build_object('nodes',jsonb_build_array(jsonb_build_object('asset_id',$2::text)))
+			OR o.source_document @> jsonb_build_object('artboards',jsonb_build_array(jsonb_build_object('nodes',jsonb_build_array(jsonb_build_object('asset_id',$2::text))))))
 	) refs`, sess.UserID, assetID).Scan(&editorReferences)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "ASSET_DELETE_FAILED", "删除资产失败", true, r)

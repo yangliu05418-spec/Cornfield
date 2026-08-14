@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs'
 import { expect, test } from '@playwright/test'
 import type { Page } from '@playwright/test'
+import type { EditorDocumentV3 } from '../src/features/editor/domain/document-v3'
 
 const mockImage = `<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="900" viewBox="0 0 1200 900"><defs><linearGradient id="g" x2="1" y2="1"><stop stop-color="#15191d"/><stop offset=".52" stop-color="#556b3a"/><stop offset="1" stop-color="#d1fe17"/></linearGradient></defs><rect width="1200" height="900" fill="url(#g)"/><circle cx="770" cy="300" r="180" fill="#d1fe17" opacity=".28"/><path d="M0 690 Q330 510 660 700 T1200 620 V900 H0Z" fill="#090b0c" opacity=".76"/></svg>`
 
@@ -561,7 +562,7 @@ test('asset workspace creates folders, moves assets, and archives without deleti
   ).toBeVisible()
 })
 
-test('image editor restores a source project and autosaves keyboard edits', async ({
+test.skip('legacy V1 editor restores a source project and autosaves keyboard edits', async ({
   page,
 }) => {
   const backend = await installStudioMocks(page)
@@ -790,7 +791,7 @@ test('image editor restores a source project and autosaves keyboard edits', asyn
   await expect(page.getByText('已保存')).toBeVisible()
 })
 
-test('image editor crops a rotated layer with explicit apply and cancel', async ({
+test.skip('legacy V1 editor crops a rotated layer with explicit apply and cancel', async ({
   page,
 }) => {
   const backend = await installStudioMocks(page)
@@ -875,7 +876,7 @@ test('image editor crops a rotated layer with explicit apply and cancel', async 
   expect(backend.editorState().document.objects[0].crop?.width).toBeLessThan(1)
 })
 
-test('image editor keeps DOM as the default renderer and mounts Pixi only when requested', async ({
+test.skip('legacy V1 editor keeps DOM as the default renderer and mounts Pixi only when requested', async ({
   page,
 }) => {
   await installStudioMocks(page)
@@ -913,7 +914,7 @@ test('image editor keeps DOM as the default renderer and mounts Pixi only when r
   await expect(page.locator('.editor-canvas > img')).toHaveCSS('opacity', '1')
 })
 
-test('image editor aligns and distributes multiple layers as one undoable edit', async ({
+test.skip('legacy V1 editor aligns and distributes multiple layers as one undoable edit', async ({
   page,
 }) => {
   const backend = await installStudioMocks(page)
@@ -1000,6 +1001,101 @@ test('image editor aligns and distributes multiple layers as one undoable edit',
   )
 })
 
+test('V3 editor autosaves artboards and restores them after reload', async ({
+  page,
+}) => {
+  const backend = await installStudioMocks(page)
+  const pageErrors: string[] = []
+  const consoleErrors: string[] = []
+  page.on('pageerror', (error) => pageErrors.push(error.message))
+  page.on('console', (message) => {
+    if (message.type() === 'error') consoleErrors.push(message.text())
+  })
+  await page.goto('/app/editor/editor-project-1')
+
+  await expect(page.getByTestId('editor-dom-surface')).toBeVisible()
+  await expect(page.getByRole('region', { name: '图片编辑画布' })).toBeVisible()
+  await expect(page.getByRole('option', { name: /1024×1024/ })).toBeVisible()
+
+  const name = page.getByRole('textbox', { name: '画板名称' })
+  await name.fill('主画板')
+  await name.blur()
+  await expect.poll(() => backend.editorState().revision).toBeGreaterThan(0)
+  expect(backend.editorState().document.schema_version).toBe(3)
+  expect(backend.editorState().document.artboards[0].name).toBe('主画板')
+
+  await page.getByRole('button', { name: '新建空白画板' }).click()
+  const creator = page.locator('.structured-new-artboard')
+  await creator.locator('input').nth(0).fill('1600')
+  await creator.locator('input').nth(1).fill('900')
+  await creator.getByRole('button', { name: '创建画板' }).click()
+  await expect.poll(() => pageErrors).toEqual([])
+  await expect
+    .poll(() =>
+      consoleErrors.filter((message) =>
+        message.includes('Invalid editor document'),
+      ),
+    )
+    .toEqual([])
+  await expect
+    .poll(() => backend.editorState().document.artboards.length)
+    .toBe(2)
+  await expect(page.getByRole('option', { name: /1600×900/ })).toBeVisible()
+
+  await page.reload()
+  await expect(page.getByRole('option', { name: /主画板/ })).toBeVisible()
+  await expect(page.getByRole('option', { name: /1600×900/ })).toBeVisible()
+})
+
+test('V3 editor switches between a CSP-safe Pixi surface and DOM fallback', async ({
+  page,
+}) => {
+  await installStudioMocks(page)
+  const pageErrors: string[] = []
+  page.on('pageerror', (error) => pageErrors.push(error.message))
+  await page.goto('/app/editor/editor-project-1')
+
+  await expect(page.getByTestId('editor-dom-surface')).toBeVisible()
+  await page.getByRole('button', { name: '专业模式' }).click()
+  await expect(page.getByTestId('editor-pixi-surface')).toBeVisible()
+  await expect(page.getByText('专业画布暂时无法显示')).toHaveCount(0)
+  expect(pageErrors.some((message) => message.includes('unsafe-eval'))).toBe(
+    false,
+  )
+
+  await page.getByRole('button', { name: '基础模式' }).click()
+  await expect(page.getByTestId('editor-pixi-surface')).toHaveCount(0)
+  await expect(page.getByTestId('editor-dom-surface')).toBeVisible()
+  await expect(page.getByRole('option', { name: /1024×1024/ })).toBeVisible()
+})
+
+test('V3 editor imports every image as an independent artboard', async ({
+  page,
+}) => {
+  const backend = await installStudioMocks(page)
+  await page.goto('/app/editor/editor-project-1')
+
+  await page
+    .locator('.structured-artboard-panel input[type="file"]')
+    .setInputFiles({
+      name: 'reference-board.png',
+      mimeType: 'image/png',
+      buffer: Buffer.from('89504e470d0a1a0a', 'hex'),
+    })
+
+  await expect
+    .poll(() => backend.editorState().document.artboards.length)
+    .toBe(2)
+  const imported = backend.editorState().document.artboards[1]
+  expect(imported.name).toBe('reference-board')
+  expect(imported.nodes).toHaveLength(1)
+  expect(imported.nodes[0].asset_id).toBe('asset-editor-upload')
+  expect(backend.editorState().document.artboards[0].nodes).toHaveLength(1)
+  await expect(
+    page.getByRole('option', { name: /reference-board/ }),
+  ).toBeVisible()
+})
+
 test.describe('mobile studio', () => {
   test.use({ viewport: { width: 390, height: 844 }, hasTouch: true })
 
@@ -1083,33 +1179,44 @@ async function installStudioMocks(
   const postKeys: string[] = []
   let editorRevision = 0
   let editorUploadReady = false
-  let editorDocument: {
-    schema_version: 1
-    canvas: { width: number; height: number }
-    objects: Array<{
-      id: string
-      name: string
-      asset_id: string
-      transform: number[]
-      opacity: number
-      visible: boolean
-      locked: boolean
-      z_index: number
-      crop?: { x: number; y: number; width: number; height: number }
-    }>
-  } = {
-    schema_version: 1 as const,
-    canvas: { width: 1024, height: 1024 },
-    objects: [
+  let editorDocument: EditorDocumentV3 = {
+    schema_version: 3 as const,
+    renderer_semantics_version: 2 as const,
+    active_artboard_id: 'artboard-1',
+    artboards: [
       {
-        id: 'source',
-        name: '源图',
-        asset_id: 'asset-0',
-        transform: [1, 0, 0, 1, 0, 0],
-        opacity: 1,
+        id: 'artboard-1',
+        name: '画板 1',
+        order_key: '000001',
+        x: 0,
+        y: 0,
+        width: 1024,
+        height: 1024,
         visible: true,
         locked: false,
-        z_index: 0,
+        nodes: [
+          {
+            id: 'source',
+            type: 'raster' as const,
+            name: '源图',
+            parent_id: null,
+            order_key: '000001',
+            asset_id: 'asset-0',
+            transform: [1, 0, 0, 1, 0, 0] as [
+              number,
+              number,
+              number,
+              number,
+              number,
+              number,
+            ],
+            opacity: 1,
+            blend_mode: 'normal' as const,
+            visible: true,
+            locked: false,
+            effects: [],
+          },
+        ],
       },
     ],
   }
@@ -1446,7 +1553,24 @@ async function installStudioMocks(
     postAttempts: () => postAttempts,
     postKeys: () => [...postKeys],
     refineAttempts: () => refineAttempts,
-    editorState: () => ({ revision: editorRevision, document: editorDocument }),
+    editorState: () => ({
+      revision: editorRevision,
+      document: editorDocument as unknown as {
+        schema_version: number
+        canvas: { width: number; height: number }
+        objects: Array<{
+          id: string
+          name: string
+          asset_id: string
+          transform: number[]
+          opacity: number
+          visible: boolean
+          locked: boolean
+          crop?: { x: number; y: number; width: number; height: number }
+        }>
+        artboards: EditorDocumentV3['artboards']
+      },
+    }),
   }
 }
 

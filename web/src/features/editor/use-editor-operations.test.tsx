@@ -68,7 +68,15 @@ describe('useEditorOperations', () => {
           ],
         })
       if (path.endsWith('/layer-decompositions') && init?.method === 'POST')
-        return Promise.resolve({ id: 'operation' })
+        return Promise.resolve({
+          id: 'operation',
+          estimated_wait: {
+            lower_seconds: 70,
+            upper_seconds: 90,
+            sample_size: 10,
+            basis: 'global',
+          },
+        })
       if (path === '/api/v1/asset-operations/operation')
         return Promise.resolve({
           id: 'operation',
@@ -94,6 +102,7 @@ describe('useEditorOperations', () => {
         useEditorOperations({
           projectID: 'project',
           getRevision: () => 1,
+          getActiveArtboardID: () => 'artboard-1',
           flushSaves,
           onLayerSetReady,
           onNotice: vi.fn(),
@@ -111,6 +120,18 @@ describe('useEditorOperations', () => {
     )
 
     expect(flushSaves).toHaveBeenCalledTimes(1)
+    const submit = apiMock.mock.calls.find(([path]) =>
+      String(path).endsWith('/layer-decompositions'),
+    )
+    expect(
+      JSON.parse((submit?.[1] as RequestInit).body as string),
+    ).toMatchObject({ artboard_id: 'artboard-1' })
+    expect(result.current.estimatedWait).toEqual({
+      lower_seconds: 70,
+      upper_seconds: 90,
+      sample_size: 10,
+      basis: 'global',
+    })
     await waitFor(() => expect(onLayerSetReady).toHaveBeenCalledTimes(1))
     expect(onLayerSetReady).toHaveBeenCalledWith(layerSet, 1)
     await queryClient.invalidateQueries({

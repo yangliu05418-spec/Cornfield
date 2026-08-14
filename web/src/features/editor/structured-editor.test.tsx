@@ -103,6 +103,14 @@ function project(): EditorProject & { document: EditorDocumentV2 } {
   }
 }
 
+function savedNodes(body: { document: unknown }) {
+  const document = body.document as {
+    nodes?: EditorDocumentV2['nodes']
+    artboards?: Array<{ nodes: EditorDocumentV2['nodes'] }>
+  }
+  return document.nodes ?? document.artboards?.[0]?.nodes ?? []
+}
+
 afterEach(() => {
   cleanup()
   vi.useRealTimers()
@@ -229,7 +237,7 @@ describe('StructuredEditor', () => {
       )
       expect(saveCall).toBeTruthy()
       const body = JSON.parse((saveCall?.[1] as RequestInit).body as string)
-      expect(body.document.nodes[0]).toMatchObject({
+      expect(savedNodes(body)[0]).toMatchObject({
         blend_mode: 'multiply',
         effects: [
           {
@@ -280,7 +288,7 @@ describe('StructuredEditor', () => {
           (init as RequestInit | undefined)?.method === 'PUT',
       )
       const body = JSON.parse((saveCall?.[1] as RequestInit).body as string)
-      expect(body.document.nodes).toContainEqual(
+      expect(savedNodes(body)).toContainEqual(
         expect.objectContaining({
           type: 'adjustment',
           target_id: 'first',
@@ -332,7 +340,7 @@ describe('StructuredEditor', () => {
         (init as RequestInit | undefined)?.method === 'PUT',
     )
     const body = JSON.parse((saveCall?.[1] as RequestInit).body as string)
-    expect(body.document.nodes[0].shape_mask).toMatchObject({ inverted: true })
+    expect(savedNodes(body)[0].shape_mask).toMatchObject({ inverted: true })
   })
 
   it('stops autosave after a revision conflict instead of overwriting newer work', async () => {

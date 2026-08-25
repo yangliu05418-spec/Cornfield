@@ -180,7 +180,7 @@ test('prompt grows to a bounded height and accepts mixed clipboard content', asy
   await expect(page.getByRole('img', { name: '参考图' })).toHaveCount(1)
 })
 
-test('prompt drop zone previews and uploads a dragged reference image', async ({
+test('prompt drop zone previews a dragged reference image', async ({
   page,
 }, testInfo) => {
   await installStudioMocks(page)
@@ -226,6 +226,35 @@ test('prompt drop zone previews and uploads a dragged reference image', async ({
 
   await expect(page.getByText('松开，将图片置入参考区')).toBeHidden()
   await expect(page.getByRole('img', { name: '参考图' })).toHaveCount(1)
+})
+
+test('local reference previews immediately and uploads only when generating', async ({
+  page,
+}) => {
+  const studio = await installStudioMocks(page)
+  await page.goto('/app/create')
+  await expect(page.getByRole('article')).toHaveCount(18)
+  const initialWallCount = await page.getByRole('article').count()
+
+  await page
+    .locator('input[type="file"][aria-label="添加参考图"]')
+    .setInputFiles({
+      name: 'local-reference.jpg',
+      mimeType: 'image/jpeg',
+      buffer: Buffer.from([0xff, 0xd8, 0xff, 0xd9]),
+    })
+
+  await expect(page.getByRole('img', { name: '参考图' })).toHaveCount(1)
+  expect(studio.uploadAttempts()).toBe(0)
+  await page.getByRole('textbox', { name: '生成提示词' }).fill('雨夜中的车站')
+  await page.getByRole('button', { name: '生成', exact: true }).click()
+
+  await expect.poll(studio.uploadAttempts).toBe(1)
+  await expect
+    .poll(() => studio.lastGenerationInput()?.input_asset_ids)
+    .toEqual(['asset-editor-upload'])
+  expect(studio.lastUploadPurpose()).toBe('reference')
+  expect(await page.getByRole('article').count()).toBe(initialWallCount + 1)
 })
 
 test('a restored temporary-password session cannot enter the studio', async ({
@@ -1259,6 +1288,7 @@ async function installStudioMocks(
     thumb_1280_url: `/mock-image.svg?asset=${index}&size=1280`,
     created_at: new Date(Date.now() - index * 1_000).toISOString(),
   }))
+  let hiddenAssets: typeof assets = []
   let generations: unknown[] = []
   let folders: {
     id: string
@@ -1268,6 +1298,9 @@ async function installStudioMocks(
   }[] = []
   let revoked = false
   let postAttempts = 0
+  let uploadAttempts = 0
+  let lastUploadPurpose = ''
+  let lastGenerationInput: { input_asset_ids?: string[] } | undefined
   let refineAttempts = 0
   const postKeys: string[] = []
   let editorRevision = 0
@@ -1347,7 +1380,10 @@ async function installStudioMocks(
       return route.fulfill({ status: 204 })
     }
     if (pathname === '/api/v1/uploads' && request.method() === 'POST') {
+      uploadAttempts++
       editorUploadReady = false
+      const input = request.postDataJSON() as { purpose?: string }
+      lastUploadPurpose = input.purpose ?? 'library'
       const uploaded = {
         ...assets[0],
         id: 'asset-editor-upload',
@@ -1355,7 +1391,9 @@ async function installStudioMocks(
         original_filename: 'editor-layer.png',
         created_at: new Date().toISOString(),
       }
-      assets = [uploaded, ...assets]
+      if (lastUploadPurpose === 'reference')
+        hiddenAssets = [uploaded, ...hiddenAssets]
+      else assets = [uploaded, ...assets]
       return json(
         route,
         {
@@ -1456,7 +1494,9 @@ async function installStudioMocks(
     }
     const assetMatch = pathname.match(/^\/api\/v1\/assets\/([^/]+)$/)
     if (assetMatch && request.method() === 'GET') {
-      const asset = assets.find((item) => item.id === assetMatch[1])
+      const asset = [...assets, ...hiddenAssets].find(
+        (item) => item.id === assetMatch[1],
+      )
       return asset
         ? json(route, asset)
         : json(route, { error: { code: 'ASSET_NOT_FOUND' } }, 404)
@@ -1584,7 +1624,9 @@ async function installStudioMocks(
         aspect_ratio: string
         resolution: string
         draw_count: number
+        input_asset_ids?: string[]
       }
+      lastGenerationInput = input
       await new Promise((resolve) => setTimeout(resolve, 2_000))
       const batch = {
         id: 'batch-qa',
@@ -1645,6 +1687,9 @@ async function installStudioMocks(
     },
     postAttempts: () => postAttempts,
     postKeys: () => [...postKeys],
+    uploadAttempts: () => uploadAttempts,
+    lastUploadPurpose: () => lastUploadPurpose,
+    lastGenerationInput: () => lastGenerationInput,
     refineAttempts: () => refineAttempts,
     editorState: () => ({
       revision: editorRevision,

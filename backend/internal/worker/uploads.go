@@ -42,11 +42,11 @@ func (v *UploadValidator) Run(ctx context.Context) {
 
 func (v *UploadValidator) processOne(ctx context.Context) bool {
 	var id, ownerID uuid.UUID
-	var filename, declaredMedia, quarantineKey string
-	err := v.DB.QueryRow(ctx, `SELECT s.id,s.owner_user_id,s.original_filename,s.declared_media_type,s.quarantine_key
+	var filename, declaredMedia, quarantineKey, purpose string
+	err := v.DB.QueryRow(ctx, `SELECT s.id,s.owner_user_id,s.original_filename,s.declared_media_type,s.quarantine_key,s.purpose
 		FROM upload_sessions s JOIN users u ON u.id=s.owner_user_id
 		WHERE s.status='validating' AND s.expires_at>now() AND u.status='active'
-		ORDER BY s.created_at LIMIT 1`).Scan(&id, &ownerID, &filename, &declaredMedia, &quarantineKey)
+		ORDER BY s.created_at LIMIT 1`).Scan(&id, &ownerID, &filename, &declaredMedia, &quarantineKey, &purpose)
 	if err != nil {
 		if !errors.Is(err, pgx.ErrNoRows) {
 			v.Log.Warn("upload validation queue read failed", "error", err)
@@ -135,8 +135,8 @@ func (v *UploadValidator) processOne(ctx context.Context) bool {
 	}
 	var assetID uuid.UUID
 	filename = canonicalUploadFilename(filename, extension)
-	err = tx.QueryRow(ctx, `INSERT INTO assets(owner_user_id,kind,storage_key,sha256,media_type,original_filename,width,height,byte_size,blur_data_url)
-		VALUES($1,'upload',$2,$3,$4,$5,$6,$7,$8,$9) RETURNING id`, ownerID, key, digest, media, filename, width, height, size, blurDataURL).Scan(&assetID)
+	err = tx.QueryRow(ctx, `INSERT INTO assets(owner_user_id,kind,storage_key,sha256,media_type,original_filename,width,height,byte_size,blur_data_url,library_visible)
+		VALUES($1,'upload',$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING id`, ownerID, key, digest, media, filename, width, height, size, blurDataURL, uploadVisibleInLibrary(purpose)).Scan(&assetID)
 	if err == nil {
 		command, updateErr := tx.Exec(ctx, `UPDATE upload_sessions SET status='ready',asset_id=$2,updated_at=now()
 			WHERE id=$1 AND status='validating' AND expires_at>now()`, id, assetID)
@@ -173,6 +173,10 @@ func (v *UploadValidator) processOne(ctx context.Context) bool {
 	leaseReleased = true
 	v.Generator.queueOptionalThumbnail(key)
 	return true
+}
+
+func uploadVisibleInLibrary(purpose string) bool {
+	return purpose != "reference"
 }
 
 func canonicalUploadFilename(filename, extension string) string {

@@ -94,3 +94,37 @@ func TestRefinePromptRejectsStaleRevisionAndOversize(t *testing.T) {
 		})
 	}
 }
+
+func TestRefinePromptCountsDeferredReferences(t *testing.T) {
+	server := testPromptRefinerServer(t, modelconfig.Model{
+		ID: "legnext-midjourney", Provider: "legnext", ProviderModel: "midjourney", Enabled: true, OutputsPerDraw: 4,
+		Capabilities: modelconfig.Capabilities{
+			TextToImage: true, ImageToImage: true, AspectRatios: []string{"1:1"}, Resolutions: []string{"SD", "HD"}, MaxReferenceImages: 4,
+			MidjourneyVersions: []string{"8.2"}, DrawCount: modelconfig.DrawCount{Min: 1, Max: 1, Default: 1},
+		},
+	})
+	weight := 1.0
+	body, _ := json.Marshal(map[string]any{
+		"model_id": "legnext-midjourney", "capability_revision": "revision", "prompt": "quiet field",
+		"aspect_ratio": "1:1", "resolution": "SD", "draw_count": 1, "pending_reference_count": 1,
+		"input_asset_ids": []string{},
+		"options": provider.GenerationOptions{Midjourney: &provider.MidjourneyOptions{
+			Version: "8.2", Resolution: "sd", Speed: "fast", Stylize: 100, ImageWeight: &weight,
+		}},
+	})
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/prompts/refine", strings.NewReader(string(body)))
+	response := httptest.NewRecorder()
+	server.refinePrompt(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+	var result promptRefineResponse
+	if err := json.Unmarshal(response.Body.Bytes(), &result); err != nil {
+		t.Fatal(err)
+	}
+	for _, diagnostic := range result.Diagnostics {
+		if diagnostic.Code == "CAPABILITY_INVALID" || diagnostic.Code == "REFERENCE_INVALID" {
+			t.Fatalf("deferred reference was not counted: %#v", result.Diagnostics)
+		}
+	}
+}

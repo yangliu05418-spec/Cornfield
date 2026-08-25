@@ -59,6 +59,24 @@ func TestNormalizeDeclaredUploadMediaType(t *testing.T) {
 	}
 }
 
+func TestNormalizeUploadPurpose(t *testing.T) {
+	for _, test := range []struct {
+		input string
+		want  string
+		ok    bool
+	}{
+		{input: "", want: "library", ok: true},
+		{input: " library ", want: "library", ok: true},
+		{input: "REFERENCE", want: "reference", ok: true},
+		{input: "hidden", ok: false},
+	} {
+		got, ok := normalizeUploadPurpose(test.input)
+		if got != test.want || ok != test.ok {
+			t.Errorf("normalizeUploadPurpose(%q) = %q, %v; want %q, %v", test.input, got, ok, test.want, test.ok)
+		}
+	}
+}
+
 func TestAssetDownloadFilenameUsesActualMediaType(t *testing.T) {
 	jpegName := "download.png"
 	pathName := `C:\Users\person\photo.jpeg`

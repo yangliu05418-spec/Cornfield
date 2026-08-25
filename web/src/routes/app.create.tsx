@@ -95,6 +95,32 @@ type PendingSubmission = {
 
 type GenerationRequest = PendingSubmission['request']
 
+type ReferenceItem =
+  | { key: string; source: 'asset'; asset: Asset }
+  | {
+      key: string
+      source: 'local'
+      file: File
+      previewURL: string
+      mediaType: string
+    }
+
+function assetReference(asset: Asset): ReferenceItem {
+  return { key: `asset:${asset.id}`, source: 'asset', asset }
+}
+
+function referenceByteSize(reference: ReferenceItem): number {
+  return reference.source === 'asset'
+    ? reference.asset.byte_size
+    : reference.file.size
+}
+
+function uploadedReferenceIDs(references: ReferenceItem[]): string[] {
+  return references.flatMap((reference) =>
+    reference.source === 'asset' ? [reference.asset.id] : [],
+  )
+}
+
 type JobEventEnvelope = {
   id: number
   type: string
@@ -269,6 +295,7 @@ function CreatePage() {
   const promptRef = useRef<HTMLTextAreaElement>(null)
   const promptDragDepth = useRef(0)
   const uploadControllers = useRef(new Set<AbortController>())
+  const localReferenceURLs = useRef(new Set<string>())
   const assetRefreshInFlight = useRef<Promise<void> | null>(null)
   const assetRefreshVersion = useRef(0)
   const assetRecoveryRevision = useRef('')
@@ -321,7 +348,8 @@ function CreatePage() {
     tile: false,
   })
   const [density, setDensity] = useState(2)
-  const [references, setReferences] = useState<Asset[]>([])
+  const [references, setReferences] = useState<ReferenceItem[]>([])
+  const [referenceSubmitBusy, setReferenceSubmitBusy] = useState(false)
   const [optimisticBatches, setOptimisticBatches] = useState<GenerationBatch[]>(
     [],
   )
@@ -391,7 +419,7 @@ function CreatePage() {
         promptOptimizationMode,
         draws,
         midjourney,
-        references: references.map((asset) => asset.id),
+        references: references.map((reference) => reference.key),
       }),
     [
       activeModel?.id,
@@ -452,9 +480,23 @@ function CreatePage() {
     () => () => {
       for (const controller of uploadControllers.current) controller.abort()
       uploadControllers.current.clear()
+      for (const url of localReferenceURLs.current) URL.revokeObjectURL(url)
+      localReferenceURLs.current.clear()
     },
     [],
   )
+  useEffect(() => {
+    const activeURLs = new Set(
+      references.flatMap((reference) =>
+        reference.source === 'local' ? [reference.previewURL] : [],
+      ),
+    )
+    for (const url of localReferenceURLs.current) {
+      if (activeURLs.has(url)) continue
+      URL.revokeObjectURL(url)
+      localReferenceURLs.current.delete(url)
+    }
+  }, [references])
   useEffect(() => {
     const pages = generations.data?.pages
     const lastPage = pages?.at(-1)
@@ -535,8 +577,9 @@ function CreatePage() {
         : 0
       return current
         .filter(
-          (asset) =>
-            asset.byte_size <= activeModel.capabilities.max_reference_bytes,
+          (reference) =>
+            referenceByteSize(reference) <=
+            activeModel.capabilities.max_reference_bytes,
         )
         .slice(0, limit)
     })
@@ -741,7 +784,9 @@ function CreatePage() {
       ]),
     [assets.data, generationItems, optimisticBatches],
   )
-  function currentGenerationRequest(): GenerationRequest | null {
+  function currentGenerationRequest(
+    inputAssetIDs = uploadedReferenceIDs(references),
+  ): GenerationRequest | null {
     if (!prompt.trim() || !activeModel || !models.data) return null
     const submittedResolution = isMidjourney
       ? midjourney.version === '8.2' ||
@@ -762,35 +807,86 @@ function CreatePage() {
       aspect_ratio: ratio,
       resolution: submittedResolution,
       draw_count: draws,
-      input_asset_ids: references.map((asset) => asset.id),
+      input_asset_ids: inputAssetIDs,
       options: isMidjourney ? { midjourney } : imageOptions,
     }
   }
 
-  function submit(event: FormEvent) {
+  async function submit(event: FormEvent) {
     event.preventDefault()
-    const request = currentGenerationRequest()
-    if (!request || !activeModel) return
+    if (referenceSubmitBusy || create.isPending) return
+    const referenceSnapshot = [...references]
+    const request = currentGenerationRequest(
+      uploadedReferenceIDs(referenceSnapshot),
+    )
+    const modelSnapshot = activeModel
+    if (!request || !modelSnapshot) return
+
+    setReferenceSubmitBusy(true)
+    try {
+      const inputAssetIDs = new Array<string>(referenceSnapshot.length)
+      const deferred: Array<{
+        reference: Extract<ReferenceItem, { source: 'local' }>
+        index: number
+      }> = []
+      referenceSnapshot.forEach((reference, index) => {
+        if (reference.source === 'asset') {
+          inputAssetIDs[index] = reference.asset.id
+        } else {
+          deferred.push({ reference, index })
+        }
+      })
+      let nextDeferred = 0
+      let firstFailure: unknown
+      await Promise.all(
+        Array.from({ length: Math.min(3, deferred.length) }, async () => {
+          while (nextDeferred < deferred.length) {
+            const item = deferred[nextDeferred++]
+            try {
+              const asset = await uploadReferenceForGeneration(item.reference)
+              inputAssetIDs[item.index] = asset.id
+              setReferences((current) =>
+                current.map((reference) =>
+                  reference.key === item.reference.key
+                    ? assetReference(asset)
+                    : reference,
+                ),
+              )
+            } catch (reason) {
+              firstFailure ??= reason
+            }
+          }
+        }),
+      )
+      if (firstFailure) throw firstFailure
+      request.input_asset_ids = inputAssetIDs
+    } catch (reason) {
+      setNotice(reason instanceof Error ? reason.message : '参考图上传失败')
+      return
+    } finally {
+      setReferenceSubmitBusy(false)
+    }
+
     const idempotencyKey = crypto.randomUUID()
     const optimisticID = `optimistic:${idempotencyKey}`
     const createdAt = new Date().toISOString()
-    const expectedOutputs = draws * activeModel.outputs_per_draw
+    const expectedOutputs = request.draw_count * modelSnapshot.outputs_per_draw
     const batch: GenerationBatch = {
       id: optimisticID,
-      model_id: activeModel.id,
-      prompt: prompt.trim(),
-      aspect_ratio: ratio,
+      model_id: request.model_id,
+      prompt: request.prompt,
+      aspect_ratio: request.aspect_ratio,
       resolution: request.resolution,
-      draw_count: draws,
+      draw_count: request.draw_count,
       expected_outputs: expectedOutputs,
       completed_outputs: 0,
       status: 'queued',
       created_at: createdAt,
-      jobs: Array.from({ length: draws }, (_, drawIndex) => ({
+      jobs: Array.from({ length: request.draw_count }, (_, drawIndex) => ({
         id: `${optimisticID}:job:${drawIndex}`,
         draw_index: drawIndex,
         status: 'creating',
-        expected_outputs: activeModel.outputs_per_draw,
+        expected_outputs: modelSnapshot.outputs_per_draw,
       })),
       options: request.options,
     }
@@ -814,7 +910,12 @@ function CreatePage() {
     try {
       const result = await api<PromptRefineResponse>('/api/v1/prompts/refine', {
         method: 'POST',
-        body: JSON.stringify(request),
+        body: JSON.stringify({
+          ...request,
+          pending_reference_count: references.filter(
+            (reference) => reference.source === 'local',
+          ).length,
+        }),
       })
       if (refinerRequestSignatureRef.current !== signature) {
         setNotice('提示词或生成参数已变化，请重新检查')
@@ -844,8 +945,14 @@ function CreatePage() {
     const previousAssets = await optimisticallyRemoveAssets(queryClient, [
       asset.id,
     ])
-    const wasReference = references.some((item) => item.id === asset.id)
-    setReferences((current) => current.filter((item) => item.id !== asset.id))
+    const wasReference = references.some(
+      (item) => item.source === 'asset' && item.asset.id === asset.id,
+    )
+    setReferences((current) =>
+      current.filter(
+        (item) => item.source !== 'asset' || item.asset.id !== asset.id,
+      ),
+    )
     try {
       await api(`/api/v1/assets/${asset.id}`, { method: 'DELETE' })
       await Promise.all([
@@ -857,9 +964,11 @@ function CreatePage() {
       restoreAssetCaches(queryClient, previousAssets)
       if (wasReference) {
         setReferences((current) =>
-          current.some((item) => item.id === asset.id)
+          current.some(
+            (item) => item.source === 'asset' && item.asset.id === asset.id,
+          )
             ? current
-            : [...current, asset],
+            : [...current, assetReference(asset)],
         )
       }
       setNotice(reason instanceof Error ? reason.message : '删除失败')
@@ -922,7 +1031,11 @@ function CreatePage() {
         api<Asset>(`/api/v1/assets/${id}`).catch(() => null),
       ),
     )
-    setReferences(restored.filter((asset): asset is Asset => asset !== null))
+    setReferences(
+      restored
+        .filter((asset): asset is Asset => asset !== null)
+        .map(assetReference),
+    )
     window.requestAnimationFrame(() => promptRef.current?.focus())
     setNotice('原参数已恢复，请调整描述或参数后重新生成')
   }
@@ -995,24 +1108,20 @@ function CreatePage() {
         `当前模型的单张参考图上限为 ${referenceLimitLabel(activeModel.capabilities.max_reference_bytes)}`,
       )
     setReferences((current) =>
-      current.some((item) => item.id === asset.id)
+      current.some(
+        (item) => item.source === 'asset' && item.asset.id === asset.id,
+      )
         ? current
-        : [...current, asset].slice(
+        : [...current, assetReference(asset)].slice(
             0,
             activeModel.capabilities.max_reference_images,
           ),
     )
     setNotice('已加入参考图')
   }
-  async function uploadReference(file?: File) {
-    if (!file || !activeModel?.capabilities.image_to_image)
-      return setNotice('当前模型不支持参考图')
-    const mediaType = normalizeReferenceMediaType(file)
-    if (!mediaType) return setNotice('仅支持 JPEG、PNG 或 WebP 图片')
-    if (file.size > activeModel.capabilities.max_reference_bytes)
-      return setNotice(
-        `当前模型的单张参考图上限为 ${referenceLimitLabel(activeModel.capabilities.max_reference_bytes)}`,
-      )
+  async function uploadReferenceForGeneration(
+    reference: Extract<ReferenceItem, { source: 'local' }>,
+  ): Promise<Asset> {
     const controller = new AbortController()
     uploadControllers.current.add(controller)
     try {
@@ -1022,15 +1131,16 @@ function CreatePage() {
           method: 'POST',
           signal: controller.signal,
           body: JSON.stringify({
-            filename: file.name,
-            media_type: mediaType,
-            size: file.size,
+            filename: reference.file.name,
+            media_type: reference.mediaType,
+            size: reference.file.size,
+            purpose: 'reference',
           }),
         },
       )
       await api(session.content_url, {
         method: 'PUT',
-        body: file,
+        body: reference.file,
         signal: controller.signal,
       })
       let assetID = ''
@@ -1054,30 +1164,28 @@ function CreatePage() {
         pollDelay = Math.min(Math.ceil(pollDelay * 1.5), 3_000)
       }
       if (!assetID) throw new Error('参考图仍在验证，请稍后重试')
-      const asset = await api<Asset>(`/api/v1/assets/${assetID}`, {
+      return await api<Asset>(`/api/v1/assets/${assetID}`, {
         signal: controller.signal,
       })
-      mergeAsset(queryClient, asset)
-      addReference(asset)
-    } catch (reason) {
-      if (controller.signal.aborted) return
-      setNotice(reason instanceof Error ? reason.message : '参考图上传失败')
     } finally {
       uploadControllers.current.delete(controller)
     }
   }
 
-  function uploadReferenceFiles(files: File[], retainedText = false) {
+  function stageReferenceFiles(files: File[], retainedText = false) {
     const prefix = retainedText ? '文字已保留；' : ''
     if (!activeModel?.capabilities.image_to_image) {
       setNotice(`${prefix}当前模型不支持参考图`)
       return
     }
-    const supported = files.filter(
-      (file) => normalizeReferenceMediaType(file) !== null,
-    )
+    const supported = files.flatMap((file) => {
+      const mediaType = normalizeReferenceMediaType(file)
+      if (!mediaType || file.size < 1) return []
+      if (file.size > activeModel.capabilities.max_reference_bytes) return []
+      return [{ file, mediaType }]
+    })
     if (!supported.length) {
-      setNotice(`${prefix}仅支持 JPEG、PNG 或 WebP 图片`)
+      setNotice(`${prefix}仅支持符合当前模型大小限制的 JPEG、PNG 或 WebP 图片`)
       return
     }
     const remaining = Math.max(
@@ -1091,9 +1199,20 @@ function CreatePage() {
     const selected = supported.slice(0, remaining)
     if (selected.length < supported.length)
       setNotice(`仅添加前 ${selected.length} 张图片，已达到参考图上限`)
-    void (async () => {
-      for (const image of selected) await uploadReference(image)
-    })()
+    const staged = selected.map(({ file, mediaType }) => {
+      const previewURL = URL.createObjectURL(file)
+      localReferenceURLs.current.add(previewURL)
+      return {
+        key: `local:${crypto.randomUUID()}`,
+        source: 'local' as const,
+        file,
+        previewURL,
+        mediaType,
+      }
+    })
+    setReferences((current) => [...current, ...staged])
+    if (selected.length === supported.length)
+      setNotice(`${prefix}已加入 ${selected.length} 张参考图，将在生成时上传`)
   }
 
   function pastePromptContent(event: ClipboardEvent<HTMLTextAreaElement>) {
@@ -1113,7 +1232,7 @@ function CreatePage() {
         promptRef.current?.setSelectionRange(nextCursor, nextCursor)
       })
     }
-    uploadReferenceFiles(images, Boolean(pastedText))
+    stageReferenceFiles(images, Boolean(pastedText))
   }
 
   function promptDragEnter(event: DragEvent<HTMLDivElement>) {
@@ -1143,7 +1262,7 @@ function CreatePage() {
     event.preventDefault()
     promptDragDepth.current = 0
     setReferenceDropActive(false)
-    uploadReferenceFiles(Array.from(event.dataTransfer.files))
+    stageReferenceFiles(Array.from(event.dataTransfer.files))
   }
   return (
     <AppShell>
@@ -1245,23 +1364,31 @@ function CreatePage() {
                   aria-label="添加参考图"
                   disabled={!activeModel?.capabilities.image_to_image}
                   accept=".jpg,.jpeg,.png,.webp,image/jpeg,image/png,image/webp"
+                  multiple
                   onChange={(event) => {
-                    void uploadReference(event.target.files?.[0])
+                    stageReferenceFiles(Array.from(event.target.files ?? []))
                     event.target.value = ''
                   }}
                 />
               </label>
               {references.length > 0 && (
                 <div className="reference-strip">
-                  {references.map((asset) => (
-                    <div key={asset.id}>
-                      <img src={asset.thumb_320_url} alt="参考图" />
+                  {references.map((reference) => (
+                    <div key={reference.key}>
+                      <img
+                        src={
+                          reference.source === 'asset'
+                            ? reference.asset.thumb_320_url
+                            : reference.previewURL
+                        }
+                        alt="参考图"
+                      />
                       <button
                         type="button"
                         aria-label="移除参考图"
                         onClick={() =>
                           setReferences((items) =>
-                            items.filter((item) => item.id !== asset.id),
+                            items.filter((item) => item.key !== reference.key),
                           )
                         }
                       >
@@ -1427,10 +1554,15 @@ function CreatePage() {
             disabled={
               !prompt.trim() ||
               create.isPending ||
+              referenceSubmitBusy ||
               !activeModel?.availability.can_submit
             }
           >
-            {create.isPending ? '提交中…' : '生成'}
+            {referenceSubmitBusy
+              ? '上传参考图…'
+              : create.isPending
+                ? '提交中…'
+                : '生成'}
           </button>
         </form>
         {refinerUndo && (

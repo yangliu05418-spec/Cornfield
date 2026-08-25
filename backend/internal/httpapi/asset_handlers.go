@@ -63,6 +63,7 @@ func (s *Server) createUpload(w http.ResponseWriter, r *http.Request) {
 		Filename  string `json:"filename"`
 		MediaType string `json:"media_type"`
 		Size      int64  `json:"size"`
+		Purpose   string `json:"purpose"`
 	}
 	if !decodeJSON(w, r, &input) {
 		return
@@ -74,6 +75,12 @@ func (s *Server) createUpload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	input.MediaType = mediaType
+	var purposeOK bool
+	input.Purpose, purposeOK = normalizeUploadPurpose(input.Purpose)
+	if !purposeOK {
+		writeError(w, http.StatusUnprocessableEntity, "UPLOAD_PURPOSE_INVALID", "上传用途无效", false, r)
+		return
+	}
 	tx, err := s.db.Begin(r.Context())
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "UPLOAD_CREATE_FAILED", "无法创建上传会话", true, r)
@@ -103,7 +110,7 @@ func (s *Server) createUpload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var id uuid.UUID
-	err = tx.QueryRow(r.Context(), `INSERT INTO upload_sessions(owner_user_id,original_filename,declared_media_type,declared_size) VALUES($1,$2,$3,$4) RETURNING id`, currentSession(r).UserID, input.Filename, input.MediaType, input.Size).Scan(&id)
+	err = tx.QueryRow(r.Context(), `INSERT INTO upload_sessions(owner_user_id,original_filename,declared_media_type,declared_size,purpose) VALUES($1,$2,$3,$4,$5) RETURNING id`, currentSession(r).UserID, input.Filename, input.MediaType, input.Size, input.Purpose).Scan(&id)
 	if err == nil {
 		err = tx.Commit(r.Context())
 	}
@@ -112,6 +119,17 @@ func (s *Server) createUpload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusCreated, map[string]any{"id": id, "status": "created", "content_url": "/api/v1/uploads/" + id.String() + "/content"})
+}
+
+func normalizeUploadPurpose(value string) (string, bool) {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "", "library":
+		return "library", true
+	case "reference":
+		return "reference", true
+	default:
+		return "", false
+	}
 }
 
 func validUploadFilename(value string) bool {
@@ -289,7 +307,7 @@ func (s *Server) listAssets(w http.ResponseWriter, r *http.Request) {
 		LEFT JOIN generation_outputs o ON o.asset_id=a.id
 		LEFT JOIN generation_jobs j ON j.id=o.job_id
 		LEFT JOIN generation_batches b ON b.id=j.batch_id
-		WHERE a.owner_user_id=$1 AND a.purged_at IS NULL AND a.purge_pending=false AND a.kind<>'derived'
+		WHERE a.owner_user_id=$1 AND a.purged_at IS NULL AND a.purge_pending=false AND a.kind<>'derived' AND a.library_visible=true
 		  AND ($2::timestamptz IS NULL OR (a.created_at,a.id)<($2,$3::uuid))
 		  AND ($4='all' OR ($4='active' AND a.archived_at IS NULL) OR ($4='archived' AND a.archived_at IS NOT NULL))
 		  AND ($5::uuid IS NULL OR a.folder_id=$5)

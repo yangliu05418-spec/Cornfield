@@ -18,3 +18,14 @@ func TestCanonicalUploadFilenameUsesDecodedExtension(t *testing.T) {
 		}
 	}
 }
+
+func TestReferenceUploadsStayOutOfLibrary(t *testing.T) {
+	if uploadVisibleInLibrary("reference") {
+		t.Fatal("reference upload must not be visible in the asset library")
+	}
+	for _, purpose := range []string{"library", ""} {
+		if !uploadVisibleInLibrary(purpose) {
+			t.Fatalf("upload purpose %q must remain visible in the asset library", purpose)
+		}
+	}
+}

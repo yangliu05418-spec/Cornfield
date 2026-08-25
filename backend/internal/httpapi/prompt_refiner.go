@@ -38,8 +38,16 @@ type promptRefineResponse struct {
 
 func (s *Server) refinePrompt(w http.ResponseWriter, r *http.Request) {
 	r.Body = http.MaxBytesReader(w, r.Body, maxRefinerBodyBytes)
-	var input generationRequest
-	if !decodeJSON(w, r, &input) {
+	var request struct {
+		generationRequest
+		PendingReferenceCount int `json:"pending_reference_count"`
+	}
+	if !decodeJSON(w, r, &request) {
+		return
+	}
+	input := request.generationRequest
+	if request.PendingReferenceCount < 0 || request.PendingReferenceCount > 10 {
+		writeError(w, http.StatusUnprocessableEntity, "REFERENCE_INVALID", "待上传参考图数量无效", false, r)
 		return
 	}
 	if utf8.RuneCountInString(input.Prompt) > maxRefinerRunes {
@@ -59,7 +67,8 @@ func (s *Server) refinePrompt(w http.ResponseWriter, r *http.Request) {
 	result := s.promptRefiner.Refine(input.Prompt)
 	diagnostics := make([]promptDiagnostic, 0, 4)
 	normalized := input
-	if err := normalizeGenerationOptions(model.ID, model.Provider, model.Capabilities.MidjourneyVersions, model.Capabilities.Qualities, model.Capabilities.PromptOptimizationModes, len(input.InputAssetIDs), &normalized); err != nil {
+	referenceCount := len(input.InputAssetIDs) + request.PendingReferenceCount
+	if err := normalizeGenerationOptions(model.ID, model.Provider, model.Capabilities.MidjourneyVersions, model.Capabilities.Qualities, model.Capabilities.PromptOptimizationModes, referenceCount, &normalized); err != nil {
 		diagnostics = append(diagnostics, promptDiagnostic{Code: "CAPABILITY_INVALID", Severity: "warning", Message: "当前模型参数需要调整：" + err.Error()})
 	}
 	allowedRatios := model.AspectRatiosForResolution(normalized.Resolution)
@@ -68,7 +77,7 @@ func (s *Server) refinePrompt(w http.ResponseWriter, r *http.Request) {
 	if !ratioValid || !resolutionValid || normalized.DrawCount < model.Capabilities.DrawCount.Min || normalized.DrawCount > model.Capabilities.DrawCount.Max {
 		diagnostics = append(diagnostics, promptDiagnostic{Code: "CAPABILITY_INVALID", Severity: "warning", Message: "画幅、分辨率或抽卡次数不在当前模型支持范围内"})
 	}
-	if len(normalized.InputAssetIDs) > model.Capabilities.MaxReferenceImages || len(normalized.InputAssetIDs) > 0 && !model.Capabilities.ImageToImage || hasDuplicateAssetIDs(normalized.InputAssetIDs) {
+	if referenceCount > model.Capabilities.MaxReferenceImages || referenceCount > 0 && !model.Capabilities.ImageToImage || hasDuplicateAssetIDs(normalized.InputAssetIDs) {
 		diagnostics = append(diagnostics, promptDiagnostic{Code: "REFERENCE_INVALID", Severity: "warning", Message: "参考图数量或能力不受当前模型支持"})
 	}
 	if model.Provider == "legnext" && containsControlledLegnextInput(input.Prompt) {

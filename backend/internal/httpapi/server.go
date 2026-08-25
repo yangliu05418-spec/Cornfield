@@ -9,6 +9,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"path"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -350,6 +351,7 @@ func isNotFound(err error) bool { return errors.Is(err, pgx.ErrNoRows) }
 
 func cleanFilename(name string) string {
 	name = strings.TrimSpace(name)
+	name = path.Base(strings.ReplaceAll(name, `\`, "/"))
 	name = strings.ReplaceAll(name, "\r", "")
 	name = strings.ReplaceAll(name, "\n", "")
 	name = strings.ReplaceAll(name, `"`, "")

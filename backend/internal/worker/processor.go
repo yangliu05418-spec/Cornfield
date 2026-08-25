@@ -1893,9 +1893,9 @@ func (w *GenerateWorker) ensurePresentationVariants(ctx context.Context, key str
 	for _, placeholder := range []struct {
 		size    string
 		quality int
-	}{{"24", 35}, {"16", 25}} {
+	}{{"24x24", 35}, {"16x16", 25}, {"12x12", 18}, {"8x8", 12}, {"4x4", 5}} {
 		blurPath := thumbnailTempPath(filepath.Dir(original), "blur")
-		if err := runVIPSThumbnail(ctx, original, blurPath, placeholder.size, placeholder.quality); err != nil {
+		if err := runVIPSThumbnailGeometry(ctx, original, blurPath, placeholder.size, placeholder.quality); err != nil {
 			_ = os.Remove(blurPath)
 			return "", fmt.Errorf("create blur placeholder: %w", err)
 		}
@@ -2001,9 +2001,13 @@ func createThumbnailVariant(ctx context.Context, original, size string, quality 
 }
 
 func runVIPSThumbnail(ctx context.Context, original, output, size string, quality int) error {
+	return runVIPSThumbnailGeometry(ctx, original, output, size+"x", quality)
+}
+
+func runVIPSThumbnailGeometry(ctx context.Context, original, output, geometry string, quality int) error {
 	thumbCtx, cancelThumb := context.WithTimeout(ctx, 60*time.Second)
 	defer cancelThumb()
-	command := exec.CommandContext(thumbCtx, "vipsthumbnail", original, "--size", size+"x", "--output", fmt.Sprintf("%s[Q=%d,strip]", output, quality))
+	command := exec.CommandContext(thumbCtx, "vipsthumbnail", original, "--size", geometry, "--output", fmt.Sprintf("%s[Q=%d,strip]", output, quality))
 	command.Env = append(os.Environ(), "VIPS_CONCURRENCY=2", "VIPS_DISC_THRESHOLD=268435456", "MALLOC_ARENA_MAX=2")
 	if outputBytes, err := command.CombinedOutput(); err != nil {
 		return fmt.Errorf("vipsthumbnail: %w: %s", err, strings.TrimSpace(string(outputBytes)))

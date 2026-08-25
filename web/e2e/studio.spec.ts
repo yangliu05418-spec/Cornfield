@@ -137,6 +137,49 @@ test('prompt refiner is manual, selective, and undoable', async ({ page }) => {
   expect(studio.refineAttempts()).toBe(2)
 })
 
+test('prompt grows to a bounded height and accepts mixed clipboard content', async ({
+  page,
+}) => {
+  await installStudioMocks(page)
+  await page.goto('/app/create')
+  const prompt = page.getByRole('textbox', { name: '生成提示词' })
+
+  const initialHeight = await prompt.evaluate((element) => element.clientHeight)
+  await prompt.fill(
+    Array.from({ length: 12 }, (_, index) => `第${index + 1}行`).join('\n'),
+  )
+  const grown = await prompt.evaluate((element) => ({
+    height: element.clientHeight,
+    scrollHeight: element.scrollHeight,
+    overflowY: getComputedStyle(element).overflowY,
+  }))
+  expect(grown.height).toBeGreaterThan(initialHeight)
+  expect(grown.height).toBeLessThanOrEqual(136)
+  expect(grown.scrollHeight).toBeGreaterThan(grown.height)
+  expect(grown.overflowY).toBe('auto')
+
+  await prompt.fill('镜头：')
+  await prompt.evaluate((element) => {
+    const data = new DataTransfer()
+    data.setData('text/plain', '雨中的街道')
+    data.items.add(
+      new File([new Uint8Array([0xff, 0xd8, 0xff, 0xd9])], 'reference.jpg', {
+        type: 'image/jpeg',
+      }),
+    )
+    element.dispatchEvent(
+      new ClipboardEvent('paste', {
+        bubbles: true,
+        cancelable: true,
+        clipboardData: data,
+      }),
+    )
+  })
+
+  await expect(prompt).toHaveValue('镜头：雨中的街道')
+  await expect(page.getByRole('img', { name: '参考图' })).toHaveCount(1)
+})
+
 test('a restored temporary-password session cannot enter the studio', async ({
   page,
 }) => {

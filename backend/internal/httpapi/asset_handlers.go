@@ -68,10 +68,12 @@ func (s *Server) createUpload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	input.Filename = cleanFilename(input.Filename)
-	if !validUploadFilename(input.Filename) || input.Size < 1 || input.Size > 25*1024*1024 || !slicesString([]string{"image/jpeg", "image/png", "image/webp"}, input.MediaType) {
+	mediaType, mediaTypeOK := normalizeDeclaredUploadMediaType(input.MediaType)
+	if !validUploadFilename(input.Filename) || input.Size < 1 || input.Size > 25*1024*1024 || !mediaTypeOK {
 		writeError(w, http.StatusUnprocessableEntity, "UPLOAD_UNSUPPORTED", "仅支持 25MiB 以内的 JPEG、PNG 或 WebP", false, r)
 		return
 	}
+	input.MediaType = mediaType
 	tx, err := s.db.Begin(r.Context())
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "UPLOAD_CREATE_FAILED", "无法创建上传会话", true, r)
@@ -122,6 +124,31 @@ func validUploadFilename(value string) bool {
 		}
 	}
 	return value != ""
+}
+
+func normalizeDeclaredUploadMediaType(value string) (string, bool) {
+	value = strings.ToLower(strings.TrimSpace(value))
+	if parsed, _, err := mime.ParseMediaType(value); err == nil {
+		value = parsed
+	}
+	switch value {
+	case "image/jpeg", "image/jpg", "image/pjpeg":
+		return "image/jpeg", true
+	case "image/png", "image/x-png":
+		return "image/png", true
+	case "image/webp":
+		return "image/webp", true
+	case "", "application/octet-stream":
+		// Clipboard and some desktop browsers omit a useful declaration. The
+		// streamed bytes are sniffed below and fully decoded by the worker.
+		return "application/octet-stream", true
+	default:
+		return "", false
+	}
+}
+
+func supportedUploadMediaType(value string) bool {
+	return slicesString([]string{"image/jpeg", "image/png", "image/webp"}, value)
 }
 
 func (s *Server) uploadContent(w http.ResponseWriter, r *http.Request) {
@@ -179,15 +206,18 @@ func (s *Server) uploadContent(w http.ResponseWriter, r *http.Request) {
 	header, _ := reader.Peek(512)
 	detected := http.DetectContentType(header)
 	readFile.Close()
-	if detected != declaredMedia {
+	if !supportedUploadMediaType(detected) {
 		_ = os.Remove(tempPath)
 		if _, stateErr := s.db.Exec(r.Context(), `UPDATE upload_sessions SET status='failed',error_code='MIME_MISMATCH',updated_at=now() WHERE id=$1`, id); stateErr != nil {
 			s.log.Warn("upload MIME failure state update failed", "upload_id", id, "error", stateErr)
 		}
-		writeError(w, http.StatusUnprocessableEntity, "MIME_MISMATCH", "图片声明格式与内容不一致", false, r)
+		writeError(w, http.StatusUnprocessableEntity, "MIME_MISMATCH", "图片内容不是受支持的 JPEG、PNG 或 WebP", false, r)
 		return
 	}
-	command, err = s.db.Exec(r.Context(), `UPDATE upload_sessions SET status='validating',updated_at=now() WHERE id=$1 AND owner_user_id=$2 AND status='uploading'`, id, sess.UserID)
+	if declaredMedia != detected {
+		s.log.Info("upload media declaration normalized", "upload_id", id, "declared_media_type", declaredMedia, "detected_media_type", detected)
+	}
+	command, err = s.db.Exec(r.Context(), `UPDATE upload_sessions SET status='validating',declared_media_type=$3,updated_at=now() WHERE id=$1 AND owner_user_id=$2 AND status='uploading'`, id, sess.UserID, detected)
 	if err != nil || command.RowsAffected() != 1 {
 		_ = os.Remove(tempPath)
 		writeError(w, http.StatusInternalServerError, "UPLOAD_QUEUE_FAILED", "图片已接收但无法进入验证队列", true, r)
@@ -430,13 +460,31 @@ func (s *Server) assetContent(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("X-Accel-Redirect", "/_protected_assets/"+storageKey)
 	if r.URL.Query().Get("download") == "1" {
-		filename := "image" + filepath.Ext(storageKey)
-		if item.OriginalFilename != nil {
-			filename = cleanFilename(*item.OriginalFilename)
-		}
+		filename := assetDownloadFilename(item.OriginalFilename, item.MediaType)
 		w.Header().Set("Content-Disposition", mime.FormatMediaType("attachment", map[string]string{"filename": filename}))
 	}
 	w.WriteHeader(http.StatusOK)
+}
+
+func assetDownloadFilename(original *string, mediaType string) string {
+	extension := map[string]string{
+		"image/jpeg": ".jpg",
+		"image/png":  ".png",
+		"image/webp": ".webp",
+	}[mediaType]
+	if extension == "" {
+		extension = ".bin"
+	}
+	filename := "image"
+	if original != nil {
+		filename = cleanFilename(*original)
+	}
+	currentExtension := filepath.Ext(filename)
+	base := strings.TrimSpace(strings.TrimSuffix(filename, currentExtension))
+	if base == "" || base == "." {
+		base = "image"
+	}
+	return base + extension
 }
 
 func (s *Server) loadAsset(r *http.Request, id uuid.UUID) (assetResponse, string, error) {

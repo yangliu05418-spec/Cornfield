@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -133,6 +134,7 @@ func (v *UploadValidator) processOne(ctx context.Context) bool {
 		return true
 	}
 	var assetID uuid.UUID
+	filename = canonicalUploadFilename(filename, extension)
 	err = tx.QueryRow(ctx, `INSERT INTO assets(owner_user_id,kind,storage_key,sha256,media_type,original_filename,width,height,byte_size,blur_data_url)
 		VALUES($1,'upload',$2,$3,$4,$5,$6,$7,$8,$9) RETURNING id`, ownerID, key, digest, media, filename, width, height, size, blurDataURL).Scan(&assetID)
 	if err == nil {
@@ -171,6 +173,15 @@ func (v *UploadValidator) processOne(ctx context.Context) bool {
 	leaseReleased = true
 	v.Generator.queueOptionalThumbnail(key)
 	return true
+}
+
+func canonicalUploadFilename(filename, extension string) string {
+	currentExtension := filepath.Ext(filename)
+	base := strings.TrimSpace(strings.TrimSuffix(filename, currentExtension))
+	if base == "" || base == "." {
+		base = "image"
+	}
+	return base + extension
 }
 
 func (v *UploadValidator) fail(ctx context.Context, id uuid.UUID, code string) {

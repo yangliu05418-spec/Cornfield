@@ -7,8 +7,15 @@ import {
 } from '@tanstack/react-query'
 import type { InfiniteData, QueryClient } from '@tanstack/react-query'
 import { Minus, Plus, Sparkles, X, ZoomIn, ZoomOut } from 'lucide-react'
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import type { CSSProperties, FormEvent } from 'react'
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react'
+import type { ClipboardEvent, CSSProperties, FormEvent } from 'react'
 
 import { AppShell } from '#/components/app-shell'
 import { ConfirmDialog } from '#/components/confirm-dialog'
@@ -22,6 +29,11 @@ import {
   optimisticallyRemoveAssets,
   restoreAssetCaches,
 } from '#/lib/asset-cache'
+import {
+  clipboardImageFiles,
+  normalizeReferenceMediaType,
+  referenceUploadErrorMessage,
+} from '#/lib/reference-upload'
 import type {
   Asset,
   AssetPage,
@@ -44,6 +56,19 @@ const generationTerminalStatuses = new Set([
 ])
 const uploadValidationTimeout = 2 * 60 * 1000
 const wallAssetsQueryKey = ['assets', 'wall'] as const
+
+function resizePromptTextarea(textarea: HTMLTextAreaElement | null) {
+  if (!textarea) return
+  textarea.style.height = '0px'
+  const configuredMax = Number.parseFloat(
+    window.getComputedStyle(textarea).maxHeight,
+  )
+  const maxHeight = Number.isFinite(configuredMax) ? configuredMax : 136
+  const nextHeight = Math.max(40, Math.min(textarea.scrollHeight, maxHeight))
+  textarea.style.height = `${nextHeight}px`
+  textarea.style.overflowY =
+    textarea.scrollHeight > maxHeight ? 'auto' : 'hidden'
+}
 
 type GenerationPage = {
   items: GenerationBatch[]
@@ -300,6 +325,10 @@ function CreatePage() {
     [],
   )
   const [notice, setNotice] = useState('')
+
+  useLayoutEffect(() => {
+    resizePromptTextarea(promptRef.current)
+  }, [prompt])
 
   async function editAsset(asset: Asset) {
     try {
@@ -976,6 +1005,8 @@ function CreatePage() {
   async function uploadReference(file?: File) {
     if (!file || !activeModel?.capabilities.image_to_image)
       return setNotice('当前模型不支持参考图')
+    const mediaType = normalizeReferenceMediaType(file)
+    if (!mediaType) return setNotice('仅支持 JPEG、PNG 或 WebP 图片')
     if (file.size > activeModel.capabilities.max_reference_bytes)
       return setNotice(
         `当前模型的单张参考图上限为 ${referenceLimitLabel(activeModel.capabilities.max_reference_bytes)}`,
@@ -990,7 +1021,7 @@ function CreatePage() {
           signal: controller.signal,
           body: JSON.stringify({
             filename: file.name,
-            media_type: file.type,
+            media_type: mediaType,
             size: file.size,
           }),
         },
@@ -1014,9 +1045,7 @@ function CreatePage() {
           break
         }
         if (state.status === 'failed')
-          throw new Error(
-            `参考图验证失败：${state.error_code ?? 'IMAGE_INVALID'}`,
-          )
+          throw new Error(referenceUploadErrorMessage(state.error_code))
         const remaining = deadline - Date.now()
         if (remaining <= 0) break
         await waitFor(Math.min(pollDelay, remaining), controller.signal)
@@ -1034,6 +1063,43 @@ function CreatePage() {
     } finally {
       uploadControllers.current.delete(controller)
     }
+  }
+
+  function pastePromptContent(event: ClipboardEvent<HTMLTextAreaElement>) {
+    const images = clipboardImageFiles(event.clipboardData)
+    if (!images.length) return
+
+    const pastedText = event.clipboardData.getData('text/plain')
+    event.preventDefault()
+    if (pastedText) {
+      const start = event.currentTarget.selectionStart
+      const end = event.currentTarget.selectionEnd
+      const nextPrompt = `${prompt.slice(0, start)}${pastedText}${prompt.slice(end)}`
+      const nextCursor = start + pastedText.length
+      setPrompt(nextPrompt)
+      window.requestAnimationFrame(() => {
+        promptRef.current?.focus()
+        promptRef.current?.setSelectionRange(nextCursor, nextCursor)
+      })
+    }
+    if (!activeModel?.capabilities.image_to_image) {
+      setNotice('文字已保留；当前模型不支持参考图')
+      return
+    }
+    const remaining = Math.max(
+      0,
+      activeModel.capabilities.max_reference_images - references.length,
+    )
+    if (!remaining) {
+      setNotice('文字已保留；参考图数量已达到当前模型上限')
+      return
+    }
+    const selected = images.slice(0, remaining)
+    if (selected.length < images.length)
+      setNotice(`仅添加前 ${selected.length} 张图片，已达到参考图上限`)
+    void (async () => {
+      for (const image of selected) await uploadReference(image)
+    })()
   }
   return (
     <AppShell>
@@ -1113,7 +1179,7 @@ function CreatePage() {
                   type="file"
                   aria-label="添加参考图"
                   disabled={!activeModel?.capabilities.image_to_image}
-                  accept="image/jpeg,image/png,image/webp"
+                  accept=".jpg,.jpeg,.png,.webp,image/jpeg,image/png,image/webp"
                   onChange={(event) => {
                     void uploadReference(event.target.files?.[0])
                     event.target.value = ''
@@ -1144,7 +1210,11 @@ function CreatePage() {
                 ref={promptRef}
                 aria-label="生成提示词"
                 value={prompt}
-                onChange={(event) => setPrompt(event.target.value)}
+                onChange={(event) => {
+                  setPrompt(event.target.value)
+                  resizePromptTextarea(event.currentTarget)
+                }}
+                onPaste={pastePromptContent}
                 placeholder="描述你想象中的画面"
                 rows={1}
               />

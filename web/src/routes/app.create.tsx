@@ -1357,7 +1357,8 @@ function CreatePage() {
                       alt="参考图"
                       onLoad={(event) => {
                         if (reference.source !== 'local') return
-                        const { naturalWidth, naturalHeight } = event.currentTarget
+                        const { naturalWidth, naturalHeight } =
+                          event.currentTarget
                         if (
                           naturalWidth < 1 ||
                           naturalHeight < 1 ||
@@ -1367,7 +1368,8 @@ function CreatePage() {
                           return
                         setReferences((items) =>
                           items.map((item) =>
-                            item.key === reference.key && item.source === 'local'
+                            item.key === reference.key &&
+                            item.source === 'local'
                               ? {
                                   ...item,
                                   width: naturalWidth,

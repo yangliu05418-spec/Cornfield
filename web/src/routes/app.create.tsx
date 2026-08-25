@@ -1330,6 +1330,34 @@ function CreatePage() {
         )}
         <form className="generator" onSubmit={submit}>
           <div className="generator-body">
+            {references.length > 0 && (
+              <div className="reference-strip" aria-label="已选参考图">
+                {references.map((reference) => (
+                  <div className="reference-card" key={reference.key}>
+                    <img
+                      src={
+                        reference.source === 'asset'
+                          ? reference.asset.thumb_320_url
+                          : reference.previewURL
+                      }
+                      alt="参考图"
+                    />
+                    <button
+                      type="button"
+                      title="移除参考图"
+                      aria-label="移除参考图"
+                      onClick={() =>
+                        setReferences((items) =>
+                          items.filter((item) => item.key !== reference.key),
+                        )
+                      }
+                    >
+                      <X size={12} />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
             <div
               className="generator-prompt-row"
               onDragEnter={promptDragEnter}
@@ -1371,33 +1399,6 @@ function CreatePage() {
                   }}
                 />
               </label>
-              {references.length > 0 && (
-                <div className="reference-strip">
-                  {references.map((reference) => (
-                    <div key={reference.key}>
-                      <img
-                        src={
-                          reference.source === 'asset'
-                            ? reference.asset.thumb_320_url
-                            : reference.previewURL
-                        }
-                        alt="参考图"
-                      />
-                      <button
-                        type="button"
-                        aria-label="移除参考图"
-                        onClick={() =>
-                          setReferences((items) =>
-                            items.filter((item) => item.key !== reference.key),
-                          )
-                        }
-                      >
-                        <X size={10} />
-                      </button>
-                    </div>
-                  ))}
-                </div>
-              )}
               <textarea
                 ref={promptRef}
                 aria-label="生成提示词"

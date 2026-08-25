@@ -257,6 +257,60 @@ test('local reference previews immediately and uploads only when generating', as
   expect(await page.getByRole('article').count()).toBe(initialWallCount + 1)
 })
 
+test('reference previews stay legible and keep remove controls inside each card', async ({
+  page,
+}, testInfo) => {
+  await page.setViewportSize({ width: 1440, height: 960 })
+  const studio = await installStudioMocks(page)
+  await page.goto('/app/create')
+  await page
+    .locator('input[type="file"][aria-label="添加参考图"]')
+    .setInputFiles(
+      Array.from({ length: 3 }, (_, index) => ({
+        name: `reference-${index + 1}.webp`,
+        mimeType: 'image/webp',
+        buffer: readFileSync(
+          new URL('../public/cornfield-chair.webp', import.meta.url),
+        ),
+      })),
+    )
+
+  const cards = page.locator('.reference-card')
+  const removeButtons = page.getByRole('button', { name: '移除参考图' })
+  await expect(cards).toHaveCount(3)
+  await expect(removeButtons).toHaveCount(3)
+  await expect(cards.first().locator('img')).toHaveCSS('object-fit', 'contain')
+  await expect(cards.first()).toHaveCSS('width', '72px')
+  await page.screenshot({
+    path: testInfo.outputPath('reference-previews-desktop.png'),
+  })
+
+  await page.setViewportSize({ width: 390, height: 844 })
+  await expect(cards.first()).toHaveCSS('width', '64px')
+
+  for (let index = 0; index < 3; index += 1) {
+    const cardBox = await cards.nth(index).boundingBox()
+    const buttonBox = await removeButtons.nth(index).boundingBox()
+    expect(cardBox).not.toBeNull()
+    expect(buttonBox).not.toBeNull()
+    expect(buttonBox!.x).toBeGreaterThanOrEqual(cardBox!.x)
+    expect(buttonBox!.y).toBeGreaterThanOrEqual(cardBox!.y)
+    expect(buttonBox!.x + buttonBox!.width).toBeLessThanOrEqual(
+      cardBox!.x + cardBox!.width,
+    )
+    expect(buttonBox!.y + buttonBox!.height).toBeLessThanOrEqual(
+      cardBox!.y + cardBox!.height,
+    )
+  }
+
+  await page.screenshot({
+    path: testInfo.outputPath('reference-previews-mobile.png'),
+  })
+  await removeButtons.nth(1).click()
+  await expect(cards).toHaveCount(2)
+  expect(studio.uploadAttempts()).toBe(0)
+})
+
 test('a restored temporary-password session cannot enter the studio', async ({
   page,
 }) => {

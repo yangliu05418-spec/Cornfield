@@ -15,7 +15,7 @@ import {
   useRef,
   useState,
 } from 'react'
-import type { ClipboardEvent, CSSProperties, FormEvent } from 'react'
+import type { ClipboardEvent, CSSProperties, DragEvent, FormEvent } from 'react'
 
 import { AppShell } from '#/components/app-shell'
 import { ConfirmDialog } from '#/components/confirm-dialog'
@@ -267,6 +267,7 @@ function CreatePage() {
   const navigate = useNavigate()
   const wallRef = useRef<JustifiedWallHandle>(null)
   const promptRef = useRef<HTMLTextAreaElement>(null)
+  const promptDragDepth = useRef(0)
   const uploadControllers = useRef(new Set<AbortController>())
   const assetRefreshInFlight = useRef<Promise<void> | null>(null)
   const assetRefreshVersion = useRef(0)
@@ -325,6 +326,7 @@ function CreatePage() {
     [],
   )
   const [notice, setNotice] = useState('')
+  const [referenceDropActive, setReferenceDropActive] = useState(false)
 
   useLayoutEffect(() => {
     resizePromptTextarea(promptRef.current)
@@ -1065,6 +1067,35 @@ function CreatePage() {
     }
   }
 
+  function uploadReferenceFiles(files: File[], retainedText = false) {
+    const prefix = retainedText ? '文字已保留；' : ''
+    if (!activeModel?.capabilities.image_to_image) {
+      setNotice(`${prefix}当前模型不支持参考图`)
+      return
+    }
+    const supported = files.filter(
+      (file) => normalizeReferenceMediaType(file) !== null,
+    )
+    if (!supported.length) {
+      setNotice(`${prefix}仅支持 JPEG、PNG 或 WebP 图片`)
+      return
+    }
+    const remaining = Math.max(
+      0,
+      activeModel.capabilities.max_reference_images - references.length,
+    )
+    if (!remaining) {
+      setNotice(`${prefix}参考图数量已达到当前模型上限`)
+      return
+    }
+    const selected = supported.slice(0, remaining)
+    if (selected.length < supported.length)
+      setNotice(`仅添加前 ${selected.length} 张图片，已达到参考图上限`)
+    void (async () => {
+      for (const image of selected) await uploadReference(image)
+    })()
+  }
+
   function pastePromptContent(event: ClipboardEvent<HTMLTextAreaElement>) {
     const images = clipboardImageFiles(event.clipboardData)
     if (!images.length) return
@@ -1082,24 +1113,37 @@ function CreatePage() {
         promptRef.current?.setSelectionRange(nextCursor, nextCursor)
       })
     }
-    if (!activeModel?.capabilities.image_to_image) {
-      setNotice('文字已保留；当前模型不支持参考图')
-      return
-    }
-    const remaining = Math.max(
-      0,
-      activeModel.capabilities.max_reference_images - references.length,
-    )
-    if (!remaining) {
-      setNotice('文字已保留；参考图数量已达到当前模型上限')
-      return
-    }
-    const selected = images.slice(0, remaining)
-    if (selected.length < images.length)
-      setNotice(`仅添加前 ${selected.length} 张图片，已达到参考图上限`)
-    void (async () => {
-      for (const image of selected) await uploadReference(image)
-    })()
+    uploadReferenceFiles(images, Boolean(pastedText))
+  }
+
+  function promptDragEnter(event: DragEvent<HTMLDivElement>) {
+    if (!event.dataTransfer.types.includes('Files')) return
+    event.preventDefault()
+    promptDragDepth.current += 1
+    setReferenceDropActive(true)
+  }
+
+  function promptDragOver(event: DragEvent<HTMLDivElement>) {
+    if (!event.dataTransfer.types.includes('Files')) return
+    event.preventDefault()
+    event.dataTransfer.dropEffect = activeModel?.capabilities.image_to_image
+      ? 'copy'
+      : 'none'
+  }
+
+  function promptDragLeave(event: DragEvent<HTMLDivElement>) {
+    if (promptDragDepth.current === 0) return
+    event.preventDefault()
+    promptDragDepth.current = Math.max(0, promptDragDepth.current - 1)
+    if (promptDragDepth.current === 0) setReferenceDropActive(false)
+  }
+
+  function promptDrop(event: DragEvent<HTMLDivElement>) {
+    if (!event.dataTransfer.types.includes('Files')) return
+    event.preventDefault()
+    promptDragDepth.current = 0
+    setReferenceDropActive(false)
+    uploadReferenceFiles(Array.from(event.dataTransfer.files))
   }
   return (
     <AppShell>
@@ -1167,7 +1211,28 @@ function CreatePage() {
         )}
         <form className="generator" onSubmit={submit}>
           <div className="generator-body">
-            <div className="generator-prompt-row">
+            <div
+              className="generator-prompt-row"
+              onDragEnter={promptDragEnter}
+              onDragOver={promptDragOver}
+              onDragLeave={promptDragLeave}
+              onDrop={promptDrop}
+            >
+              {referenceDropActive && (
+                <div
+                  className={`prompt-drop-overlay${activeModel?.capabilities.image_to_image ? '' : ' is-disabled'}`}
+                  role="status"
+                >
+                  <span className="prompt-drop-mark" aria-hidden="true">
+                    <Plus size={16} />
+                  </span>
+                  <span>
+                    {activeModel?.capabilities.image_to_image
+                      ? '松开，将图片置入参考区'
+                      : '当前模型不支持参考图'}
+                  </span>
+                </div>
+              )}
               <label
                 className="prompt-reference-button"
                 title="添加参考图"

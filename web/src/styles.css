@@ -3859,11 +3859,55 @@ select {
   gap: 12px;
 }
 .generator-prompt-row {
+  position: relative;
+  isolation: isolate;
   min-width: 0;
   min-height: 40px;
   display: flex;
   align-items: center;
   gap: 10px;
+}
+.prompt-drop-overlay {
+  position: absolute;
+  z-index: 12;
+  inset: -7px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 9px;
+  border: 1px dashed rgba(209, 254, 23, 0.72);
+  border-radius: 13px;
+  background: rgba(18, 21, 19, 0.92);
+  color: #e8ebdf;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  backdrop-filter: blur(14px);
+  box-shadow:
+    0 10px 36px rgba(0, 0, 0, 0.28),
+    inset 0 0 28px rgba(209, 254, 23, 0.035);
+  pointer-events: none;
+  animation: prompt-drop-in 0.16s ease-out both;
+}
+.prompt-drop-overlay.is-disabled {
+  border-color: rgba(199, 201, 197, 0.3);
+  color: #a5a8a4;
+}
+.prompt-drop-mark {
+  width: 26px;
+  height: 26px;
+  display: grid;
+  place-items: center;
+  border: 1px solid rgba(209, 254, 23, 0.38);
+  border-radius: 8px;
+  background: rgba(209, 254, 23, 0.08);
+  color: var(--lime);
+}
+@keyframes prompt-drop-in {
+  from {
+    opacity: 0;
+    transform: translateY(3px) scale(0.99);
+  }
 }
 .prompt-reference-button,
 .prompt-refiner-button {

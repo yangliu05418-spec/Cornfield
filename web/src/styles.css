@@ -4303,9 +4303,12 @@ select {
 .reference-card {
   position: relative;
   isolation: isolate;
-  flex: 0 0 72px;
-  width: 72px;
-  height: 72px;
+  flex: 0 0 auto;
+  width: auto;
+  min-width: 76px;
+  max-width: 180px;
+  height: 96px;
+  aspect-ratio: 1;
   overflow: hidden;
   scroll-snap-align: start;
   border: 1px solid rgba(255, 255, 255, 0.11);
@@ -4332,8 +4335,8 @@ select {
   z-index: 2;
   top: 4px;
   right: 4px;
-  width: 24px;
-  height: 24px;
+  width: 26px;
+  height: 26px;
   display: grid;
   place-items: center;
   padding: 0;
@@ -5503,9 +5506,9 @@ select {
     gap: 7px;
   }
   .reference-card {
-    flex-basis: 64px;
-    width: 64px;
-    height: 64px;
+    min-width: 64px;
+    max-width: 144px;
+    height: 80px;
   }
   .generator-controls {
     display: grid;

@@ -103,6 +103,8 @@ type ReferenceItem =
       file: File
       previewURL: string
       mediaType: string
+      width?: number
+      height?: number
     }
 
 function assetReference(asset: Asset): ReferenceItem {
@@ -113,6 +115,14 @@ function referenceByteSize(reference: ReferenceItem): number {
   return reference.source === 'asset'
     ? reference.asset.byte_size
     : reference.file.size
+}
+
+function referencePreviewStyle(reference: ReferenceItem): CSSProperties {
+  const width =
+    reference.source === 'asset' ? reference.asset.width : reference.width
+  const height =
+    reference.source === 'asset' ? reference.asset.height : reference.height
+  return width && height ? { aspectRatio: `${width} / ${height}` } : {}
 }
 
 function uploadedReferenceIDs(references: ReferenceItem[]): string[] {
@@ -1333,7 +1343,11 @@ function CreatePage() {
             {references.length > 0 && (
               <div className="reference-strip" aria-label="已选参考图">
                 {references.map((reference) => (
-                  <div className="reference-card" key={reference.key}>
+                  <div
+                    className="reference-card"
+                    key={reference.key}
+                    style={referencePreviewStyle(reference)}
+                  >
                     <img
                       src={
                         reference.source === 'asset'
@@ -1341,6 +1355,28 @@ function CreatePage() {
                           : reference.previewURL
                       }
                       alt="参考图"
+                      onLoad={(event) => {
+                        if (reference.source !== 'local') return
+                        const { naturalWidth, naturalHeight } = event.currentTarget
+                        if (
+                          naturalWidth < 1 ||
+                          naturalHeight < 1 ||
+                          (reference.width === naturalWidth &&
+                            reference.height === naturalHeight)
+                        )
+                          return
+                        setReferences((items) =>
+                          items.map((item) =>
+                            item.key === reference.key && item.source === 'local'
+                              ? {
+                                  ...item,
+                                  width: naturalWidth,
+                                  height: naturalHeight,
+                                }
+                              : item,
+                          ),
+                        )
+                      }}
                     />
                     <button
                       type="button"

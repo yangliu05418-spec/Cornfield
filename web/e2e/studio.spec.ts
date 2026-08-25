@@ -265,28 +265,59 @@ test('reference previews stay legible and keep remove controls inside each card'
   await page.goto('/app/create')
   await page
     .locator('input[type="file"][aria-label="添加参考图"]')
-    .setInputFiles(
-      Array.from({ length: 3 }, (_, index) => ({
-        name: `reference-${index + 1}.webp`,
-        mimeType: 'image/webp',
-        buffer: readFileSync(
-          new URL('../public/cornfield-chair.webp', import.meta.url),
-        ),
-      })),
-    )
+    .evaluate(async (element) => {
+      const data = new DataTransfer()
+      const sizes = [
+        [1600, 900],
+        [800, 1200],
+        [1000, 1000],
+      ]
+      for (const [index, [width, height]] of sizes.entries()) {
+        const canvas = document.createElement('canvas')
+        canvas.width = width
+        canvas.height = height
+        const context = canvas.getContext('2d')
+        if (!context) throw new Error('canvas is unavailable')
+        context.fillStyle = ['#26344a', '#46532b', '#533742'][index]
+        context.fillRect(0, 0, width, height)
+        const blob = await new Promise<Blob>((resolve, reject) =>
+          canvas.toBlob(
+            (value) =>
+              value ? resolve(value) : reject(new Error('PNG encode failed')),
+            'image/png',
+          ),
+        )
+        data.items.add(
+          new File([blob], `reference-${index + 1}.png`, {
+            type: 'image/png',
+          }),
+        )
+      }
+      ;(element as HTMLInputElement).files = data.files
+      element.dispatchEvent(new Event('change', { bubbles: true }))
+    })
 
   const cards = page.locator('.reference-card')
   const removeButtons = page.getByRole('button', { name: '移除参考图' })
   await expect(cards).toHaveCount(3)
   await expect(removeButtons).toHaveCount(3)
   await expect(cards.first().locator('img')).toHaveCSS('object-fit', 'contain')
-  await expect(cards.first()).toHaveCSS('width', '72px')
+  await expect(cards.first()).toHaveCSS('height', '96px')
+  await expect(cards.first()).toHaveAttribute(
+    'style',
+    /aspect-ratio: 1600 \/ 900/,
+  )
+  const desktopWidths = await cards.evaluateAll((items) =>
+    items.map((item) => item.getBoundingClientRect().width),
+  )
+  expect(desktopWidths[0]).toBeGreaterThan(desktopWidths[2])
+  expect(desktopWidths[2]).toBeGreaterThan(desktopWidths[1])
   await page.screenshot({
     path: testInfo.outputPath('reference-previews-desktop.png'),
   })
 
   await page.setViewportSize({ width: 390, height: 844 })
-  await expect(cards.first()).toHaveCSS('width', '64px')
+  await expect(cards.first()).toHaveCSS('height', '80px')
 
   for (let index = 0; index < 3; index += 1) {
     const cardBox = await cards.nth(index).boundingBox()

@@ -629,7 +629,11 @@ function WallCard({
           <button type="button" aria-label="复制图片" onClick={copyImage}>
             <Copy size={14} />
           </button>
-          <a aria-label="下载" href={`${asset.url}?download=1`}>
+          <a
+            aria-label="下载"
+            title="下载原图"
+            href={`${asset.url}?download=1`}
+          >
             <Download size={14} />
           </a>
           <button

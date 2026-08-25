@@ -137,6 +137,97 @@ test('prompt refiner is manual, selective, and undoable', async ({ page }) => {
   expect(studio.refineAttempts()).toBe(2)
 })
 
+test('prompt grows to a bounded height and accepts mixed clipboard content', async ({
+  page,
+}) => {
+  await installStudioMocks(page)
+  await page.goto('/app/create')
+  const prompt = page.getByRole('textbox', { name: '生成提示词' })
+
+  const initialHeight = await prompt.evaluate((element) => element.clientHeight)
+  await prompt.fill(
+    Array.from({ length: 12 }, (_, index) => `第${index + 1}行`).join('\n'),
+  )
+  const grown = await prompt.evaluate((element) => ({
+    height: element.clientHeight,
+    scrollHeight: element.scrollHeight,
+    overflowY: getComputedStyle(element).overflowY,
+  }))
+  expect(grown.height).toBeGreaterThan(initialHeight)
+  expect(grown.height).toBeLessThanOrEqual(136)
+  expect(grown.scrollHeight).toBeGreaterThan(grown.height)
+  expect(grown.overflowY).toBe('auto')
+
+  await prompt.fill('镜头：')
+  await prompt.evaluate((element) => {
+    const data = new DataTransfer()
+    data.setData('text/plain', '雨中的街道')
+    data.items.add(
+      new File([new Uint8Array([0xff, 0xd8, 0xff, 0xd9])], 'reference.jpg', {
+        type: 'image/jpeg',
+      }),
+    )
+    element.dispatchEvent(
+      new ClipboardEvent('paste', {
+        bubbles: true,
+        cancelable: true,
+        clipboardData: data,
+      }),
+    )
+  })
+
+  await expect(prompt).toHaveValue('镜头：雨中的街道')
+  await expect(page.getByRole('img', { name: '参考图' })).toHaveCount(1)
+})
+
+test('prompt drop zone previews and uploads a dragged reference image', async ({
+  page,
+}, testInfo) => {
+  await installStudioMocks(page)
+  await page.goto('/app/create')
+  const dropZone = page.locator('.generator-prompt-row')
+
+  await dropZone.evaluate((element) => {
+    const data = new DataTransfer()
+    data.items.add(
+      new File([new Uint8Array([0xff, 0xd8, 0xff, 0xd9])], 'dragged.jpg', {
+        type: 'image/jpeg',
+      }),
+    )
+    ;(
+      window as typeof window & { __referenceDrag?: DataTransfer }
+    ).__referenceDrag = data
+    element.dispatchEvent(
+      new DragEvent('dragenter', {
+        bubbles: true,
+        cancelable: true,
+        dataTransfer: data,
+      }),
+    )
+  })
+  await expect(
+    page.getByRole('status').filter({ hasText: '松开，将图片置入参考区' }),
+  ).toBeVisible()
+  await page.screenshot({ path: testInfo.outputPath('prompt-drop-zone.png') })
+
+  await dropZone.evaluate((element) => {
+    const scopedWindow = window as typeof window & {
+      __referenceDrag?: DataTransfer
+    }
+    element.dispatchEvent(
+      new DragEvent('drop', {
+        bubbles: true,
+        cancelable: true,
+        dataTransfer: scopedWindow.__referenceDrag,
+      }),
+    )
+    delete scopedWindow.__referenceDrag
+  })
+
+  await expect(page.getByText('松开，将图片置入参考区')).toBeHidden()
+  await expect(page.getByRole('img', { name: '参考图' })).toHaveCount(1)
+})
+
 test('a restored temporary-password session cannot enter the studio', async ({
   page,
 }) => {

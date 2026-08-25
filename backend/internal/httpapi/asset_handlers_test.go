@@ -35,6 +35,49 @@ func TestUploadFilenameBounds(t *testing.T) {
 	}
 }
 
+func TestNormalizeDeclaredUploadMediaType(t *testing.T) {
+	tests := []struct {
+		input string
+		want  string
+		ok    bool
+	}{
+		{input: "image/jpeg", want: "image/jpeg", ok: true},
+		{input: "IMAGE/JPG", want: "image/jpeg", ok: true},
+		{input: "image/pjpeg", want: "image/jpeg", ok: true},
+		{input: "image/x-png", want: "image/png", ok: true},
+		{input: "image/webp; charset=binary", want: "image/webp", ok: true},
+		{input: "", want: "application/octet-stream", ok: true},
+		{input: "application/octet-stream", want: "application/octet-stream", ok: true},
+		{input: "image/gif", ok: false},
+		{input: "image/svg+xml", ok: false},
+	}
+	for _, test := range tests {
+		got, ok := normalizeDeclaredUploadMediaType(test.input)
+		if got != test.want || ok != test.ok {
+			t.Errorf("normalizeDeclaredUploadMediaType(%q) = %q, %v; want %q, %v", test.input, got, ok, test.want, test.ok)
+		}
+	}
+}
+
+func TestAssetDownloadFilenameUsesActualMediaType(t *testing.T) {
+	jpegName := "download.png"
+	pathName := `C:\Users\person\photo.jpeg`
+	tests := []struct {
+		name      *string
+		mediaType string
+		want      string
+	}{
+		{name: &jpegName, mediaType: "image/jpeg", want: "download.jpg"},
+		{name: &pathName, mediaType: "image/png", want: "photo.png"},
+		{name: nil, mediaType: "image/webp", want: "image.webp"},
+	}
+	for _, test := range tests {
+		if got := assetDownloadFilename(test.name, test.mediaType); got != test.want {
+			t.Errorf("assetDownloadFilename(%v, %q) = %q; want %q", test.name, test.mediaType, got, test.want)
+		}
+	}
+}
+
 func TestAssetCursorRejectsInvalidInput(t *testing.T) {
 	if _, _, err := decodeAssetCursor("not-base64"); err == nil {
 		t.Fatal("expected invalid cursor error")

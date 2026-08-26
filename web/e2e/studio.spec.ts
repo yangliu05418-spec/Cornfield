@@ -1660,16 +1660,17 @@ async function installStudioMocks(
         diagnostics: [],
       })
     }
-    const refinementFeedbackMatch = pathname.match(
-      /^\/api\/v1\/prompts\/refinements\/([^/]+)\/feedback$/,
-    )
-    if (refinementFeedbackMatch && request.method() === 'POST') {
+    if (
+      pathname === '/api/v1/prompts/refinements/feedback' &&
+      request.method() === 'POST'
+    ) {
       const input = request.postDataJSON() as {
+        refinement_id: string
         event: string
         batch_id?: string
       }
       refinementFeedback.push({
-        refinementID: decodeURIComponent(refinementFeedbackMatch[1]),
+        refinementID: input.refinement_id,
         event: input.event,
         batch_id: input.batch_id,
       })

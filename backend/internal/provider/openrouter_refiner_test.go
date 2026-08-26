@@ -30,8 +30,11 @@ func TestOpenRouterPromptOptimizerSendsIsolatedStrictRequest(t *testing.T) {
 			t.Fatalf("reasoning = %#v", payload["reasoning"])
 		}
 		providerPolicy, _ := payload["provider"].(map[string]any)
-		if providerPolicy["require_parameters"] != true || payload["stream"] != false || payload["n"] != float64(1) {
+		if providerPolicy["require_parameters"] != true || providerPolicy["data_collection"] != "deny" || payload["stream"] != false || payload["n"] != float64(1) {
 			t.Fatalf("routing controls = provider:%#v stream:%#v n:%#v", providerPolicy, payload["stream"], payload["n"])
+		}
+		if payload["max_tokens"] != float64(1280) {
+			t.Fatalf("max_tokens = %#v", payload["max_tokens"])
 		}
 		format, _ := payload["response_format"].(map[string]any)
 		if format["type"] != "json_object" {
@@ -57,6 +60,16 @@ func TestOpenRouterPromptOptimizerSendsIsolatedStrictRequest(t *testing.T) {
 	}
 	if result.Prompt != "safer prompt" || result.TotalTokens != 16 {
 		t.Fatalf("result = %#v", result)
+	}
+}
+
+func TestPromptRefinerMaxTokens(t *testing.T) {
+	for _, testCase := range []struct{ runes, want int }{
+		{1, 512}, {1024, 1280}, {8192, 8448}, {32_768, 12_288},
+	} {
+		if got := promptRefinerMaxTokens(testCase.runes); got != testCase.want {
+			t.Fatalf("promptRefinerMaxTokens(%d)=%d want %d", testCase.runes, got, testCase.want)
+		}
 	}
 }
 

@@ -80,7 +80,7 @@ func runRefinerProtocol(keyFile, reportPath, release string) error {
 		Mode: "refiner-protocol", ReleaseSHA: release,
 		RefinerModel: provider.OpenRouterPromptRefinerModel, StartedAt: time.Now().UTC(),
 	}
-	optimizer := provider.NewOpenRouterPromptOptimizer(keys, "https://corn.kumadrama.com", 35*time.Second)
+	optimizer := provider.NewOpenRouterPromptOptimizer(keys, "https://corn.kumadrama.com", 75*time.Second)
 	keys = nil
 	permitCtx, stopPermits := context.WithCancel(context.Background())
 	defer stopPermits()
@@ -92,7 +92,7 @@ func runRefinerProtocol(keyFile, reportPath, release string) error {
 			CaseID: fixture.ID, Class: fixture.Class, TargetProvider: fixture.TargetProvider,
 			TargetModel: fixture.TargetModel, Status: "failed", SourceRunes: utf8.RuneCountInString(fixture.Original),
 		}
-		ctx, cancel := context.WithTimeout(context.Background(), 35*time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), 70*time.Second)
 		optimized, optimizeErr := optimizer.Optimize(ctx, provider.PromptOptimizationRequest{
 			Prompt: fixture.Original, TargetProvider: fixture.TargetProvider,
 			TargetModel: fixture.TargetModel, MaxRunes: fixture.MaxRunes,
@@ -163,7 +163,7 @@ func runRefinerE2E(ctx context.Context, client *apiClient, reportPath, release, 
 		}
 		payload := refinerE2EPayload(model, revision, fixture.Original)
 		var response refinerE2EResponse
-		requestCtx, cancel := context.WithTimeout(ctx, 35*time.Second)
+		requestCtx, cancel := context.WithTimeout(ctx, 70*time.Second)
 		callErr := client.json(requestCtx, http.MethodPost, "/api/v1/prompts/refine", payload, &response, "")
 		cancel()
 		item.DurationMS = time.Since(started).Milliseconds()
@@ -307,7 +307,7 @@ func safeRefinerErrorCode(err error) string {
 
 func safeInvariantCode(err error) string {
 	switch err.Error() {
-	case "candidate_boundary", "candidate_control", "candidate_provider_syntax", "candidate_lost_anchor",
+	case "candidate_boundary", "candidate_control", "candidate_not_unchanged", "candidate_provider_syntax", "candidate_lost_anchor",
 		"candidate_retained_forbidden_text", "candidate_length_drift", "candidate_language_drift":
 		return strings.ToUpper(err.Error())
 	default:

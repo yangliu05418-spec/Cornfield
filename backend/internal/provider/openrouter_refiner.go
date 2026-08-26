@@ -112,11 +112,11 @@ func (o *OpenRouterPromptOptimizer) Optimize(ctx context.Context, input PromptOp
 			{"role": "user", "content": string(userPayload)},
 		},
 		"temperature":     0,
-		"max_tokens":      4096,
+		"max_tokens":      promptRefinerMaxTokens(input.MaxRunes),
 		"stream":          false,
 		"n":               1,
 		"reasoning":       map[string]any{"effort": "low", "exclude": true},
-		"provider":        map[string]any{"require_parameters": true},
+		"provider":        map[string]any{"require_parameters": true, "data_collection": "deny"},
 		"response_format": map[string]any{"type": "json_object"},
 	}
 	body, err := json.Marshal(payload)
@@ -165,6 +165,12 @@ func (o *OpenRouterPromptOptimizer) Optimize(ctx context.Context, input PromptOp
 		}
 		return PromptOptimizationResult{}, requestErr
 	}
+}
+
+func promptRefinerMaxTokens(maxRunes int) int {
+	// CJK text can approach one output token per character. Keep enough room
+	// for the JSON envelope while bounding pathological generations.
+	return min(12_288, max(512, maxRunes+256))
 }
 
 func (o *OpenRouterPromptOptimizer) request(ctx context.Context, apiKey string, body []byte, secrets []string) (PromptOptimizationResult, int, bool, error) {

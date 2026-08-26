@@ -131,13 +131,10 @@ function reportPromptRefinementFeedback(
   feedback: { event: 'undone' } | { event: 'submitted'; batch_id: string },
 ) {
   if (!refinementID) return
-  void api<void>(
-    `/api/v1/prompts/refinements/${encodeURIComponent(refinementID)}/feedback`,
-    {
-      method: 'POST',
-      body: JSON.stringify(feedback),
-    },
-  ).catch(() => undefined)
+  void api<void>('/api/v1/prompts/refinements/feedback', {
+    method: 'POST',
+    body: JSON.stringify({ refinement_id: refinementID, ...feedback }),
+  }).catch(() => undefined)
 }
 
 type ReferenceItem =
@@ -388,6 +385,7 @@ function CreatePage() {
   const assetRecoveryRevision = useRef('')
   const repeatedPolicyBypass = useRef('')
   const refinerAbort = useRef<AbortController | null>(null)
+  const refinerBusyRef = useRef(false)
   const refinerPendingSignature = useRef('')
   const refinerRequestSequence = useRef(0)
   const me = useQuery({ queryKey: ['me'], queryFn: getMe, retry: false })
@@ -1036,6 +1034,8 @@ function CreatePage() {
     selection: { start: number; end: number },
     pendingReferenceCount = 0,
   ) {
+    if (refinerBusyRef.current) return
+    refinerBusyRef.current = true
     refinerAbort.current?.abort()
     const controller = new AbortController()
     const sequence = ++refinerRequestSequence.current
@@ -1100,6 +1100,7 @@ function CreatePage() {
         refinerPendingSignature.current = ''
         setRefinerBusy(false)
       }
+      refinerBusyRef.current = false
     }
   }
 
@@ -1329,6 +1330,7 @@ function CreatePage() {
     })
   }
   function refineFailedJob(batchID: string, jobID: string) {
+    if (refinerBusyRef.current) return
     const batch = generationItems.find((item) => item.id === batchID)
     const job = batch?.jobs.find((item) => item.id === jobID)
     if (!batch || !job || !canRefineGenerationError(job.error_code)) return

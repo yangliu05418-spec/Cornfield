@@ -35,6 +35,7 @@ type Fixture struct {
 	ExpectedInvariant string   `json:"expected_invariant,omitempty"`
 	MustPreserve      []string `json:"must_preserve,omitempty"`
 	MustNotContain    []string `json:"must_not_contain,omitempty"`
+	MustMatchOriginal bool     `json:"must_match_original,omitempty"`
 	LiveProtocol      bool     `json:"live_protocol,omitempty"`
 	E2E               bool     `json:"e2e,omitempty"`
 }
@@ -109,6 +110,9 @@ func ValidateInvariant(fixture Fixture, candidate string) error {
 	}
 	if hasDisallowedControl(candidate) {
 		return errors.New("candidate_control")
+	}
+	if fixture.MustMatchOriginal && candidate != strings.TrimSpace(fixture.Original) {
+		return errors.New("candidate_not_unchanged")
 	}
 	if fixture.TargetProvider == "legnext" && hasControlledMidjourneyInput(candidate) {
 		return errors.New("candidate_provider_syntax")

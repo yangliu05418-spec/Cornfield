@@ -48,7 +48,7 @@ func main() {
 	}
 	var promptOptimizer provider.PromptOptimizer
 	if len(cfg.PromptRefinerAPIKeys) > 0 {
-		promptOptimizer = provider.NewOpenRouterPromptOptimizer(cfg.PromptRefinerAPIKeys, cfg.PublicURL, 30*time.Second)
+		promptOptimizer = provider.NewOpenRouterPromptOptimizer(cfg.PromptRefinerAPIKeys, cfg.PublicURL, 75*time.Second)
 	}
 	store, err := blob.NewLocal(cfg.AssetRoot)
 	if err != nil {

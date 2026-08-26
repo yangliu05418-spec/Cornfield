@@ -102,7 +102,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /api/v1/auth/change-password", s.requireAuth(s.requireCSRF(http.HandlerFunc(s.changePassword))))
 	mux.Handle("GET /api/v1/models", s.requireAuth(http.HandlerFunc(s.models)))
 	mux.Handle("POST /api/v1/prompts/refine", s.requireAuth(s.requireCSRF(http.HandlerFunc(s.refinePrompt))))
-	mux.Handle("POST /api/v1/prompts/refinements/{id}/feedback", s.requireAuth(s.requireCSRF(http.HandlerFunc(s.promptRefinementFeedback))))
+	mux.Handle("POST /api/v1/prompts/refinements/feedback", s.requireAuth(s.requireCSRF(http.HandlerFunc(s.promptRefinementFeedback))))
 	mux.Handle("GET /api/v1/director-projects", s.requireAuth(http.HandlerFunc(s.listDirectorProjects)))
 	mux.Handle("POST /api/v1/director-projects", s.requireAuth(s.requireCSRF(http.HandlerFunc(s.createDirectorProject))))
 	mux.Handle("GET /api/v1/director-projects/{id}", s.requireAuth(http.HandlerFunc(s.getDirectorProject)))

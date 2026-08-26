@@ -272,7 +272,6 @@
     "expected_provider": "accept",
     "expected_invariant": "accept",
     "must_preserve": ["cobalt glass sphere", "brushed steel", "soft studio light"],
-    "live_protocol": true,
     "e2e": true
   },
   {
@@ -414,15 +413,17 @@
   {
     "id": "limit.midjourney-exact",
     "class": "provider_length",
-    "original_repeat": "a",
+    "original_repeat": "田",
     "original_runes": 1024,
-    "candidate_repeat": "a",
+    "candidate_repeat": "田",
     "candidate_runes": 1024,
     "target_provider": "legnext",
     "target_model": "midjourney",
     "max_runes": 1024,
     "expected_provider": "accept",
-    "expected_invariant": "accept"
+    "expected_invariant": "accept",
+    "must_match_original": true,
+    "live_protocol": true
   },
   {
     "id": "limit.midjourney-over",

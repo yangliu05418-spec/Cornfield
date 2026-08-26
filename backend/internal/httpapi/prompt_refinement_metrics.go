@@ -78,15 +78,16 @@ func (s *Server) createPromptRefinementMetric(metric promptRefinementMetric) err
 
 func (s *Server) promptRefinementFeedback(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "private, no-store")
-	refinementID, ok := parseUUIDParam(w, r, "id")
-	if !ok {
-		return
-	}
 	var input struct {
-		Event   string     `json:"event"`
-		BatchID *uuid.UUID `json:"batch_id,omitempty"`
+		RefinementID uuid.UUID  `json:"refinement_id"`
+		Event        string     `json:"event"`
+		BatchID      *uuid.UUID `json:"batch_id,omitempty"`
 	}
 	if !decodeJSONLimited(w, r, &input, 4<<10) {
+		return
+	}
+	if input.RefinementID == uuid.Nil {
+		writeError(w, http.StatusUnprocessableEntity, "REFINEMENT_FEEDBACK_INVALID", "优化记录无效", false, r)
 		return
 	}
 	if s.promptRefinementMetrics == nil {
@@ -102,13 +103,13 @@ func (s *Server) promptRefinementFeedback(w http.ResponseWriter, r *http.Request
 			writeError(w, http.StatusUnprocessableEntity, "REFINEMENT_FEEDBACK_INVALID", "撤销反馈不能包含生成批次", false, r)
 			return
 		}
-		updated, err = s.promptRefinementMetrics.MarkUndone(r.Context(), refinementID)
+		updated, err = s.promptRefinementMetrics.MarkUndone(r.Context(), input.RefinementID)
 	case "submitted":
 		if input.BatchID == nil {
 			writeError(w, http.StatusUnprocessableEntity, "REFINEMENT_FEEDBACK_INVALID", "提交反馈需要生成批次", false, r)
 			return
 		}
-		updated, err = s.promptRefinementMetrics.MarkSubmitted(r.Context(), refinementID, *input.BatchID, currentSession(r).UserID)
+		updated, err = s.promptRefinementMetrics.MarkSubmitted(r.Context(), input.RefinementID, *input.BatchID, currentSession(r).UserID)
 	default:
 		writeError(w, http.StatusUnprocessableEntity, "REFINEMENT_FEEDBACK_INVALID", "反馈类型无效", false, r)
 		return

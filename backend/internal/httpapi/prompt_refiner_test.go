@@ -221,6 +221,21 @@ func TestValidateOptimizedPromptRejectsManualOnlyFinding(t *testing.T) {
 	}
 }
 
+func TestValidateOptimizedPromptRejectsUnresolvedMappedFinding(t *testing.T) {
+	engine, err := promptrefiner.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	original := "blood across a quiet white backdrop"
+	before := engine.Refine(original)
+	if len(before.Findings) == 0 || before.Findings[0].Mode != "mapped" {
+		t.Fatalf("fixture did not produce mapped finding: %#v", before.Findings)
+	}
+	if err = validateOptimizedPrompt(original, original, "bfl", "", provider.CanonicalRequest{}, 8192, false, before, engine); err == nil {
+		t.Fatal("unresolved mapped finding was accepted")
+	}
+}
+
 func TestConservativePromptRewritePreservesHardConstraints(t *testing.T) {
 	original := `35-year-old detective, 16:9, sign reads "NORTH"`
 	if !preservesProtectedPromptTokens(original, `35-year-old detective in a 16:9 frame, sign reads "NORTH"`) {
@@ -235,6 +250,20 @@ func TestConservativePromptRewritePreservesHardConstraints(t *testing.T) {
 		if preservesProtectedPromptTokens(original, candidate) {
 			t.Fatalf("changed hard constraint accepted: %q", candidate)
 		}
+	}
+}
+
+func TestPreservesLatinPromptAnchors(t *testing.T) {
+	if preservesLatinPromptAnchors("A cobalt sphere centered on a steel table", "A cobalt cube centered on a steel table", nil) {
+		t.Fatal("subject replacement was accepted")
+	}
+	engine, err := promptrefiner.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	original := "cinematic blood around a detective"
+	if !preservesLatinPromptAnchors(original, "cinematic crimson accents around a detective", engine.Refine(original).Findings) {
+		t.Fatal("mapped safety replacement was rejected")
 	}
 }
 
@@ -254,7 +283,7 @@ func TestRefinePromptReportsRulesAndMidjourneyDiagnostics(t *testing.T) {
 			Version: "8.2", Resolution: "sd", Speed: "fast", Stylize: 100,
 		}},
 	})
-	request := httptest.NewRequest(http.MethodPost, "/api/v1/prompts/refine", strings.NewReader(string(body)))
+	request := promptRefinerRequestContext(httptest.NewRequest(http.MethodPost, "/api/v1/prompts/refine", strings.NewReader(string(body))), uuid.New())
 	response := httptest.NewRecorder()
 	server.refinePrompt(response, request)
 	if response.Code != http.StatusOK {
@@ -317,6 +346,12 @@ func TestRefinePromptCountsDeferredReferences(t *testing.T) {
 			MidjourneyVersions: []string{"8.2"}, DrawCount: modelconfig.DrawCount{Min: 1, Max: 1, Default: 1},
 		},
 	})
+	server.cfg.PublicURL = "https://cornfield.test"
+	server.cfg.ProviderURLSigningSecret = "test-signing-secret"
+	optimizer := &fakePromptOptimizer{result: provider.PromptOptimizationResult{Prompt: "quiet field"}}
+	server.promptOptimizer = optimizer
+	server.promptRefineLimit = newPromptRefineLimiter()
+	server.promptRefinerSem = make(chan struct{}, 4)
 	weight := 1.0
 	body, _ := json.Marshal(map[string]any{
 		"model_id": "legnext-midjourney", "capability_revision": "revision", "prompt": "quiet field",
@@ -326,7 +361,7 @@ func TestRefinePromptCountsDeferredReferences(t *testing.T) {
 			Version: "8.2", Resolution: "sd", Speed: "fast", Stylize: 100, ImageWeight: &weight,
 		}},
 	})
-	request := httptest.NewRequest(http.MethodPost, "/api/v1/prompts/refine", strings.NewReader(string(body)))
+	request := promptRefinerRequestContext(httptest.NewRequest(http.MethodPost, "/api/v1/prompts/refine", strings.NewReader(string(body))), uuid.New())
 	response := httptest.NewRecorder()
 	server.refinePrompt(response, request)
 	if response.Code != http.StatusOK {
@@ -340,6 +375,9 @@ func TestRefinePromptCountsDeferredReferences(t *testing.T) {
 		if diagnostic.Code == "CAPABILITY_INVALID" || diagnostic.Code == "REFERENCE_INVALID" {
 			t.Fatalf("deferred reference was not counted: %#v", result.Diagnostics)
 		}
+	}
+	if optimizer.request.MaxRunes >= 900 {
+		t.Fatalf("pending reference URL length was not reserved: max_runes=%d", optimizer.request.MaxRunes)
 	}
 }
 
@@ -374,8 +412,8 @@ func TestPromptRefinementFeedback(t *testing.T) {
 	t.Run("undone", func(t *testing.T) {
 		store := &fakePromptRefinementMetricStore{feedbackFound: true}
 		server := &Server{promptRefinementMetrics: store}
-		request := promptRefinerRequestContext(httptest.NewRequest(http.MethodPost, "/api/v1/prompts/refinements/ignored/feedback", strings.NewReader(`{"event":"undone"}`)), userID)
-		request.SetPathValue("id", refinementID.String())
+		body := `{"refinement_id":"` + refinementID.String() + `","event":"undone"}`
+		request := promptRefinerRequestContext(httptest.NewRequest(http.MethodPost, "/api/v1/prompts/refinements/feedback", strings.NewReader(body)), userID)
 		response := httptest.NewRecorder()
 		server.promptRefinementFeedback(response, request)
 		if response.Code != http.StatusNoContent || store.undoneID != refinementID {
@@ -386,9 +424,8 @@ func TestPromptRefinementFeedback(t *testing.T) {
 	t.Run("submitted validates owner through store", func(t *testing.T) {
 		store := &fakePromptRefinementMetricStore{feedbackFound: true}
 		server := &Server{promptRefinementMetrics: store}
-		body := `{"event":"submitted","batch_id":"` + batchID.String() + `"}`
-		request := promptRefinerRequestContext(httptest.NewRequest(http.MethodPost, "/api/v1/prompts/refinements/ignored/feedback", strings.NewReader(body)), userID)
-		request.SetPathValue("id", refinementID.String())
+		body := `{"refinement_id":"` + refinementID.String() + `","event":"submitted","batch_id":"` + batchID.String() + `"}`
+		request := promptRefinerRequestContext(httptest.NewRequest(http.MethodPost, "/api/v1/prompts/refinements/feedback", strings.NewReader(body)), userID)
 		response := httptest.NewRecorder()
 		server.promptRefinementFeedback(response, request)
 		if response.Code != http.StatusNoContent || store.submittedID != refinementID || store.submittedBatch != batchID || store.submittedOwner != userID {
@@ -398,8 +435,8 @@ func TestPromptRefinementFeedback(t *testing.T) {
 
 	t.Run("missing batch", func(t *testing.T) {
 		server := &Server{promptRefinementMetrics: &fakePromptRefinementMetricStore{feedbackFound: true}}
-		request := promptRefinerRequestContext(httptest.NewRequest(http.MethodPost, "/api/v1/prompts/refinements/ignored/feedback", strings.NewReader(`{"event":"submitted"}`)), userID)
-		request.SetPathValue("id", refinementID.String())
+		body := `{"refinement_id":"` + refinementID.String() + `","event":"submitted"}`
+		request := promptRefinerRequestContext(httptest.NewRequest(http.MethodPost, "/api/v1/prompts/refinements/feedback", strings.NewReader(body)), userID)
 		response := httptest.NewRecorder()
 		server.promptRefinementFeedback(response, request)
 		if response.Code != http.StatusUnprocessableEntity {
@@ -409,9 +446,8 @@ func TestPromptRefinementFeedback(t *testing.T) {
 
 	t.Run("missing metric or unowned batch", func(t *testing.T) {
 		server := &Server{promptRefinementMetrics: &fakePromptRefinementMetricStore{feedbackFound: false}}
-		body := `{"event":"submitted","batch_id":"` + batchID.String() + `"}`
-		request := promptRefinerRequestContext(httptest.NewRequest(http.MethodPost, "/api/v1/prompts/refinements/ignored/feedback", strings.NewReader(body)), userID)
-		request.SetPathValue("id", refinementID.String())
+		body := `{"refinement_id":"` + refinementID.String() + `","event":"submitted","batch_id":"` + batchID.String() + `"}`
+		request := promptRefinerRequestContext(httptest.NewRequest(http.MethodPost, "/api/v1/prompts/refinements/feedback", strings.NewReader(body)), userID)
 		response := httptest.NewRecorder()
 		server.promptRefinementFeedback(response, request)
 		if response.Code != http.StatusNotFound {
@@ -426,13 +462,13 @@ func TestPromptRefinementFeedbackRequiresAuthAndCSRF(t *testing.T) {
 	endpoint := http.HandlerFunc(server.promptRefinementFeedback)
 
 	unauthenticated := httptest.NewRecorder()
-	server.requireAuth(endpoint).ServeHTTP(unauthenticated, httptest.NewRequest(http.MethodPost, "/api/v1/prompts/refinements/id/feedback", nil))
+	server.requireAuth(endpoint).ServeHTTP(unauthenticated, httptest.NewRequest(http.MethodPost, "/api/v1/prompts/refinements/feedback", nil))
 	if unauthenticated.Code != http.StatusUnauthorized {
 		t.Fatalf("unauthenticated status=%d", unauthenticated.Code)
 	}
 
 	missingCSRF := httptest.NewRecorder()
-	request := promptRefinerRequestContext(httptest.NewRequest(http.MethodPost, "/api/v1/prompts/refinements/id/feedback", nil), uuid.New())
+	request := promptRefinerRequestContext(httptest.NewRequest(http.MethodPost, "/api/v1/prompts/refinements/feedback", nil), uuid.New())
 	server.requireCSRF(endpoint).ServeHTTP(missingCSRF, request)
 	if missingCSRF.Code != http.StatusForbidden || store.undoneID != uuid.Nil || store.submittedID != uuid.Nil {
 		t.Fatalf("csrf status=%d store=%#v", missingCSRF.Code, store)

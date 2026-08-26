@@ -23,7 +23,7 @@ import (
 const (
 	maxRefinerBodyBytes  = 128 << 10
 	maxRefinerRunes      = 32_768
-	promptRefinerTimeout = 25 * time.Second
+	promptRefinerTimeout = 60 * time.Second
 	promptRefinerRate    = 10.0 / 60.0
 	promptRefinerBurst   = 2.0
 )
@@ -163,11 +163,25 @@ func (s *Server) refinePrompt(w http.ResponseWriter, r *http.Request) {
 	if model.PromptSuffix != "" {
 		canonical.Prompt += " " + model.PromptSuffix
 	}
-	if model.Provider == "legnext" && len(normalized.InputAssetIDs) > 0 {
-		references, err := s.refinerReferenceURLs(r, normalized.InputAssetIDs)
+	if model.Provider == "legnext" && referenceCount > 0 {
+		references := make([]string, 0, referenceCount)
+		var err error
+		if len(normalized.InputAssetIDs) > 0 {
+			references, err = s.refinerReferenceURLs(r, normalized.InputAssetIDs)
+		}
 		if err != nil {
 			diagnostics = append(diagnostics, promptDiagnostic{Code: "REFERENCE_UNAVAILABLE", Severity: "warning", Message: "部分参考图已不可用，请重新选择"})
 		} else {
+			if request.PendingReferenceCount > 0 {
+				placeholder, signErr := providerurl.Sign(s.cfg.PublicURL, s.cfg.ProviderURLSigningSecret, uuid.Nil, ".jpeg", time.Now().Add(time.Hour))
+				if signErr != nil {
+					diagnostics = append(diagnostics, promptDiagnostic{Code: "REFERENCE_UNAVAILABLE", Severity: "warning", Message: "参考图长度暂时无法校验，请稍后重试"})
+				} else {
+					for range request.PendingReferenceCount {
+						references = append(references, placeholder)
+					}
+				}
+			}
 			canonical.ReferenceURLs = references
 		}
 	}
@@ -330,7 +344,7 @@ func boundedRefinerContext(value string, maximum int) string {
 }
 
 func validateOptimizedPrompt(original, candidate, providerID, promptSuffix string, canonical provider.CanonicalRequest, limit int, sourceOverLimit bool, before promptrefiner.Result, engine *promptrefiner.Engine) error {
-	if candidate == "" || utf8.RuneCountInString(candidate) > limit || !conservativePromptRewrite(original, candidate, sourceOverLimit, len(before.Findings) > 0) || !preservesProtectedPromptTokens(original, candidate) {
+	if candidate == "" || utf8.RuneCountInString(candidate) > limit || !conservativePromptRewrite(original, candidate, sourceOverLimit, len(before.Findings) > 0) || !preservesProtectedPromptTokens(original, candidate) || !preservesLatinPromptAnchors(original, candidate, before.Findings) {
 		return errors.New("invalid prompt rewrite")
 	}
 	if providerID == "legnext" && containsControlledLegnextInput(candidate) {
@@ -354,12 +368,19 @@ func validateOptimizedPrompt(original, candidate, providerID, promptSuffix strin
 		return errors.New("final prompt exceeds target limit")
 	}
 	knownRules := make(map[string]struct{}, len(before.Findings))
+	actionableRules := make(map[string]struct{}, len(before.Findings))
 	for _, finding := range before.Findings {
 		knownRules[finding.RuleID] = struct{}{}
+		if finding.Mode == "mapped" || finding.Mode == "manual_only" {
+			actionableRules[finding.RuleID] = struct{}{}
+		}
 	}
 	for _, finding := range engine.Refine(candidate).Findings {
 		if finding.Mode == "manual_only" {
 			return errors.New("manual-only finding remains")
+		}
+		if _, remains := actionableRules[finding.RuleID]; remains {
+			return errors.New("actionable finding remains")
 		}
 		if _, existed := knownRules[finding.RuleID]; !existed {
 			return errors.New("rewrite introduced a new deterministic finding")
@@ -400,6 +421,7 @@ func conservativePromptRewrite(original, candidate string, sourceOverLimit, hasK
 }
 
 var protectedPromptPattern = regexp.MustCompile(`(?i)\d+(?:[.,]\d+)*(?:\s*(?::|x|×)\s*\d+(?:[.,]\d+)*)?|"(?:[^"\\]|\\.)*"|'[^'\n]*'|“[^”\n]*”|‘[^’\n]*’|「[^」\n]*」|『[^』\n]*』`)
+var latinPromptAnchorPattern = regexp.MustCompile(`(?i)[a-z][a-z0-9_-]*`)
 
 func preservesProtectedPromptTokens(original, candidate string) bool {
 	want := make(map[string]int)
@@ -415,6 +437,31 @@ func preservesProtectedPromptTokens(original, candidate string) bool {
 	}
 	for token, count := range want {
 		if got[token] != count {
+			return false
+		}
+	}
+	return true
+}
+
+func preservesLatinPromptAnchors(original, candidate string, findings []promptrefiner.Finding) bool {
+	excluded := make(map[string]struct{})
+	for _, finding := range findings {
+		for _, token := range latinPromptAnchorPattern.FindAllString(strings.ToLower(finding.Original), -1) {
+			excluded[token] = struct{}{}
+		}
+	}
+	candidateTokens := make(map[string]struct{})
+	for _, token := range latinPromptAnchorPattern.FindAllString(strings.ToLower(candidate), -1) {
+		candidateTokens[token] = struct{}{}
+	}
+	for _, token := range latinPromptAnchorPattern.FindAllString(strings.ToLower(original), -1) {
+		if len(token) < 3 {
+			continue
+		}
+		if _, isFinding := excluded[token]; isFinding {
+			continue
+		}
+		if _, preserved := candidateTokens[token]; !preserved {
 			return false
 		}
 	}

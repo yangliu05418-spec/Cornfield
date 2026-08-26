@@ -38,6 +38,16 @@ func TestCreatePermitStreamDoesNotBurst(t *testing.T) {
 	}
 }
 
+func TestNewAPIClientUsesRequestedTimeout(t *testing.T) {
+	client, err := newAPIClient("https://studio.example", false, 75*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if client.http.Timeout != 75*time.Second {
+		t.Fatalf("HTTP timeout = %s, want 75s", client.http.Timeout)
+	}
+}
+
 func TestValidateLayerProtocolResult(t *testing.T) {
 	base := encodeTestPNG(t, solidTestImage(8, 8, color.NRGBA{R: 20, G: 30, B: 40, A: 255}))
 	layerImage := solidTestImage(4, 4, color.NRGBA{R: 255, A: 0})

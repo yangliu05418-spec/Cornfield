@@ -27,9 +27,9 @@ models:
       breaker_min_requests: 10
       breaker_failure_ratio: 0.5
       breaker_cooldown_seconds: 30
-      # Verified by a live image-to-image canary on 2026-07-17. Keep this list
-      # exact: result downloads reject every other host and all private IPs.
-      allowed_output_hosts: ["cdn.legnext.ai", "cdn.midjourney.com", "img.playjoy3d.com"]
+      # Verified by live task responses through 2026-08-26. Keep this list exact:
+      # result downloads reject every other host and all private IPs.
+      allowed_output_hosts: ["cdn.legnext.ai", "cdn.midjourney.com", "img.playjoy3d.com", "images.playjoy3d.com"]
 
   - id: legnext-midjourney
     display_name: Midjourney
@@ -55,7 +55,7 @@ models:
       breaker_min_requests: 10
       breaker_failure_ratio: 0.5
       breaker_cooldown_seconds: 30
-      allowed_output_hosts: ["cdn.legnext.ai", "cdn.midjourney.com", "img.playjoy3d.com"]
+      allowed_output_hosts: ["cdn.legnext.ai", "cdn.midjourney.com", "img.playjoy3d.com", "images.playjoy3d.com"]
 
   - id: openrouter-gemini-3-1-flash-lite-image
     display_name: "Google: Nano Banana 2 Lite"

@@ -169,6 +169,19 @@ func normalizeGenerationOptions(modelID, providerID string, versions, qualities,
 	return nil
 }
 
+func validateLegnextPromptLength(input generationRequest) error {
+	finalPrompt, err := provider.BuildLegnextPrompt(provider.CanonicalRequest{
+		Prompt: input.Prompt, AspectRatio: input.AspectRatio, Options: input.Options,
+	})
+	if err != nil {
+		return err
+	}
+	if utf8.RuneCountInString(finalPrompt) > 1024 {
+		return errors.New("最终 Midjourney 提示词不能超过 1024 个字符，请精简描述")
+	}
+	return nil
+}
+
 const (
 	generationBurstCapacity = 4.0
 	generationRefillPerSec  = 12.0 / 60.0
@@ -510,6 +523,14 @@ func (s *Server) createGeneration(w http.ResponseWriter, r *http.Request) {
 	if model.Provider == "legnext" && containsControlledLegnextInput(input.Prompt) {
 		writeError(w, http.StatusUnprocessableEntity, "CONTROLLED_PROVIDER_INPUT", "提示词不能包含 Midjourney 参数或外部图片链接", false, r)
 		return
+	}
+	// Reject deterministically over-limit text before creating a paid draw. The
+	// Worker repeats the check after signed reference URLs are attached.
+	if model.Provider == "legnext" {
+		if err := validateLegnextPromptLength(input); err != nil {
+			writeError(w, http.StatusUnprocessableEntity, "PROMPT_TOO_LONG", err.Error(), false, r)
+			return
+		}
 	}
 	if len(input.InputAssetIDs) > model.Capabilities.MaxReferenceImages || (len(input.InputAssetIDs) > 0 && !model.Capabilities.ImageToImage) || hasDuplicateAssetIDs(input.InputAssetIDs) {
 		writeError(w, http.StatusUnprocessableEntity, "REFERENCE_INVALID", "参考图数量或能力不受当前模型支持", false, r)
@@ -855,6 +876,10 @@ func publicJobError(code *string) *string {
 	switch *code {
 	case "CONTENT_POLICY_REJECTED":
 		message = "图片可能触发安全策略，请调整描述"
+	case "PROMPT_TOO_LONG":
+		message = "提示词过长，请精简描述后重试"
+	case "REFERENCE_FETCH_FAILED":
+		message = "参考图暂时无法传递，请稍后重试"
 	case "UNSUPPORTED_PARAMETER", "PROVIDER_HTTP_400", "PROVIDER_HTTP_413", "PROVIDER_HTTP_422":
 		message = "当前参数无法生成，请调整后重试"
 	case "PROVIDER_IMAGE_INVALID", "PROVIDER_RESPONSE_INVALID", "PROVIDER_EMPTY_RESULT", "PROVIDER_OUTPUT_COUNT_INVALID":
@@ -1090,10 +1115,98 @@ func dismissibleJobStatus(status string) bool {
 	return status == "failed" || status == "submission_uncertain" || status == "cancelled"
 }
 
+type bulkJobDismissal struct {
+	BatchID uuid.UUID `json:"batch_id"`
+	JobID   uuid.UUID `json:"job_id"`
+}
+
+func (s *Server) dismissJobsBulk(w http.ResponseWriter, r *http.Request) {
+	var input struct {
+		Jobs []bulkJobDismissal `json:"jobs"`
+	}
+	if !decodeJSON(w, r, &input) {
+		return
+	}
+	if len(input.Jobs) < 1 || len(input.Jobs) > 100 {
+		writeError(w, http.StatusUnprocessableEntity, "JOB_DISMISSAL_LIMIT", "一次可清理 1–100 个失败项", false, r)
+		return
+	}
+	seen := make(map[uuid.UUID]struct{}, len(input.Jobs))
+	for _, item := range input.Jobs {
+		if item.BatchID == uuid.Nil || item.JobID == uuid.Nil {
+			writeError(w, http.StatusUnprocessableEntity, "JOB_DISMISSAL_INVALID", "失败项标识无效", false, r)
+			return
+		}
+		if _, exists := seen[item.JobID]; exists {
+			writeError(w, http.StatusUnprocessableEntity, "JOB_DISMISSAL_DUPLICATE", "失败项不能重复", false, r)
+			return
+		}
+		seen[item.JobID] = struct{}{}
+	}
+	tx, err := s.db.Begin(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "DATABASE_ERROR", "清理失败项失败", true, r)
+		return
+	}
+	defer tx.Rollback(r.Context())
+	sess := currentSession(r)
+	for _, item := range input.Jobs {
+		var ownerID uuid.UUID
+		var status string
+		var dismissedAt *time.Time
+		err = tx.QueryRow(r.Context(), `SELECT b.owner_user_id,j.status,j.dismissed_at
+			FROM generation_jobs j JOIN generation_batches b ON b.id=j.batch_id
+			WHERE j.id=$1 AND j.batch_id=$2 AND (b.owner_user_id=$3 OR $4='admin') FOR UPDATE`, item.JobID, item.BatchID, sess.UserID, sess.Role).Scan(&ownerID, &status, &dismissedAt)
+		if isNotFound(err) {
+			writeError(w, http.StatusNotFound, "GENERATION_JOB_NOT_FOUND", "部分失败项不存在", false, r)
+			return
+		}
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "DATABASE_ERROR", "清理失败项失败", true, r)
+			return
+		}
+		if !dismissibleJobStatus(status) {
+			writeError(w, http.StatusConflict, "GENERATION_JOB_ACTIVE", "只能清理已经结束的失败项", false, r)
+			return
+		}
+		if dismissedAt == nil {
+			if _, err = tx.Exec(r.Context(), `UPDATE generation_jobs SET dismissed_at=now(),updated_at=now() WHERE id=$1`, item.JobID); err != nil {
+				writeError(w, http.StatusInternalServerError, "DATABASE_ERROR", "清理失败项失败", true, r)
+				return
+			}
+			if _, err = tx.Exec(r.Context(), `INSERT INTO job_events(owner_user_id,batch_id,job_id,event_type,payload)
+				VALUES($1,$2,$3,'job.dismissed',jsonb_build_object('status',$4::text,'dismissed',true))`, ownerID, item.BatchID, item.JobID, status); err != nil {
+				writeError(w, http.StatusInternalServerError, "DATABASE_ERROR", "清理失败项失败", true, r)
+				return
+			}
+		}
+	}
+	if err = tx.Commit(r.Context()); err != nil {
+		writeError(w, http.StatusInternalServerError, "DATABASE_ERROR", "清理失败项失败", true, r)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
 func (s *Server) retryBatch(w http.ResponseWriter, r *http.Request) {
+	s.retryGeneration(w, r, false)
+}
+
+func (s *Server) retryJob(w http.ResponseWriter, r *http.Request) {
+	s.retryGeneration(w, r, true)
+}
+
+func (s *Server) retryGeneration(w http.ResponseWriter, r *http.Request, scoped bool) {
 	id, ok := parseUUIDParam(w, r, "id")
 	if !ok {
 		return
+	}
+	jobID := uuid.Nil
+	if scoped {
+		jobID, ok = parseUUIDParam(w, r, "jobID")
+		if !ok {
+			return
+		}
 	}
 	sess := currentSession(r)
 	tx, err := s.db.Begin(r.Context())
@@ -1131,6 +1244,17 @@ func (s *Server) retryBatch(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "DATABASE_ERROR", "重试任务失败", true, r)
 		return
 	}
+	if scoped {
+		var exists bool
+		if err = tx.QueryRow(r.Context(), `SELECT EXISTS(SELECT 1 FROM generation_jobs WHERE id=$1 AND batch_id=$2)`, jobID, id).Scan(&exists); err != nil || !exists {
+			if err != nil {
+				writeError(w, http.StatusInternalServerError, "DATABASE_ERROR", "重试任务失败", true, r)
+			} else {
+				writeError(w, http.StatusNotFound, "GENERATION_JOB_NOT_FOUND", "抽卡任务不存在", false, r)
+			}
+			return
+		}
+	}
 	var lockedUser uuid.UUID
 	if err = tx.QueryRow(r.Context(), `SELECT id FROM users WHERE id=$1 FOR UPDATE`, ownerID).Scan(&lockedUser); err != nil {
 		writeError(w, http.StatusInternalServerError, "DATABASE_ERROR", "重试任务失败", true, r)
@@ -1149,7 +1273,7 @@ func (s *Server) retryBatch(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "DATABASE_ERROR", "重试任务失败", true, r)
 		return
 	}
-	if err = tx.QueryRow(r.Context(), `SELECT count(*) FROM generation_jobs j WHERE batch_id=$1 AND status='failed' AND retryable=true AND NOT EXISTS(SELECT 1 FROM generation_outputs o WHERE o.job_id=j.id)`, id).Scan(&retryable); err != nil {
+	if err = tx.QueryRow(r.Context(), `SELECT count(*) FROM generation_jobs j WHERE batch_id=$1 AND (NOT $2::boolean OR j.id=$3) AND status='failed' AND retryable=true AND NOT EXISTS(SELECT 1 FROM generation_outputs o WHERE o.job_id=j.id)`, id, scoped, jobID).Scan(&retryable); err != nil {
 		writeError(w, http.StatusInternalServerError, "DATABASE_ERROR", "重试任务失败", true, r)
 		return
 	}
@@ -1164,7 +1288,7 @@ func (s *Server) retryBatch(w http.ResponseWriter, r *http.Request) {
 	rows, err := tx.Query(r.Context(), `UPDATE generation_jobs j SET status='queued',dispatch_state='pending',river_job_id=NULL,provider_job_id=NULL,
 		error_code=NULL,error_message=NULL,submission_uncertain=false,retryable=true,next_attempt_at=now(),attempt_count=0,
 		generation_deadline=NULL,execution_generation=execution_generation+1,dispatched_at=NULL,started_at=NULL,completed_at=NULL,cancel_mode=NULL,dismissed_at=NULL,updated_at=now()
-		WHERE j.batch_id=$1 AND j.status='failed' AND j.retryable=true AND NOT EXISTS(SELECT 1 FROM generation_outputs o WHERE o.job_id=j.id) RETURNING id`, id)
+		WHERE j.batch_id=$1 AND (NOT $2::boolean OR j.id=$3) AND j.status='failed' AND j.retryable=true AND NOT EXISTS(SELECT 1 FROM generation_outputs o WHERE o.job_id=j.id) RETURNING id`, id, scoped, jobID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "DATABASE_ERROR", "重试任务失败", true, r)
 		return

@@ -5,6 +5,7 @@ import {
   applyGenerationEvent,
   failedJobAction,
   generationImageOptions,
+  recentRepeatedPolicyFailure,
 } from './app.create'
 import type { Asset, GenerationBatch, Model } from '#/lib/api'
 
@@ -72,6 +73,48 @@ describe('failed job actions', () => {
         status: 'submission_uncertain',
       } as GenerationBatch['jobs'][number]),
     ).toBe('none')
+  })
+})
+
+describe('repeated policy failure guard', () => {
+  it('intercepts only an unchanged recent policy-rejected request', () => {
+    const now = new Date('2026-08-26T12:00:00Z').getTime()
+    const batch = {
+      id: 'failed-batch',
+      model_id: 'model',
+      prompt: 'same prompt',
+      aspect_ratio: '1:1',
+      resolution: '1K',
+      options: {},
+      created_at: '2026-08-26T11:50:00Z',
+      jobs: [
+        {
+          id: 'job',
+          status: 'failed',
+          error_code: 'CONTENT_POLICY_REJECTED',
+        },
+      ],
+    } as unknown as GenerationBatch
+    const request = {
+      model_id: 'model',
+      capability_revision: 'revision',
+      prompt: 'same prompt',
+      aspect_ratio: '1:1',
+      resolution: '1K',
+      draw_count: 1,
+      input_asset_ids: [],
+      options: {},
+    }
+    expect(recentRepeatedPolicyFailure(request, [batch], now)?.id).toBe(
+      'failed-batch',
+    )
+    expect(
+      recentRepeatedPolicyFailure(
+        { ...request, prompt: 'edited prompt' },
+        [batch],
+        now,
+      ),
+    ).toBeUndefined()
   })
 })
 

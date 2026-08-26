@@ -116,6 +116,8 @@ func TestBytePlusErrorClassification(t *testing.T) {
 	}{
 		{name: "parameter", status: 400, body: `{"error":{"code":"InvalidParameter.size","message":"invalid size"}}`, code: "PROVIDER_HTTP_400"},
 		{name: "policy", status: 403, body: `{"error":{"code":"ContentFilter","message":"content policy rejected"}}`, code: "CONTENT_POLICY_REJECTED"},
+		{name: "output copyright policy", status: 400, body: `{"error":{"code":"InvalidParameter","message":"The output image may violate copyright policy"}}`, code: "CONTENT_POLICY_REJECTED"},
+		{name: "reference fetch timeout", status: 400, body: `{"error":{"code":"InvalidParameter.image","message":"Timeout while downloading url"}}`, code: "REFERENCE_FETCH_FAILED", retryable: true},
 		{name: "authentication", status: 401, body: `{"error":{"code":"AuthenticationError","message":"invalid key"}}`, code: "PROVIDER_HTTP_401", pause: true},
 		{name: "rate", status: 429, body: `{"error":{"code":"RequestLimitExceeded","message":"busy"}}`, code: "PROVIDER_HTTP_429", retryable: true},
 		{name: "ambiguous server", status: 500, body: `{"error":{"code":"InternalError","message":"failed"}}`, code: "SUBMISSION_UNCERTAIN", uncertain: true},

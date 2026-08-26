@@ -6,7 +6,7 @@ import {
   useQueryClient,
 } from '@tanstack/react-query'
 import type { InfiniteData, QueryClient } from '@tanstack/react-query'
-import { Minus, Plus, Sparkles, X, ZoomIn, ZoomOut } from 'lucide-react'
+import { Minus, Plus, Sparkles, Trash2, X, ZoomIn, ZoomOut } from 'lucide-react'
 import {
   useCallback,
   useEffect,
@@ -56,6 +56,11 @@ const generationTerminalStatuses = new Set([
 ])
 const uploadValidationTimeout = 2 * 60 * 1000
 const wallAssetsQueryKey = ['assets', 'wall'] as const
+const dismissibleGenerationStatuses = new Set([
+  'failed',
+  'cancelled',
+  'submission_uncertain',
+])
 
 function resizePromptTextarea(textarea: HTMLTextAreaElement | null) {
   if (!textarea) return
@@ -278,6 +283,38 @@ export function failedJobAction(job: GenerationJob): 'retry' | 'edit' | 'none' {
   return job.retryable ? 'retry' : 'edit'
 }
 
+export function recentRepeatedPolicyFailure(
+  request: GenerationRequest,
+  batches: GenerationBatch[],
+  now = Date.now(),
+): GenerationBatch | undefined {
+  const cutoff = now - 30 * 60 * 1000
+  return batches.find(
+    (batch) =>
+      new Date(batch.created_at).getTime() >= cutoff &&
+      batch.model_id === request.model_id &&
+      batch.prompt.trim() === request.prompt.trim() &&
+      batch.aspect_ratio === request.aspect_ratio &&
+      batch.resolution === request.resolution &&
+      JSON.stringify(batch.options ?? {}) === JSON.stringify(request.options) &&
+      batch.jobs.some(
+        (job) =>
+          job.status === 'failed' &&
+          job.error_code === 'CONTENT_POLICY_REJECTED',
+      ),
+  )
+}
+
+function policyRetrySignature(request: GenerationRequest): string {
+  return JSON.stringify({
+    model_id: request.model_id,
+    prompt: request.prompt.trim(),
+    aspect_ratio: request.aspect_ratio,
+    resolution: request.resolution,
+    options: request.options,
+  })
+}
+
 function referenceLimitLabel(bytes: number): string {
   const mebibytes = bytes / (1024 * 1024)
   return `${Number.isInteger(mebibytes) ? mebibytes : mebibytes.toFixed(1)} MiB`
@@ -309,6 +346,7 @@ function CreatePage() {
   const assetRefreshInFlight = useRef<Promise<void> | null>(null)
   const assetRefreshVersion = useRef(0)
   const assetRecoveryRevision = useRef('')
+  const repeatedPolicyBypass = useRef('')
   const me = useQuery({ queryKey: ['me'], queryFn: getMe, retry: false })
   const models = useQuery({
     queryKey: ['models'],
@@ -414,6 +452,9 @@ function CreatePage() {
     models.data?.models[0]
   const maxDraws = activeModel?.capabilities.draw_count.max ?? 4
   const isMidjourney = activeModel?.id === 'legnext-midjourney'
+  const midjourneyPromptLength = isMidjourney
+    ? Array.from(prompt.trim()).length
+    : 0
   const availableRatios =
     activeModel?.capabilities.aspect_ratios_by_resolution?.[resolution] ??
     activeModel?.capabilities.aspect_ratios ??
@@ -759,6 +800,19 @@ function CreatePage() {
     () => generations.data?.pages.flatMap((page) => page.items) ?? [],
     [generations.data?.pages],
   )
+  const dismissibleJobs = useMemo(
+    () =>
+      generationItems.flatMap((batch) =>
+        batch.jobs
+          .filter(
+            (job) =>
+              !job.dismissed_at &&
+              dismissibleGenerationStatuses.has(job.status),
+          )
+          .map((job) => ({ batchID: batch.id, jobID: job.id })),
+      ),
+    [generationItems],
+  )
   useEffect(() => {
     setOptimisticBatches((current) => {
       const recovered = new Set(
@@ -831,6 +885,21 @@ function CreatePage() {
     )
     const modelSnapshot = activeModel
     if (!request || !modelSnapshot) return
+
+    const requestSignature = policyRetrySignature(request)
+    const repeatedFailure = recentRepeatedPolicyFailure(
+      request,
+      generationItems,
+    )
+    if (repeatedFailure && repeatedPolicyBypass.current !== requestSignature) {
+      repeatedPolicyBypass.current = requestSignature
+      await restoreFailedBatch(repeatedFailure.id, true).catch((reason) =>
+        setNotice(
+          reason instanceof Error ? reason.message : '恢复失败任务失败',
+        ),
+      )
+      return
+    }
 
     setReferenceSubmitBusy(true)
     try {
@@ -907,24 +976,19 @@ function CreatePage() {
     })
   }
 
-  async function refinePrompt() {
-    const request = currentGenerationRequest()
-    if (!request || refinerBusy) return
-    request.prompt = prompt
-    const signature = refinerRequestSignature
-    const selection = {
-      start: promptRef.current?.selectionStart ?? prompt.length,
-      end: promptRef.current?.selectionEnd ?? prompt.length,
-    }
+  async function requestPromptRefinement(
+    request: GenerationRequest,
+    signature: string,
+    selection: { start: number; end: number },
+    pendingReferenceCount = 0,
+  ) {
     setRefinerBusy(true)
     try {
       const result = await api<PromptRefineResponse>('/api/v1/prompts/refine', {
         method: 'POST',
         body: JSON.stringify({
           ...request,
-          pending_reference_count: references.filter(
-            (reference) => reference.source === 'local',
-          ).length,
+          pending_reference_count: pendingReferenceCount,
         }),
       })
       if (refinerRequestSignatureRef.current !== signature) {
@@ -940,6 +1004,21 @@ function CreatePage() {
     } finally {
       setRefinerBusy(false)
     }
+  }
+
+  async function refinePrompt() {
+    const request = currentGenerationRequest()
+    if (!request || refinerBusy) return
+    request.prompt = prompt
+    await requestPromptRefinement(
+      request,
+      refinerRequestSignature,
+      {
+        start: promptRef.current?.selectionStart ?? prompt.length,
+        end: promptRef.current?.selectionEnd ?? prompt.length,
+      },
+      references.filter((reference) => reference.source === 'local').length,
+    )
   }
   function deleteAsset(asset: Asset) {
     setConfirm({
@@ -993,6 +1072,59 @@ function CreatePage() {
       action: () => performDismissJob(batchID, jobID),
     })
   }
+  function dismissLoadedFailedJobs() {
+    const jobs = dismissibleJobs.slice(0, 100)
+    if (!jobs.length) return
+    setConfirm({
+      title: '清理失败项',
+      description: `将从灵感墙移除 ${jobs.length} 个已结束的失败项，任务审计仍会保留。`,
+      label: '确认清理',
+      action: () => performDismissJobs(jobs),
+    })
+  }
+  async function performDismissJobs(
+    jobs: Array<{ batchID: string; jobID: string }>,
+  ) {
+    const previous = queryClient.getQueryData<GenerationPages>(['generations'])
+    const jobIDs = new Set(jobs.map((job) => job.jobID))
+    queryClient.setQueryData<GenerationPages>(['generations'], (current) => {
+      if (!current) return current
+      return {
+        ...current,
+        pages: current.pages.map((page) => ({
+          ...page,
+          items: page.items.map((batch) => ({
+            ...batch,
+            jobs: batch.jobs.map((job) =>
+              jobIDs.has(job.id)
+                ? { ...job, dismissed_at: new Date().toISOString() }
+                : job,
+            ),
+          })),
+        })),
+      }
+    })
+    try {
+      await api('/api/v1/generations/job-dismissals', {
+        method: 'POST',
+        body: JSON.stringify({
+          jobs: jobs.map((job) => ({
+            batch_id: job.batchID,
+            job_id: job.jobID,
+          })),
+        }),
+      })
+      setNotice(
+        dismissibleJobs.length > jobs.length
+          ? `已清理 ${jobs.length} 个失败项，可继续清理剩余记录`
+          : `已清理 ${jobs.length} 个失败项`,
+      )
+    } catch (reason) {
+      queryClient.setQueryData(['generations'], previous)
+      setNotice(reason instanceof Error ? reason.message : '清理失败项失败')
+      throw reason
+    }
+  }
   async function performDismissJob(batchID: string, jobID: string) {
     const previous = queryClient.getQueryData<GenerationPages>(['generations'])
     queryClient.setQueryData<GenerationPages>(['generations'], (current) => {
@@ -1026,12 +1158,13 @@ function CreatePage() {
       setNotice(reason instanceof Error ? reason.message : '移除失败')
     }
   }
-  async function restoreFailedBatch(batchID: string) {
+  async function restoreFailedBatch(batchID: string, openRefiner = false) {
     const batch = await api<GenerationBatch>(`/api/v1/generations/${batchID}`)
     setModelID(batch.model_id)
     setPrompt(batch.prompt)
     setRatio(batch.aspect_ratio)
     setResolution(batch.resolution)
+    setDraws(batch.draw_count)
     if (batch.options?.midjourney) setMidjourney(batch.options.midjourney)
     if (batch.options?.image?.quality) setQuality(batch.options.image.quality)
     if (batch.options?.image?.prompt_optimization_mode)
@@ -1046,7 +1179,32 @@ function CreatePage() {
         .filter((asset): asset is Asset => asset !== null)
         .map(assetReference),
     )
-    window.requestAnimationFrame(() => promptRef.current?.focus())
+    await new Promise<void>((resolve) =>
+      window.requestAnimationFrame(() => resolve()),
+    )
+    promptRef.current?.focus()
+    if (openRefiner && models.data) {
+      const request: GenerationRequest = {
+        model_id: batch.model_id,
+        capability_revision: models.data.revision,
+        prompt: batch.prompt,
+        aspect_ratio: batch.aspect_ratio,
+        resolution: batch.resolution,
+        draw_count: batch.draw_count,
+        input_asset_ids: batch.input_asset_ids ?? [],
+        options: batch.options ?? {},
+      }
+      await requestPromptRefinement(
+        request,
+        refinerRequestSignatureRef.current,
+        {
+          start: batch.prompt.length,
+          end: batch.prompt.length,
+        },
+      )
+      setNotice('已恢复原参数，并标出可能需要调整的描述')
+      return
+    }
     setNotice('原参数已恢复，请调整描述或参数后重新生成')
   }
   function retryJob(batchID: string, jobID: string) {
@@ -1056,9 +1214,11 @@ function CreatePage() {
     const action = failedJobAction(job)
     if (action === 'none') return
     if (action === 'edit') {
-      void restoreFailedBatch(batchID).catch((error: Error) =>
-        setNotice(error.message),
-      )
+      void restoreFailedBatch(
+        batchID,
+        job.error_code === 'CONTENT_POLICY_REJECTED' ||
+          job.error_code === 'PROMPT_TOO_LONG',
+      ).catch((error: Error) => setNotice(error.message))
       return
     }
     setConfirm({
@@ -1066,9 +1226,11 @@ function CreatePage() {
       description: '这会创建一个新的上游任务，并可能产生新的费用。',
       label: '确认重试',
       action: async () => {
-        await api(`/api/v1/generations/${batchID}/retry`, { method: 'POST' })
+        await api(`/api/v1/generations/${batchID}/jobs/${jobID}/retry`, {
+          method: 'POST',
+        })
         await queryClient.invalidateQueries({ queryKey: ['generations'] })
-        setNotice('已创建新的生成任务')
+        setNotice('已重新提交这一抽卡，其他结果不受影响')
       },
     })
   }
@@ -1278,6 +1440,17 @@ function CreatePage() {
     <AppShell>
       <main className="create-page">
         <div className="wall-toolbar">
+          {dismissibleJobs.length > 0 && (
+            <button
+              className="failed-cleanup-button"
+              type="button"
+              onClick={dismissLoadedFailedJobs}
+            >
+              <Trash2 size={13} />
+              清理失败项
+              <span>{Math.min(dismissibleJobs.length, 100)}</span>
+            </button>
+          )}
           <div
             className="density-control"
             style={{ '--zoom-progress': `${density * 25}%` } as CSSProperties}
@@ -1449,6 +1622,14 @@ function CreatePage() {
                 placeholder="描述你想象中的画面"
                 rows={1}
               />
+              {isMidjourney && midjourneyPromptLength >= 900 && (
+                <span
+                  className={`midjourney-prompt-count${midjourneyPromptLength > 1024 ? ' is-over' : ''}`}
+                  role="status"
+                >
+                  {midjourneyPromptLength}/1024
+                </span>
+              )}
               <button
                 type="button"
                 className="prompt-refiner-button"
@@ -1587,6 +1768,11 @@ function CreatePage() {
                 {activeModel.availability.message ?? '生成服务暂不可用'}
               </span>
             )}
+            {isMidjourney && midjourneyPromptLength > 1024 && (
+              <span className="generator-unavailable" role="status">
+                Midjourney 提示词过长，请精简后再生成
+              </span>
+            )}
           </div>
           <button
             className="generate-button"
@@ -1594,6 +1780,7 @@ function CreatePage() {
               !prompt.trim() ||
               create.isPending ||
               referenceSubmitBusy ||
+              midjourneyPromptLength > 1024 ||
               !activeModel?.availability.can_submit
             }
           >

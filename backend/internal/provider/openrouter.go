@@ -483,7 +483,8 @@ func contentPolicyErrorDetail(detail string) bool {
 	for _, marker := range []string{
 		"content policy", "content moderated", "request moderated",
 		"sensitive information", "sensitive content", "safety policy",
-		"safety system", "moderation policy",
+		"safety system", "moderation policy", "content moderation",
+		"prohibited_content", "image_prohibited_content", "copyright policy",
 	} {
 		if strings.Contains(detail, marker) {
 			return true

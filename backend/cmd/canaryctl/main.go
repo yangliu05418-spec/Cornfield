@@ -285,7 +285,11 @@ func run() error {
 	if err != nil {
 		return fmt.Errorf("read password: %w", err)
 	}
-	client, err := newAPIClient(baseURL, allowHTTP)
+	clientTimeout := 40 * time.Second
+	if profile == "refiner-e2e" {
+		clientTimeout = 75 * time.Second
+	}
+	client, err := newAPIClient(baseURL, allowHTTP, clientTimeout)
 	if err != nil {
 		return fmt.Errorf("configure API client: %w", err)
 	}
@@ -443,7 +447,7 @@ func buildLaunchMidjourneyCases(model modelconfig.Model, revision string, seed i
 	return cases
 }
 
-func newAPIClient(raw string, allowHTTP bool) (*apiClient, error) {
+func newAPIClient(raw string, allowHTTP bool, timeout time.Duration) (*apiClient, error) {
 	parsed, err := url.Parse(raw)
 	if err != nil || parsed.Host == "" || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" || parsed.Path != "" {
 		return nil, errors.New("base URL must be a bare origin")
@@ -455,7 +459,7 @@ func newAPIClient(raw string, allowHTTP bool) (*apiClient, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &apiClient{base: parsed, http: &http.Client{Timeout: 40 * time.Second, Jar: jar}}, nil
+	return &apiClient{base: parsed, http: &http.Client{Timeout: timeout, Jar: jar}}, nil
 }
 
 func readPassword(path string) (string, error) {

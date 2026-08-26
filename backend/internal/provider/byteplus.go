@@ -358,8 +358,15 @@ func bytePlusStructuredError(status int, upstream bytePlusErrorEnvelope, telemet
 		message += ": " + detail
 	}
 	combined := strings.ToLower(upstream.Code + " " + upstream.Type + " " + upstream.Message)
-	if contentPolicyErrorDetail(combined) || strings.Contains(combined, "contentfilter") || strings.Contains(combined, "moderation") {
+	if contentPolicyErrorDetail(combined) || strings.Contains(combined, "contentfilter") || strings.Contains(combined, "moderation") || strings.Contains(combined, "copyright") {
 		return &Error{Code: "CONTENT_POLICY_REJECTED", Message: message, Telemetry: telemetry}
+	}
+	if strings.Contains(combined, "timeout while downloading") || strings.Contains(combined, "failed to download image") {
+		// BytePlus rejected the input before generation because it could not fetch
+		// the reference. The request is known not to have produced an image and is
+		// therefore safe to retry; Cornfield normally avoids this path by embedding
+		// bounded local references as data URLs.
+		return &Error{Code: "REFERENCE_FETCH_FAILED", Message: message, Retryable: true, Telemetry: telemetry}
 	}
 	if status == http.StatusRequestTimeout || status >= 500 {
 		return &Error{Code: "SUBMISSION_UNCERTAIN", Message: message, SubmissionUncertain: true, Telemetry: telemetry}

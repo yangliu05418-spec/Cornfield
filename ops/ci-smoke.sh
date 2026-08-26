@@ -341,6 +341,29 @@ curl --fail-with-body --silent --show-error --cookie "${cookie_jar}" \
   --header "X-CSRF-Token: ${csrf_token}" --request POST \
   http://127.0.0.1:8081/api/v1/admin/providers/openrouter/resume > "${tmp_dir}/openrouter-runtime-resume.json"
 
+# Failed draws can be retried individually, and terminal placeholders can be
+# dismissed in one atomic request without deleting the audit trail.
+docker compose stop worker >/dev/null
+queued_job_id="$(docker compose exec -T postgres psql -U studio_bootstrap -d studio -Atc \
+  "SELECT id FROM generation_jobs WHERE batch_id='${queued_batch_id}'::uuid LIMIT 1")"
+curl --fail-with-body --silent --show-error --cookie "${cookie_jar}" \
+  --header "X-CSRF-Token: ${csrf_token}" --request POST \
+  "http://127.0.0.1:8081/api/v1/generations/${queued_batch_id}/jobs/${queued_job_id}/retry" > "${tmp_dir}/scoped-retry.json"
+jq -e '.retried_jobs == 1 and .duplicate_cost_risk == false' "${tmp_dir}/scoped-retry.json" >/dev/null
+test "$(docker compose exec -T postgres psql -U studio_bootstrap -d studio -Atc \
+  "SELECT status FROM generation_jobs WHERE id='${queued_job_id}'::uuid")" = "queued"
+docker compose exec -T postgres psql -U studio_bootstrap -d studio -v ON_ERROR_STOP=1 -c \
+  "UPDATE generation_jobs SET status='failed',error_code='CI_FAILURE',error_message='CI failure',retryable=true WHERE id='${queued_job_id}'::uuid" >/dev/null
+curl --fail-with-body --silent --show-error --cookie "${cookie_jar}" \
+  --header "X-CSRF-Token: ${csrf_token}" --header 'Content-Type: application/json' \
+  --data "{\"jobs\":[{\"batch_id\":\"${queued_batch_id}\",\"job_id\":\"${queued_job_id}\"}]}" \
+  http://127.0.0.1:8081/api/v1/generations/job-dismissals >/dev/null
+test "$(docker compose exec -T postgres psql -U studio_bootstrap -d studio -Atc \
+  "SELECT dismissed_at IS NOT NULL FROM generation_jobs WHERE id='${queued_job_id}'::uuid")" = "t"
+test "$(docker compose exec -T postgres psql -U studio_bootstrap -d studio -Atc \
+  "SELECT count(*) FROM job_events WHERE job_id='${queued_job_id}'::uuid AND event_type='job.dismissed'")" = "1"
+docker compose start worker >/dev/null
+
 # Exercise the complete text-to-image path independently of reference uploads.
 text_generation_json="${tmp_dir}/text-generation.json"
 text_request_json="$(jq -nc --arg revision "${revision}" \

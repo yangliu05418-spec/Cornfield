@@ -3483,7 +3483,39 @@ select {
   z-index: 10;
   top: 14px;
   right: 14px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
   pointer-events: none;
+}
+.failed-cleanup-button {
+  display: inline-flex;
+  min-height: 32px;
+  align-items: center;
+  gap: 7px;
+  padding: 0 10px;
+  color: var(--muted);
+  border: 1px solid var(--line);
+  border-radius: 11px;
+  background: color-mix(in srgb, var(--surface) 92%, transparent);
+  font-size: 11px;
+  backdrop-filter: blur(12px);
+  pointer-events: auto;
+}
+.failed-cleanup-button:hover,
+.failed-cleanup-button:focus-visible {
+  color: var(--text);
+  border-color: color-mix(in srgb, var(--text) 24%, var(--line));
+  background: var(--surface-2);
+}
+.failed-cleanup-button span {
+  min-width: 18px;
+  padding: 2px 5px;
+  color: #10130b;
+  border-radius: 999px;
+  background: var(--lime);
+  font: 600 9px/1 var(--font-mono);
+  text-align: center;
 }
 .density-control {
   height: 40px;
@@ -3985,6 +4017,15 @@ select {
 }
 .generator textarea::placeholder {
   color: #777a78;
+}
+.midjourney-prompt-count {
+  flex: 0 0 auto;
+  color: var(--muted);
+  font: 500 9px/1 var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+.midjourney-prompt-count.is-over {
+  color: #d4a19b;
 }
 .generator-controls {
   min-width: 0;

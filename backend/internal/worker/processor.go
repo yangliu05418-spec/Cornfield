@@ -85,6 +85,15 @@ type generationRecord struct {
 	UpstreamActiveUntil *time.Time
 }
 
+type generationReference struct {
+	ID         uuid.UUID
+	StorageKey string
+	MediaType  string
+	ByteSize   int64
+}
+
+const bytePlusEmbeddedReferenceLimit = int64(32 << 20)
+
 type submissionClaim struct {
 	Claimed    bool
 	RetryAfter time.Duration
@@ -359,6 +368,10 @@ func (w *GenerateWorker) Work(ctx context.Context, riverJob *river.Job[GenerateA
 		request, requestErr := w.canonicalRequest(ctx, record)
 		if requestErr != nil {
 			release()
+			var requestProviderErr *provider.Error
+			if errors.As(requestErr, &requestProviderErr) {
+				return w.fail(ctx, record, requestProviderErr.Code, requestProviderErr.Message, false)
+			}
 			return w.fail(ctx, record, "REFERENCE_READ_FAILED", requestErr.Error(), false)
 		}
 		submitCtx, cancelSubmit := boundedContext(ctx, time.Duration(model.Policy.SubmitTimeoutSeconds)*time.Second, record.GenerationDeadline)
@@ -919,7 +932,7 @@ func (w *GenerateWorker) canonicalRequest(ctx context.Context, item generationRe
 		}
 		request.CallbackURL = callbackURL
 	}
-	rows, err := w.DB.Query(ctx, `SELECT a.id,a.storage_key,
+	rows, err := w.DB.Query(ctx, `SELECT a.id,a.storage_key,a.media_type,a.byte_size,
 		(a.purged_at IS NULL AND a.purge_pending=false AND a.expires_at>now()) AS usable
 		FROM generation_input_assets i JOIN assets a ON a.id=i.asset_id
 		WHERE i.batch_id=$1 ORDER BY i.position`, item.BatchID)
@@ -927,36 +940,102 @@ func (w *GenerateWorker) canonicalRequest(ctx context.Context, item generationRe
 		return request, err
 	}
 	defer rows.Close()
+	references := make([]generationReference, 0, item.ModelSnapshot.Capabilities.MaxReferenceImages)
 	for rows.Next() {
-		var assetID uuid.UUID
-		var key string
+		var reference generationReference
 		var usable bool
-		if err := rows.Scan(&assetID, &key, &usable); err != nil {
+		if err := rows.Scan(&reference.ID, &reference.StorageKey, &reference.MediaType, &reference.ByteSize, &usable); err != nil {
 			return request, err
 		}
 		if !usable {
 			return request, errors.New("generation reference is unavailable")
 		}
-		referenceURL, err := providerurl.Sign(w.Config.PublicURL, w.Config.ProviderURLSigningSecret, assetID, filepath.Ext(key), time.Now().Add(time.Hour))
-		if err != nil {
-			return request, err
-		}
-		request.ReferenceURLs = append(request.ReferenceURLs, referenceURL)
+		references = append(references, reference)
 	}
 	if err := rows.Err(); err != nil {
 		return request, err
 	}
+	if item.ProviderID == "byteplus" && embeddedReferenceBytes(references) <= bytePlusEmbeddedReferenceLimit {
+		request.ReferenceData, err = w.embedGenerationReferences(references)
+		if err != nil {
+			return request, err
+		}
+	} else {
+		for _, reference := range references {
+			referenceURL, signErr := providerurl.Sign(w.Config.PublicURL, w.Config.ProviderURLSigningSecret, reference.ID, filepath.Ext(reference.StorageKey), time.Now().Add(time.Hour))
+			if signErr != nil {
+				return request, signErr
+			}
+			request.ReferenceURLs = append(request.ReferenceURLs, referenceURL)
+		}
+	}
 	providerPromptLength := utf8.RuneCountInString(prompt)
 	if item.ProviderID == "legnext" {
-		providerPromptLength += utf8.RuneCountInString(" --ar ") + utf8.RuneCountInString(item.AspectRatio)
-		for _, referenceURL := range request.ReferenceURLs {
-			providerPromptLength += utf8.RuneCountInString(referenceURL) + 1
+		finalPrompt, buildErr := provider.BuildLegnextPrompt(request)
+		if buildErr != nil {
+			return request, buildErr
+		}
+		providerPromptLength = utf8.RuneCountInString(finalPrompt)
+		if providerPromptLength > 1024 {
+			return request, &provider.Error{Code: "PROMPT_TOO_LONG", Message: "final Midjourney prompt exceeds 1024 characters"}
 		}
 	}
 	if providerPromptLength > 8192 {
 		return provider.CanonicalRequest{}, errors.New("final provider prompt exceeds 8192 characters")
 	}
 	return request, nil
+}
+
+func embeddedReferenceBytes(references []generationReference) int64 {
+	var total int64
+	for _, reference := range references {
+		if reference.ByteSize < 0 || total > bytePlusEmbeddedReferenceLimit-reference.ByteSize {
+			return bytePlusEmbeddedReferenceLimit + 1
+		}
+		total += reference.ByteSize
+	}
+	return total
+}
+
+func (w *GenerateWorker) embedGenerationReferences(references []generationReference) ([]string, error) {
+	if len(references) == 0 {
+		return nil, nil
+	}
+	if w.Blobs == nil {
+		return nil, errors.New("asset store is unavailable")
+	}
+	lease := w.Blobs.AcquireContentLease()
+	defer lease.Release()
+	encoded := make([]string, 0, len(references))
+	for _, reference := range references {
+		mediaType := strings.ToLower(strings.TrimSpace(reference.MediaType))
+		switch mediaType {
+		case "image/jpeg", "image/png", "image/webp":
+		default:
+			return nil, errors.New("reference image media type is unsupported")
+		}
+		file, err := w.Blobs.Open(reference.StorageKey)
+		if err != nil {
+			return nil, err
+		}
+		var value strings.Builder
+		value.Grow(int(reference.ByteSize*4/3) + len(mediaType) + 32)
+		value.WriteString("data:")
+		value.WriteString(mediaType)
+		value.WriteString(";base64,")
+		encoder := base64.NewEncoder(base64.StdEncoding, &value)
+		written, copyErr := io.Copy(encoder, io.LimitReader(file, reference.ByteSize+1))
+		closeErr := encoder.Close()
+		fileCloseErr := file.Close()
+		if copyErr != nil || closeErr != nil || fileCloseErr != nil {
+			return nil, errors.Join(copyErr, closeErr, fileCloseErr)
+		}
+		if written != reference.ByteSize {
+			return nil, errors.New("reference image size changed while reading")
+		}
+		encoded = append(encoded, value.String())
+	}
+	return encoded, nil
 }
 
 func canonicalRequestFromSnapshot(item generationRecord) provider.CanonicalRequest {
@@ -1239,6 +1318,10 @@ func userFacingGenerationError(code string) string {
 	switch code {
 	case "CONTENT_POLICY_REJECTED":
 		return "图片可能触发安全策略，请调整描述"
+	case "PROMPT_TOO_LONG":
+		return "提示词过长，请精简描述后重试"
+	case "REFERENCE_FETCH_FAILED":
+		return "参考图暂时无法传递，请稍后重试"
 	case "UNSUPPORTED_PARAMETER", "PROVIDER_HTTP_400", "PROVIDER_HTTP_413", "PROVIDER_HTTP_422":
 		return "当前参数无法生成，请调整后重试"
 	case "PROVIDER_IMAGE_INVALID", "PROVIDER_RESPONSE_INVALID", "PROVIDER_EMPTY_RESULT", "PROVIDER_OUTPUT_COUNT_INVALID":

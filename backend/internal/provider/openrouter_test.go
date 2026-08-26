@@ -284,6 +284,9 @@ func TestOpenRouterContentPolicyClassificationUsesExplicitDetail(t *testing.T) {
 	}{
 		{detail: "The output image may contain sensitive information", want: true},
 		{detail: "request rejected by the safety system", want: true},
+		{detail: "Gemini blocked the request (PROHIBITED_CONTENT)", want: true},
+		{detail: "xAI content moderation rejected this request", want: true},
+		{detail: "output rejected due to copyright policy", want: true},
 		{detail: "invalid width and height", want: false},
 		{detail: "permission denied", want: false},
 	} {

@@ -653,6 +653,10 @@ function generationErrorMessage(code?: string, _fallback?: string): string {
   switch (code) {
     case 'CONTENT_POLICY_REJECTED':
       return '图片可能触发安全策略，请调整描述'
+    case 'PROMPT_TOO_LONG':
+      return '提示词过长，请精简描述后重试'
+    case 'REFERENCE_FETCH_FAILED':
+      return '参考图暂时无法传递，请稍后重试'
     case 'UNSUPPORTED_PARAMETER':
     case 'PROVIDER_HTTP_400':
     case 'PROVIDER_HTTP_413':

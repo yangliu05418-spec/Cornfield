@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -61,6 +62,20 @@ func TestBFLOutputHostPatternIsNarrow(t *testing.T) {
 		if outputHostAllowed(host, "delivery.*.bfl.ai") {
 			t.Fatalf("expected %q to be rejected", host)
 		}
+	}
+}
+
+func TestLegnextObservedDeliveryHostIsAllowlistedExactly(t *testing.T) {
+	parsed, err := url.Parse("https://images.playjoy3d.com/result.png")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !generationOutputURLAllowed(parsed, []string{"images.playjoy3d.com"}) {
+		t.Fatal("observed Legnext delivery host was rejected")
+	}
+	spoofed, _ := url.Parse("https://images.playjoy3d.com.attacker.example/result.png")
+	if generationOutputURLAllowed(spoofed, []string{"images.playjoy3d.com"}) {
+		t.Fatal("suffix spoofing bypassed the exact host allowlist")
 	}
 }
 

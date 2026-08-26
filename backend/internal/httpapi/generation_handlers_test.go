@@ -38,6 +38,8 @@ func TestGenerationRequestHash(t *testing.T) {
 func TestPublicJobErrorNeverReturnsProviderDetail(t *testing.T) {
 	for code, want := range map[string]string{
 		"CONTENT_POLICY_REJECTED": "图片可能触发安全策略，请调整描述",
+		"PROMPT_TOO_LONG":         "提示词过长，请精简描述后重试",
+		"REFERENCE_FETCH_FAILED":  "参考图暂时无法传递，请稍后重试",
 		"PROVIDER_HTTP_400":       "当前参数无法生成，请调整后重试",
 		"PROVIDER_UNAVAILABLE":    "生成服务暂不可用，请稍后手动重试",
 		"SUBMISSION_INTERRUPTED":  "任务提交结果不确定，请等待核查或移除记录",
@@ -227,6 +229,23 @@ func TestNormalizeBytePlusPromptOptimization(t *testing.T) {
 	input.Options.Image.PromptOptimizationMode = "turbo"
 	if err := normalizeGenerationOptions("byteplus-seedream-5-0-pro", "byteplus", nil, nil, modes, 0, &input); err == nil {
 		t.Fatal("unsupported prompt optimization mode was accepted")
+	}
+}
+
+func TestLegnextPromptLengthValidationUsesFinalParameters(t *testing.T) {
+	input := generationRequest{
+		Prompt:      strings.Repeat("界", 990),
+		AspectRatio: "16:9",
+		Options: provider.GenerationOptions{Midjourney: &provider.MidjourneyOptions{
+			Version: "8.2", Resolution: "sd", Speed: "fast", Stylize: 100,
+		}},
+	}
+	if err := validateLegnextPromptLength(input); err == nil {
+		t.Fatal("over-limit final Midjourney prompt was accepted")
+	}
+	input.Prompt = "quiet field at dusk"
+	if err := validateLegnextPromptLength(input); err != nil {
+		t.Fatalf("valid prompt rejected: %v", err)
 	}
 }
 

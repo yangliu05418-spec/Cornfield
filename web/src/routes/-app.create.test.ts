@@ -6,6 +6,7 @@ import {
   failedJobAction,
   generationImageOptions,
   recentRepeatedPolicyFailure,
+  submittedRefinementID,
 } from './app.create'
 import type { Asset, GenerationBatch, Model } from '#/lib/api'
 
@@ -126,5 +127,24 @@ describe('generation image options', () => {
     expect(generationImageOptions(model, 'auto', 'fast')).toEqual({
       image: { prompt_optimization_mode: 'fast' },
     })
+  })
+})
+
+describe('prompt refinement feedback', () => {
+  it('associates a successful batch only with an unchanged optimized prompt', () => {
+    const refinement = {
+      refinementID: 'refinement-id',
+      after: 'optimized prompt',
+    }
+    expect(submittedRefinementID(refinement, 'optimized prompt')).toBe(
+      'refinement-id',
+    )
+    expect(submittedRefinementID(refinement, 'edited prompt')).toBeUndefined()
+    expect(
+      submittedRefinementID(
+        { refinementID: undefined, after: 'optimized prompt' },
+        'optimized prompt',
+      ),
+    ).toBeUndefined()
   })
 })

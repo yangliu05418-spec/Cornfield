@@ -24,6 +24,7 @@ import type {
   MouseEvent as ReactMouseEvent,
 } from 'react'
 
+import { PromptRefinerIcon } from '#/components/prompt-refiner-icon'
 import type { Asset, GenerationBatch } from '#/lib/api'
 
 const terminalJobStatuses = new Set([
@@ -31,6 +32,17 @@ const terminalJobStatuses = new Set([
   'cancelled',
   'submission_uncertain',
 ])
+const refinableGenerationErrors = new Set([
+  'CONTENT_POLICY_REJECTED',
+  'PROMPT_TOO_LONG',
+  'PROVIDER_HTTP_400',
+  'PROVIDER_HTTP_422',
+  'UNSUPPORTED_PARAMETER',
+])
+
+export function canRefineGenerationError(errorCode?: string): boolean {
+  return Boolean(errorCode && refinableGenerationErrors.has(errorCode))
+}
 
 export type WallItem = {
   id: string
@@ -44,6 +56,7 @@ export type WallItem = {
   prompt?: string
   errorMessage?: string
   errorCode?: string
+  retryable?: boolean
   outputIndex?: number
   cancellable?: boolean
 }
@@ -68,6 +81,7 @@ type JustifiedWallProps = {
   onEdit: (asset: Asset) => void
   onDismiss: (batchID: string, jobID: string) => void
   onRetry: (batchID: string, jobID: string) => void
+  onRefine: (batchID: string, jobID: string) => void
   onNotice?: (message: string) => void
   onLoadMore?: () => void
   hasMore?: boolean
@@ -180,6 +194,7 @@ export function buildWallItems(
             prompt: batch.prompt,
             errorMessage: job.error_message,
             errorCode: job.error_code,
+            retryable: job.retryable,
             outputIndex: output,
             cancellable: !terminal && !batch.id.startsWith('optimistic:'),
           },
@@ -223,6 +238,7 @@ export const JustifiedWall = forwardRef<
     onEdit,
     onDismiss,
     onRetry,
+    onRefine,
     onNotice,
     onLoadMore,
     hasMore = false,
@@ -442,6 +458,7 @@ export const JustifiedWall = forwardRef<
                     onEdit={onEdit}
                     onDismiss={onDismiss}
                     onRetry={onRetry}
+                    onRefine={onRefine}
                     onPreview={setPreview}
                     onNotice={onNotice}
                   />
@@ -483,6 +500,7 @@ function WallCard({
   onEdit,
   onDismiss,
   onRetry,
+  onRefine,
   onPreview,
   onNotice,
 }: {
@@ -494,6 +512,7 @@ function WallCard({
   onEdit: (asset: Asset) => void
   onDismiss: (batchID: string, jobID: string) => void
   onRetry: (batchID: string, jobID: string) => void
+  onRefine: (batchID: string, jobID: string) => void
   onPreview: (asset: Asset) => void
   onNotice?: (message: string) => void
 }) {
@@ -529,13 +548,29 @@ function WallCard({
         {terminal && item.jobID && item.batchID && (
           <div className="failed-card-overlay">
             {item.status === 'failed' && (
-              <button
-                type="button"
-                aria-label="重试或编辑参数"
-                onClick={() => onRetry(item.batchID!, item.jobID!)}
-              >
-                <RotateCcw size={14} />
-              </button>
+              <>
+                <button
+                  type="button"
+                  aria-label={item.retryable ? '安全重试' : '编辑参数'}
+                  onClick={() => onRetry(item.batchID!, item.jobID!)}
+                >
+                  {item.retryable ? (
+                    <RotateCcw size={14} />
+                  ) : (
+                    <Pencil size={14} />
+                  )}
+                </button>
+                {canRefineGenerationError(item.errorCode) && (
+                  <button
+                    type="button"
+                    aria-label="优化提示词"
+                    title="优化提示词"
+                    onClick={() => onRefine(item.batchID!, item.jobID!)}
+                  >
+                    <PromptRefinerIcon />
+                  </button>
+                )}
+              </>
             )}
             <button
               type="button"

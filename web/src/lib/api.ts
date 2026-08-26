@@ -210,10 +210,13 @@ export type PromptDiagnostic = {
 
 export type PromptRefineResponse = {
   policy_version: string
-  status: 'clean' | 'findings'
-  segments: PromptRefineSegment[] | null
-  findings: PromptRefineFinding[] | null
-  diagnostics: PromptDiagnostic[] | null
+  refinement_id?: string
+  optimized_prompt?: string | null
+  changed: boolean
+  status?: 'clean' | 'findings'
+  segments?: PromptRefineSegment[] | null
+  findings?: PromptRefineFinding[] | null
+  diagnostics?: PromptDiagnostic[] | null
 }
 
 export type GenerationOutput = {

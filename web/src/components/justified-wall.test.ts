@@ -1,7 +1,18 @@
 import { describe, expect, it } from 'vitest'
 
-import { buildWallItems } from './justified-wall'
+import { buildWallItems, canRefineGenerationError } from './justified-wall'
 import type { Asset, GenerationBatch } from '#/lib/api'
+
+describe('failed generation actions', () => {
+  it('offers prompt refinement only for text-fixable failures', () => {
+    expect(canRefineGenerationError('CONTENT_POLICY_REJECTED')).toBe(true)
+    expect(canRefineGenerationError('PROMPT_TOO_LONG')).toBe(true)
+    expect(canRefineGenerationError('PROVIDER_HTTP_400')).toBe(true)
+    expect(canRefineGenerationError('UNSUPPORTED_PARAMETER')).toBe(true)
+    expect(canRefineGenerationError('REFERENCE_FETCH_FAILED')).toBe(false)
+    expect(canRefineGenerationError('PROVIDER_IMAGE_INVALID')).toBe(false)
+  })
+})
 
 describe('buildWallItems', () => {
   it('creates one placeholder per expected draw output before assets', () => {

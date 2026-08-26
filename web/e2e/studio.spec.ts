@@ -108,33 +108,134 @@ test('desktop studio supports density, preview, and optimistic generation', asyn
   expect(errors).toEqual([])
 })
 
-test('prompt refiner is manual, selective, and undoable', async ({ page }) => {
-  const studio = await installStudioMocks(page)
+test('prompt refiner replaces in place, shows its change, and remains undoable', async ({
+  page,
+}) => {
+  const studio = await installStudioMocks(page, { feedbackFails: true })
   await page.goto('/app/create')
   const prompt = page.getByRole('textbox', { name: '生成提示词' })
   await prompt.fill('blood over a quiet cornfield')
   expect(studio.refineAttempts()).toBe(0)
 
   await page.getByRole('button', { name: '检查并优化提示词' }).click()
-  const dialog = page.getByRole('dialog', { name: '检查并优化提示词' })
-  await expect(dialog).toBeVisible()
-  await expect(dialog.locator('mark')).toHaveText('blood')
-  const finding = dialog.getByRole('checkbox')
-  await expect(finding).not.toBeChecked()
-  await finding.check()
-  await dialog.getByRole('button', { name: '应用所选修改' }).click()
-
   await expect(prompt).toHaveValue('crimson liquid over a quiet cornfield')
-  await expect(page.getByText('已应用 1 项修改')).toBeVisible()
+  await expect(page.getByText('提示词已优化')).toBeVisible()
+  await page.getByRole('button', { name: '查看修改' }).click()
+  const review = page.getByRole('dialog', { name: '查看提示词修改' })
+  await expect(review.getByLabel('修改前')).toContainText(
+    'blood over a quiet cornfield',
+  )
+  await expect(review.getByLabel('修改后')).toContainText(
+    'crimson liquid over a quiet cornfield',
+  )
+  await review.getByRole('button', { name: '关闭修改对比' }).click()
   await page.getByRole('button', { name: '撤销' }).click()
   await expect(prompt).toHaveValue('blood over a quiet cornfield')
+  await expect
+    .poll(() => studio.refinementFeedback())
+    .toEqual([
+      { refinementID: 'refinement-1', event: 'undone', batch_id: undefined },
+    ])
   await prompt.fill('clean-check')
+  await prompt.press('Tab')
+  await page.getByRole('button', { name: '检查并优化提示词' }).click()
+  await expect(page.getByText('提示词已检查，无需修改')).toBeVisible()
+  await expect(prompt).toHaveValue('clean-check')
+  expect(studio.refineAttempts()).toBe(2)
+})
+
+test('prompt refiner never overwrites text edited while its request is running', async ({
+  page,
+}) => {
+  // Keep the mocked request open long enough for this assertion even when
+  // the full Playwright suite is sharing CPU across workers.
+  await installStudioMocks(page, { refinerDelayMs: 1_000 })
+  await page.goto('/app/create')
+  const prompt = page.getByRole('textbox', { name: '生成提示词' })
+  await prompt.fill('blood over a quiet cornfield')
   await page.getByRole('button', { name: '检查并优化提示词' }).click()
   await expect(
-    page.getByText('未发现需要处理的内容，可以保持原文继续创作。'),
+    page.getByRole('button', { name: '正在优化提示词' }),
   ).toBeVisible()
-  await page.getByRole('button', { name: '保持原文' }).click()
-  expect(studio.refineAttempts()).toBe(2)
+  await expect(
+    page.getByRole('button', { name: '生成', exact: true }),
+  ).toBeDisabled()
+
+  await prompt.fill('A new idea typed while optimization is running')
+  await page.waitForTimeout(250)
+
+  await expect(prompt).toHaveValue(
+    'A new idea typed while optimization is running',
+  )
+  await expect(page.getByText('提示词已优化')).toHaveCount(0)
+})
+
+test('an unchanged optimized prompt reports the successful generation', async ({
+  page,
+}) => {
+  const studio = await installStudioMocks(page)
+  await page.goto('/app/create')
+  const prompt = page.getByRole('textbox', { name: '生成提示词' })
+  await prompt.fill('blood over a quiet cornfield')
+  await page.getByRole('button', { name: '检查并优化提示词' }).click()
+  await expect(prompt).toHaveValue('crimson liquid over a quiet cornfield')
+
+  await page.getByRole('button', { name: '生成', exact: true }).click()
+  await expect(page.getByText('排队中', { exact: true })).toBeVisible({
+    timeout: 5_000,
+  })
+  await expect
+    .poll(() => studio.refinementFeedback())
+    .toEqual([
+      {
+        refinementID: 'refinement-1',
+        event: 'submitted',
+        batch_id: 'batch-qa',
+      },
+    ])
+  await expect(page.getByRole('button', { name: '撤销' })).toHaveCount(0)
+})
+
+test('a text-fixable failed card restores context and refines without generating', async ({
+  page,
+}) => {
+  const failedBatch = {
+    id: 'policy-batch',
+    model_id: 'nano-banana-pro',
+    prompt: 'blood over a quiet cornfield',
+    aspect_ratio: '1:1',
+    resolution: '1K',
+    draw_count: 1,
+    expected_outputs: 1,
+    completed_outputs: 0,
+    status: 'failed',
+    created_at: new Date().toISOString(),
+    options: {},
+    input_asset_ids: [],
+    jobs: [
+      {
+        id: 'policy-job',
+        draw_index: 0,
+        status: 'failed',
+        expected_outputs: 1,
+        error_code: 'CONTENT_POLICY_REJECTED',
+        retryable: false,
+      },
+    ],
+  }
+  const studio = await installStudioMocks(page, {
+    generationPages: {
+      '': { items: [failedBatch], next_cursor: '' },
+    },
+  })
+  await page.goto('/app/create')
+
+  await page.getByRole('button', { name: '优化提示词', exact: true }).click()
+
+  await expect(page.getByRole('textbox', { name: '生成提示词' })).toHaveValue(
+    'crimson liquid over a quiet cornfield',
+  )
+  expect(studio.postAttempts()).toBe(0)
 })
 
 test('prompt grows to a bounded height and accepts mixed clipboard content', async ({
@@ -1356,6 +1457,8 @@ async function installStudioMocks(
     }
     generationPages?: Record<string, { items: unknown[]; next_cursor: string }>
     generationPostNetworkFailures?: number
+    refinerDelayMs?: number
+    feedbackFails?: boolean
     models?: unknown[]
   } = {},
 ) {
@@ -1387,6 +1490,11 @@ async function installStudioMocks(
   let lastUploadPurpose = ''
   let lastGenerationInput: { input_asset_ids?: string[] } | undefined
   let refineAttempts = 0
+  const refinementFeedback: Array<{
+    refinementID: string
+    event: string
+    batch_id?: string
+  }> = []
   const postKeys: string[] = []
   let editorRevision = 0
   let editorUploadReady = false
@@ -1531,35 +1639,48 @@ async function installStudioMocks(
     if (pathname === '/api/v1/prompts/refine' && request.method() === 'POST') {
       refineAttempts++
       const input = request.postDataJSON() as { prompt: string }
+      if (options.refinerDelayMs)
+        await new Promise((resolve) =>
+          setTimeout(resolve, options.refinerDelayMs),
+        )
       if (input.prompt === 'clean-check') {
         return json(route, {
           policy_version: '2026-07-29.1',
-          status: 'clean',
-          segments: [{ text: input.prompt }],
-          findings: [],
+          refinement_id: `refinement-${refineAttempts}`,
+          optimized_prompt: input.prompt,
+          changed: false,
           diagnostics: [],
         })
       }
       return json(route, {
         policy_version: '2026-07-29.1',
-        status: 'findings',
-        segments: [
-          { text: 'blood', finding_id: 'gore.blood.en:0' },
-          { text: ' over a quiet cornfield' },
-        ],
-        findings: [
-          {
-            id: 'gore.blood.en:0',
-            locale: 'en',
-            category: 'gore',
-            mode: 'mapped',
-            original: 'blood',
-            reason: '可能触发血腥内容审核',
-            replacements: ['crimson liquid', 'dramatic red accents'],
-          },
-        ],
+        refinement_id: `refinement-${refineAttempts}`,
+        optimized_prompt: 'crimson liquid over a quiet cornfield',
+        changed: true,
         diagnostics: [],
       })
+    }
+    if (
+      pathname === '/api/v1/prompts/refinements/feedback' &&
+      request.method() === 'POST'
+    ) {
+      const input = request.postDataJSON() as {
+        refinement_id: string
+        event: string
+        batch_id?: string
+      }
+      refinementFeedback.push({
+        refinementID: input.refinement_id,
+        event: input.event,
+        batch_id: input.batch_id,
+      })
+      if (options.feedbackFails)
+        return json(
+          route,
+          { error: { code: 'FEEDBACK_FAILED', message: 'temporarily down' } },
+          500,
+        )
+      return route.fulfill({ status: 204 })
     }
     if (pathname === '/api/v1/assets') {
       const view = url.searchParams.get('view') ?? 'active'
@@ -1697,6 +1818,26 @@ async function installStudioMocks(
         configuredPage ?? { items: generations, next_cursor: '' },
       )
     }
+    const generationMatch = pathname.match(/^\/api\/v1\/generations\/([^/]+)$/)
+    if (generationMatch && request.method() === 'GET') {
+      const configured = Object.values(options.generationPages ?? {}).flatMap(
+        (generationPage) => generationPage.items,
+      )
+      const batch = [...configured, ...generations].find(
+        (item) =>
+          typeof item === 'object' &&
+          item !== null &&
+          'id' in item &&
+          item.id === generationMatch[1],
+      )
+      return batch
+        ? json(route, batch)
+        : json(
+            route,
+            { error: { code: 'NOT_FOUND', message: 'not found' } },
+            404,
+          )
+    }
     if (pathname === '/api/v1/generations' && request.method() === 'POST') {
       postAttempts++
       postKeys.push(request.headers()['idempotency-key'] ?? '')
@@ -1776,6 +1917,7 @@ async function installStudioMocks(
     lastUploadPurpose: () => lastUploadPurpose,
     lastGenerationInput: () => lastGenerationInput,
     refineAttempts: () => refineAttempts,
+    refinementFeedback: () => [...refinementFeedback],
     editorState: () => ({
       revision: editorRevision,
       document: editorDocument as unknown as {

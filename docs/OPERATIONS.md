@@ -10,7 +10,7 @@
 - `modelctl validate`、`modelctl apply` 使用同一份 `config/models.yaml`，API readiness 返回的 `model_revision` 与本次发布预期一致。
 - GitHub release workflow 已为目标 commit 生成并扫描 API、Worker、Tools、Web 四个镜像；Tools 镜像使用与服务端同主/小版本的、digest 固定的 `postgres:18.4-bookworm` 工具链，不能退回 Debian 默认 PostgreSQL 15 client。下载的 `cornfield-image-digests-<commit>` 通过 `sha256sum -c SHA256SUMS`，`RELEASE_COMMIT` 与待部署 commit 一致，`.env` 中四个 `*_IMAGE` 均来自该 artifact 且按 `@sha256:` 固定，`RELEASE_REQUIRE_DIGESTS=true`。
 - 宿主 Nginx、站点配置和 TLS 证书/私钥已先安装；`NGINX_SITE_CONFIG` 指向的已启用文件与仓库审查版本逐字一致并出现在 `nginx -T`，`NGINX_WORKER_USER` 与主配置的 `user` 一致。以 root 执行 `STUDIO_ROOT=/opt/internal-image-studio ops/preflight.sh` 并通过。随后 `docker compose ps` 中 Web、API、Worker、PostgreSQL 均 healthy，`docker compose ps -a db-bootstrap migrate model-apply` 显示三个一次性 job 成功退出。
-- Nginx 的 `/_protected_assets/` 保持 `internal`；Compose 的 `frontend` 是宿主可达的普通 bridge，但 Web/API 端口与该网络的默认 host binding 都固定为 `127.0.0.1`。PostgreSQL 只连接 internal `backend` 且不映射宿主端口；Worker 同时连接 internal `backend` 与 `egress`，API 不连接命名的 `egress` 网络，也不持有 Provider key。
+- Nginx 的 `/_protected_assets/` 保持 `internal`；Compose 的 `frontend` 是宿主可达的普通 bridge，但 Web/API 端口与该网络的默认 host binding 都固定为 `127.0.0.1`。PostgreSQL 只连接 internal `backend` 且不映射宿主端口；Worker 同时连接 internal `backend` 与 `egress`。API 不连接命名的 `egress` 网络，但为同步 Prompt Refiner 只读挂载现有 OpenRouter key pool；Refiner 客户端、并发、限流和故障状态与图片生成完全隔离。
 - 从宿主 Nginx 访问落地页和创作页，确认 CSP 控制台无阻断、SPA 可交互、墙面 inline geometry 生效。Web 构建必须把 TanStack bootstrap 外置为同源脚本；`preflight.sh` 会拒绝 `script-src 'unsafe-inline'`。
 - Provider callback 与签名图片 URL 不出现在 Nginx/API access log；真实 Provider canary、最近一次备份和恢复演练均有记录。Prometheus 规则已接入并实际触发过外部 receiver；没有可送达且已演练的 receiver 时不得宣布生产上线。
 
@@ -66,9 +66,11 @@ OPENROUTER_API_KEY_FILE=../secrets/openrouter_api_key \
 go run ./cmd/modelctl verify-remote
 ```
 
-`openrouter_api_key` 支持单个 key，也支持每行一个 key 的凭据池。Worker 按“当前在途最少、累计派发最少”选择 key；明确的 401、402 或 429 只冷却对应 key，并在安全的拒绝响应下切换下一把 key。请求已写出后的超时、断连或模糊 5xx 不跨 key 重提，继续进入 `submission_uncertain`，避免重复计费。`modelctl verify-remote` 只使用文件中的第一把 key 做只读能力核验。
+`openrouter_api_key` 支持单个 key，也支持每行一个 key 的凭据池。Worker 按“当前在途最少、累计派发最少”选择 key；明确的 401、402 或 429 只冷却对应 key，并在安全的拒绝响应下切换下一把 key。请求已写出后的超时、断连或模糊 5xx 不跨 key 重提，继续进入 `submission_uncertain`，避免重复计费。API 的 Prompt Refiner 使用同一文件建立独立进程内 key pool，绝不共享图片生成的 breaker、Provider 状态或 attempt ledger；任一 Refiner 故障都保持原 Prompt 且不影响生成。`modelctl verify-remote` 只使用文件中的第一把 key 做只读能力核验。
 
-上述检查均不会创建图片，也不能证明生成协议、图生图参考 URL、callback 公网可达、结果下载、取消语义或最终费用正确。真实 Provider key 只挂载到 Worker，API 只持有 callback/短期资产 URL 的内部签名 secret。付费 canary 前必须先确认宿主 Nginx/TLS 已上线，并从公网验证 Provider 能访问短期签名的 `GET/HEAD /api/v1/provider-assets/...`；Legnext 的 `POST /api/v1/provider-callbacks/...` 还必须能通过公网到达 API。不要把完整签名 URL 记录到终端历史或工单。
+Prompt Refiner 请求显式设置 `provider.data_collection=deny`，排除会将输入用于训练的数据端点。当前 `stealth/ox-alpha` 仍由第三方 Provider 按其模型条款保留 Prompt 与输出，因此只能用于已批准该外部数据处理边界的内部环境；它不是零数据保留（ZDR）模型。
+
+上述检查均不会创建图片，也不能证明生成协议、图生图参考 URL、callback 公网可达、结果下载、取消语义或最终费用正确。除 OpenRouter 凭据池外，生成 Provider key 仍只由 Worker 使用；API 额外只把 OpenRouter key pool 用于手动触发的 `stealth/ox-alpha` Prompt Refiner。付费 canary 前必须先确认宿主 Nginx/TLS 已上线，并从公网验证 Provider 能访问短期签名的 `GET/HEAD /api/v1/provider-assets/...`；Legnext 的 `POST /api/v1/provider-callbacks/...` 还必须能通过公网到达 API。不要把完整签名 URL 或 Refiner Prompt 记录到终端历史或工单。
 
 首次上线和 Provider 合约变化后必须在公开 HTTPS 部署上用专用、设有低额度上限的测试用户执行小规模真实 canary；这一步必须人工触发，不能由 CI、健康探针或负载脚本自动执行：
 
@@ -272,6 +274,12 @@ curl -fsS http://127.0.0.1:9090/api/v1/query?query=image_studio_restore_check_la
 
 - `layer-protocol` 直接读取权限受控的 BytePlus Key 文件，不依赖数据库或能力开关。它按 `auto / 1K / 1.5K / 2K` 执行四次请求，验证图层、bbox、Alpha、输出主机和重组画面。报告不记录 Prompt、签名 URL、Base64 或 Key；任一错误立即停止。
 - `layer-e2e` 只通过 Cornfield 公开 API 工作，需要用户密码文件与 release SHA。它执行六组工作台链路，并至少覆盖一次单层发布、合成发布和 ZIP 下载。成功产物归入 `Canary Layers <release>` 并归档。
+
+Prompt Refiner 同样分两步验证：
+
+- `refiner-protocol` 使用权限受控的 OpenRouter key pool 文件，直接验证固定的 `stealth/ox-alpha` 请求协议、严格 JSON 输出和 5 条安全边界；首个失败立即停止。
+- `refiner-e2e` 通过登录态公开 API 运行 10 条代表性用例，覆盖注入防护、语义保真、Midjourney 参数清理和安全过滤。50 条完整合成契约由普通 CI 执行。
+- 两类报告都不得保存 Prompt、优化结果、Hash、推理正文、原始错误、用户名或 Key，只允许记录用例 ID、分类、目标模型、白名单错误码、耗时、字符数和 Token 数。
 
 当前 BytePlus AP 分层输出白名单为 `*.tos-ap-southeast-1.volces.com`，代码必须继续要求 HTTPS 和安全重定向校验；不得扩大为整个 `volces.com`。
 

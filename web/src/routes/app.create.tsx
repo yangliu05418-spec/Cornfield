@@ -20,9 +20,17 @@ import type { ClipboardEvent, CSSProperties, DragEvent, FormEvent } from 'react'
 import { AppShell } from '#/components/app-shell'
 import { ConfirmDialog } from '#/components/confirm-dialog'
 import { GeneratorSelect } from '#/components/generator-select'
-import { buildWallItems, JustifiedWall } from '#/components/justified-wall'
+import {
+  buildWallItems,
+  canRefineGenerationError,
+  JustifiedWall,
+} from '#/components/justified-wall'
 import { MidjourneyOptionsControl } from '#/components/midjourney-options'
-import { PromptRefinerDialog } from '#/components/prompt-refiner-dialog'
+import { PromptRefinerIcon } from '#/components/prompt-refiner-icon'
+import {
+  mapRefinedSelection,
+  PromptRefinerReview,
+} from '#/components/prompt-refiner-review'
 import type { JustifiedWallHandle } from '#/components/justified-wall'
 import { api, APIError, getMe } from '#/lib/api'
 import {
@@ -86,6 +94,7 @@ type GenerationPages = InfiniteData<GenerationPage, string>
 type PendingSubmission = {
   idempotencyKey: string
   batch: GenerationBatch
+  refinementID?: string
   request: {
     model_id: string
     capability_revision: string
@@ -99,6 +108,34 @@ type PendingSubmission = {
 }
 
 type GenerationRequest = PendingSubmission['request']
+
+type AppliedPromptRefinement = {
+  refinementID?: string
+  before: string
+  after: string
+  selection: { start: number; end: number }
+  controlSignature: string
+}
+
+export function submittedRefinementID(
+  refinement: Pick<AppliedPromptRefinement, 'refinementID' | 'after'> | null,
+  submittedPrompt: string,
+) {
+  return refinement?.refinementID && refinement.after.trim() === submittedPrompt
+    ? refinement.refinementID
+    : undefined
+}
+
+function reportPromptRefinementFeedback(
+  refinementID: string | undefined,
+  feedback: { event: 'undone' } | { event: 'submitted'; batch_id: string },
+) {
+  if (!refinementID) return
+  void api<void>('/api/v1/prompts/refinements/feedback', {
+    method: 'POST',
+    body: JSON.stringify({ refinement_id: refinementID, ...feedback }),
+  }).catch(() => undefined)
+}
 
 type ReferenceItem =
   | { key: string; source: 'asset'; asset: Asset }
@@ -347,6 +384,10 @@ function CreatePage() {
   const assetRefreshVersion = useRef(0)
   const assetRecoveryRevision = useRef('')
   const repeatedPolicyBypass = useRef('')
+  const refinerAbort = useRef<AbortController | null>(null)
+  const refinerBusyRef = useRef(false)
+  const refinerPendingSignature = useRef('')
+  const refinerRequestSequence = useRef(0)
   const me = useQuery({ queryKey: ['me'], queryFn: getMe, retry: false })
   const models = useQuery({
     queryKey: ['models'],
@@ -424,21 +465,11 @@ function CreatePage() {
     }
   }
   const [refinerBusy, setRefinerBusy] = useState(false)
-  const [refinerOpen, setRefinerOpen] = useState(false)
-  const [refinerResult, setRefinerResult] =
-    useState<PromptRefineResponse | null>(null)
-  const [refinerSnapshot, setRefinerSnapshot] = useState('')
-  const [refinerSelection, setRefinerSelection] = useState({
-    start: 0,
-    end: 0,
-  })
-  const [refinerUndo, setRefinerUndo] = useState<{
-    before: string
-    after: string
-    selection: { start: number; end: number }
-    controlSignature: string
-    count: number
-  } | null>(null)
+  const [refinerReviewOpen, setRefinerReviewOpen] = useState(false)
+  const [refinerUndo, setRefinerUndo] =
+    useState<AppliedPromptRefinement | null>(null)
+  const refinerUndoRef = useRef<AppliedPromptRefinement | null>(null)
+  refinerUndoRef.current = refinerUndo
   const [confirm, setConfirm] = useState<{
     title: string
     description: string
@@ -489,9 +520,14 @@ function CreatePage() {
   refinerRequestSignatureRef.current = refinerRequestSignature
 
   useEffect(() => {
-    if (refinerResult && refinerSnapshot !== refinerRequestSignature) {
-      setRefinerResult(null)
-      setRefinerOpen(false)
+    if (
+      refinerAbort.current &&
+      refinerPendingSignature.current !== refinerRequestSignature
+    ) {
+      refinerAbort.current.abort()
+      refinerAbort.current = null
+      refinerPendingSignature.current = ''
+      setRefinerBusy(false)
     }
     if (
       refinerUndo &&
@@ -499,15 +535,9 @@ function CreatePage() {
         refinerUndo.controlSignature !== refinerControlSignature)
     ) {
       setRefinerUndo(null)
+      setRefinerReviewOpen(false)
     }
-  }, [
-    prompt,
-    refinerControlSignature,
-    refinerRequestSignature,
-    refinerResult,
-    refinerSnapshot,
-    refinerUndo,
-  ])
+  }, [prompt, refinerControlSignature, refinerRequestSignature, refinerUndo])
   const refreshAssetHead = useCallback(() => {
     assetRefreshVersion.current++
     if (assetRefreshInFlight.current) return assetRefreshInFlight.current
@@ -529,6 +559,8 @@ function CreatePage() {
   }, [queryClient])
   useEffect(
     () => () => {
+      refinerAbort.current?.abort()
+      refinerAbort.current = null
       for (const controller of uploadControllers.current) controller.abort()
       uploadControllers.current.clear()
       for (const url of localReferenceURLs.current) URL.revokeObjectURL(url)
@@ -761,6 +793,17 @@ function CreatePage() {
         pages[0] = { ...pages[0], items: [batch, ...pages[0].items] }
         return { ...current, pages }
       })
+      const refinementID = variables.refinementID
+      if (refinementID) {
+        reportPromptRefinementFeedback(refinementID, {
+          event: 'submitted',
+          batch_id: batch.id,
+        })
+        if (refinerUndoRef.current?.refinementID === refinementID) {
+          setRefinerUndo(null)
+          setRefinerReviewOpen(false)
+        }
+      }
       setNotice(`${batch.expected_outputs} 个生成位置已加入画布`)
     },
     onError: (reason, variables) => {
@@ -885,6 +928,10 @@ function CreatePage() {
     )
     const modelSnapshot = activeModel
     if (!request || !modelSnapshot) return
+    const appliedRefinementID = submittedRefinementID(
+      refinerUndoRef.current,
+      request.prompt,
+    )
 
     const requestSignature = policyRetrySignature(request)
     const repeatedFailure = recentRepeatedPolicyFailure(
@@ -893,11 +940,15 @@ function CreatePage() {
     )
     if (repeatedFailure && repeatedPolicyBypass.current !== requestSignature) {
       repeatedPolicyBypass.current = requestSignature
-      await restoreFailedBatch(repeatedFailure.id, true).catch((reason) =>
-        setNotice(
-          reason instanceof Error ? reason.message : '恢复失败任务失败',
-        ),
-      )
+      await restoreFailedBatch(repeatedFailure.id)
+        .then(() =>
+          setNotice('相同描述最近被安全策略拒绝，请先优化或修改后再生成'),
+        )
+        .catch((reason) =>
+          setNotice(
+            reason instanceof Error ? reason.message : '恢复失败任务失败',
+          ),
+        )
       return
     }
 
@@ -972,6 +1023,7 @@ function CreatePage() {
     create.mutate({
       idempotencyKey,
       batch,
+      refinementID: appliedRefinementID,
       request,
     })
   }
@@ -982,27 +1034,73 @@ function CreatePage() {
     selection: { start: number; end: number },
     pendingReferenceCount = 0,
   ) {
+    if (refinerBusyRef.current) return
+    refinerBusyRef.current = true
+    refinerAbort.current?.abort()
+    const controller = new AbortController()
+    const sequence = ++refinerRequestSequence.current
+    refinerAbort.current = controller
+    refinerPendingSignature.current = signature
     setRefinerBusy(true)
     try {
       const result = await api<PromptRefineResponse>('/api/v1/prompts/refine', {
         method: 'POST',
+        signal: controller.signal,
         body: JSON.stringify({
           ...request,
           pending_reference_count: pendingReferenceCount,
         }),
       })
-      if (refinerRequestSignatureRef.current !== signature) {
-        setNotice('提示词或生成参数已变化，请重新检查')
+      if (
+        controller.signal.aborted ||
+        sequence !== refinerRequestSequence.current ||
+        refinerRequestSignatureRef.current !== signature
+      ) {
         return
       }
-      setRefinerSelection(selection)
-      setRefinerSnapshot(signature)
-      setRefinerResult(result)
-      setRefinerOpen(true)
+      const optimized = result.optimized_prompt
+      if (!result.changed || !optimized || optimized === request.prompt) {
+        setNotice(
+          result.diagnostics?.[0]?.message ??
+            (optimized === null
+              ? '无法在保留原意的情况下安全优化，请手动调整'
+              : '提示词已检查，无需修改'),
+        )
+        return
+      }
+      const nextSelection = mapRefinedSelection(
+        request.prompt,
+        optimized,
+        selection,
+      )
+      setPrompt(optimized)
+      setRefinerUndo({
+        refinementID: result.refinement_id,
+        before: request.prompt,
+        after: optimized,
+        selection,
+        controlSignature: signature.endsWith(`\n${request.prompt}`)
+          ? signature.slice(0, -request.prompt.length - 1)
+          : refinerControlSignature,
+      })
+      setNotice('已优化提示词，可在生成前查看修改或撤销')
+      requestAnimationFrame(() => {
+        promptRef.current?.focus()
+        promptRef.current?.setSelectionRange(
+          nextSelection.start,
+          nextSelection.end,
+        )
+      })
     } catch (reason) {
-      setNotice(reason instanceof Error ? reason.message : '提示词检查失败')
+      if (!controller.signal.aborted)
+        setNotice(reason instanceof Error ? reason.message : '提示词优化失败')
     } finally {
-      setRefinerBusy(false)
+      if (refinerAbort.current === controller) {
+        refinerAbort.current = null
+        refinerPendingSignature.current = ''
+        setRefinerBusy(false)
+      }
+      refinerBusyRef.current = false
     }
   }
 
@@ -1158,7 +1256,7 @@ function CreatePage() {
       setNotice(reason instanceof Error ? reason.message : '移除失败')
     }
   }
-  async function restoreFailedBatch(batchID: string, openRefiner = false) {
+  async function restoreFailedBatch(batchID: string, refine = false) {
     const batch = await api<GenerationBatch>(`/api/v1/generations/${batchID}`)
     setModelID(batch.model_id)
     setPrompt(batch.prompt)
@@ -1183,7 +1281,7 @@ function CreatePage() {
       window.requestAnimationFrame(() => resolve()),
     )
     promptRef.current?.focus()
-    if (openRefiner && models.data) {
+    if (refine && models.data) {
       const request: GenerationRequest = {
         model_id: batch.model_id,
         capability_revision: models.data.revision,
@@ -1202,7 +1300,6 @@ function CreatePage() {
           end: batch.prompt.length,
         },
       )
-      setNotice('已恢复原参数，并标出可能需要调整的描述')
       return
     }
     setNotice('原参数已恢复，请调整描述或参数后重新生成')
@@ -1214,11 +1311,9 @@ function CreatePage() {
     const action = failedJobAction(job)
     if (action === 'none') return
     if (action === 'edit') {
-      void restoreFailedBatch(
-        batchID,
-        job.error_code === 'CONTENT_POLICY_REJECTED' ||
-          job.error_code === 'PROMPT_TOO_LONG',
-      ).catch((error: Error) => setNotice(error.message))
+      void restoreFailedBatch(batchID).catch((error: Error) =>
+        setNotice(error.message),
+      )
       return
     }
     setConfirm({
@@ -1233,6 +1328,15 @@ function CreatePage() {
         setNotice('已重新提交这一抽卡，其他结果不受影响')
       },
     })
+  }
+  function refineFailedJob(batchID: string, jobID: string) {
+    if (refinerBusyRef.current) return
+    const batch = generationItems.find((item) => item.id === batchID)
+    const job = batch?.jobs.find((item) => item.id === jobID)
+    if (!batch || !job || !canRefineGenerationError(job.error_code)) return
+    void restoreFailedBatch(batchID, true).catch((error: Error) =>
+      setNotice(error.message),
+    )
   }
   async function runConfirmedAction() {
     if (!confirm || confirmBusy) return
@@ -1494,6 +1598,7 @@ function CreatePage() {
           onEdit={(asset) => void editAsset(asset)}
           onDismiss={(batchID, jobID) => void dismissJob(batchID, jobID)}
           onRetry={retryJob}
+          onRefine={refineFailedJob}
           onNotice={setNotice}
           hasMore={assets.hasNextPage}
           isLoadingMore={assets.isFetchingNextPage}
@@ -1632,26 +1737,13 @@ function CreatePage() {
               )}
               <button
                 type="button"
-                className="prompt-refiner-button"
-                aria-label="检查并优化提示词"
-                title="检查并优化提示词"
+                className={`prompt-refiner-button${refinerBusy ? ' is-busy' : ''}`}
+                aria-label={refinerBusy ? '正在优化提示词' : '检查并优化提示词'}
+                title={refinerBusy ? '正在优化提示词' : '检查并优化提示词'}
                 disabled={!prompt.trim() || refinerBusy || !activeModel}
                 onClick={() => void refinePrompt()}
               >
-                <svg
-                  viewBox="0 0 20 20"
-                  aria-hidden="true"
-                  focusable="false"
-                  style={{
-                    width: 22,
-                    height: 22,
-                    fill: 'currentColor',
-                    stroke: 'none',
-                  }}
-                >
-                  <path d="M10 .75c.3 5.85 3.4 8.95 9.25 9.25-5.85.3-8.95 3.4-9.25 9.25C9.7 13.4 6.6 10.3.75 10 6.6 9.7 9.7 6.6 10 .75Z" />
-                  <path d="M17.1.2c.09 1.73.97 2.61 2.7 2.7-1.73.09-2.61.97-2.7 2.7-.09-1.73-.97-2.61-2.7-2.7 1.73-.09 2.61-.97 2.7-2.7Z" />
-                </svg>
+                <PromptRefinerIcon />
               </button>
             </div>
             <div className="generator-controls">
@@ -1779,6 +1871,7 @@ function CreatePage() {
             disabled={
               !prompt.trim() ||
               create.isPending ||
+              refinerBusy ||
               referenceSubmitBusy ||
               midjourneyPromptLength > 1024 ||
               !activeModel?.availability.can_submit
@@ -1793,52 +1886,44 @@ function CreatePage() {
         </form>
         {refinerUndo && (
           <div className="prompt-refiner-undo" role="status">
-            <span>已应用 {refinerUndo.count} 项修改</span>
-            <button
-              type="button"
-              onClick={() => {
-                const undo = refinerUndo
-                setPrompt(undo.before)
-                setRefinerUndo(null)
-                requestAnimationFrame(() => {
-                  promptRef.current?.focus()
-                  promptRef.current?.setSelectionRange(
-                    undo.selection.start,
-                    undo.selection.end,
-                  )
-                })
-              }}
-            >
-              撤销
-            </button>
+            <span>提示词已优化</span>
+            <div className="prompt-refiner-undo-actions">
+              <button
+                type="button"
+                className="is-review"
+                onClick={() => setRefinerReviewOpen(true)}
+              >
+                查看修改
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  const undo = refinerUndo
+                  reportPromptRefinementFeedback(undo.refinementID, {
+                    event: 'undone',
+                  })
+                  setPrompt(undo.before)
+                  setRefinerUndo(null)
+                  setRefinerReviewOpen(false)
+                  requestAnimationFrame(() => {
+                    promptRef.current?.focus()
+                    promptRef.current?.setSelectionRange(
+                      undo.selection.start,
+                      undo.selection.end,
+                    )
+                  })
+                }}
+              >
+                撤销
+              </button>
+            </div>
           </div>
         )}
-        <PromptRefinerDialog
-          open={refinerOpen}
-          modelName={activeModel?.display_name ?? ''}
-          result={refinerResult}
-          selection={refinerSelection}
-          onClose={() => setRefinerOpen(false)}
-          onApply={(nextPrompt, nextSelection, count) => {
-            const before = prompt
-            setPrompt(nextPrompt)
-            setRefinerOpen(false)
-            setRefinerResult(null)
-            setRefinerUndo({
-              before,
-              after: nextPrompt,
-              selection: refinerSelection,
-              controlSignature: refinerControlSignature,
-              count,
-            })
-            requestAnimationFrame(() => {
-              promptRef.current?.focus()
-              promptRef.current?.setSelectionRange(
-                nextSelection.start,
-                nextSelection.end,
-              )
-            })
-          }}
+        <PromptRefinerReview
+          open={refinerReviewOpen && refinerUndo !== null}
+          before={refinerUndo?.before ?? ''}
+          after={refinerUndo?.after ?? ''}
+          onClose={() => setRefinerReviewOpen(false)}
         />
         <ConfirmDialog
           open={confirm !== null}

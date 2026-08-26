@@ -16,7 +16,7 @@ import (
 )
 
 const (
-	refinerProtocolInterval = time.Second
+	refinerProtocolInterval = 7 * time.Second
 	refinerE2EInterval      = 7 * time.Second
 )
 

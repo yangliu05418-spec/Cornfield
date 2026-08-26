@@ -12,6 +12,13 @@ import (
 	"internal-image-studio/internal/refinercanary"
 )
 
+func TestRefinerProtocolPacingRespectsAPIQuota(t *testing.T) {
+	const minimumInterval = time.Minute / 10
+	if refinerProtocolInterval < minimumInterval {
+		t.Fatalf("protocol interval = %s, want at least %s", refinerProtocolInterval, minimumInterval)
+	}
+}
+
 func TestRefinerCanaryReportContainsNoPromptMaterial(t *testing.T) {
 	fixtures, err := refinercanary.Fixtures()
 	if err != nil {

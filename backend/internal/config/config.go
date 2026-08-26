@@ -21,6 +21,7 @@ type Config struct {
 	SessionIdleTTL           time.Duration
 	LegnextAPIKey            string
 	OpenRouterAPIKeys        []string
+	PromptRefinerAPIKeys     []string
 	BFLAPIKey                string
 	BytePlusAPIKey           string
 	ProviderCallbackSecret   string
@@ -34,7 +35,19 @@ type Config struct {
 // billing credentials never need to enter their container.
 func Load() (Config, error) { return load(true) }
 
-func LoadAPI() (Config, error) { return load(false) }
+func LoadAPI() (Config, error) {
+	cfg, err := load(false)
+	if err != nil {
+		return Config{}, err
+	}
+	if cfg.PromptRefinerAPIKeys, err = secretList("PROMPT_REFINER_OPENROUTER_API_KEY"); err != nil {
+		return Config{}, err
+	}
+	if err := validateSecretList("PROMPT_REFINER_OPENROUTER_API_KEY", cfg.PromptRefinerAPIKeys, cfg.ProviderMode == "live"); err != nil {
+		return Config{}, err
+	}
+	return cfg, nil
+}
 
 func LoadWorker() (Config, error) { return load(true) }
 
@@ -206,6 +219,23 @@ func (c Config) validate(requireProviderKeys bool) error {
 	}
 	if len(c.ProviderCallbackSecret) < 32 || len(c.ProviderURLSigningSecret) < 32 {
 		return fmt.Errorf("provider internal secrets must be at least 32 bytes")
+	}
+	return nil
+}
+
+func validateSecretList(name string, values []string, required bool) error {
+	if required && len(values) == 0 {
+		return fmt.Errorf("%s is required in live provider mode", name)
+	}
+	seen := make(map[string]struct{}, len(values))
+	for index, value := range values {
+		if strings.ContainsAny(value, " \t\r\n") {
+			return fmt.Errorf("%s[%d] must contain one raw value without whitespace", name, index+1)
+		}
+		if _, ok := seen[value]; ok {
+			return fmt.Errorf("%s_FILE contains a duplicate key", name)
+		}
+		seen[value] = struct{}{}
 	}
 	return nil
 }

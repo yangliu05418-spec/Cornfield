@@ -105,7 +105,7 @@ func TestLoadRequiresLiveSecrets(t *testing.T) {
 	}
 }
 
-func TestLoadAPIDoesNotRequireProviderBillingKeys(t *testing.T) {
+func TestLoadAPIOnlyRequiresDedicatedPromptRefinerKeys(t *testing.T) {
 	t.Setenv("APP_ENV", "production")
 	t.Setenv("APP_PUBLIC_URL", "https://studio.example")
 	t.Setenv("SESSION_COOKIE_SECURE", "true")
@@ -118,6 +118,7 @@ func TestLoadAPIDoesNotRequireProviderBillingKeys(t *testing.T) {
 	t.Setenv("OPENROUTER_API_KEY_FILE", t.TempDir()+"/must-not-be-read")
 	t.Setenv("BFL_API_KEY_FILE", t.TempDir()+"/must-not-be-read")
 	t.Setenv("BYTEPLUS_API_KEY_FILE", t.TempDir()+"/must-not-be-read")
+	t.Setenv("PROMPT_REFINER_OPENROUTER_API_KEY", "refiner-only-key")
 	t.Setenv("PROVIDER_CALLBACK_SECRET", strings.Repeat("c", 32))
 	t.Setenv("PROVIDER_URL_SIGNING_SECRET", strings.Repeat("u", 32))
 	setDatabasePasswordFile(t, "db-password-000000000000000000000000")
@@ -127,7 +128,37 @@ func TestLoadAPIDoesNotRequireProviderBillingKeys(t *testing.T) {
 		t.Fatalf("API configuration unexpectedly required billing keys: %v", err)
 	}
 	if cfg.LegnextAPIKey != "" || len(cfg.OpenRouterAPIKeys) != 0 || cfg.BFLAPIKey != "" || cfg.BytePlusAPIKey != "" {
-		t.Fatal("API configuration contains provider billing keys")
+		t.Fatal("API configuration contains generation provider billing keys")
+	}
+	if !slices.Equal(cfg.PromptRefinerAPIKeys, []string{"refiner-only-key"}) {
+		t.Fatalf("PromptRefinerAPIKeys = %v", cfg.PromptRefinerAPIKeys)
+	}
+}
+
+func TestLoadAPIRequiresPromptRefinerKeyInLiveMode(t *testing.T) {
+	t.Setenv("APP_ENV", "production")
+	t.Setenv("APP_PUBLIC_URL", "https://studio.example")
+	t.Setenv("SESSION_COOKIE_SECURE", "true")
+	t.Setenv("PROVIDER_MODE", "live")
+	t.Setenv("PROMPT_REFINER_OPENROUTER_API_KEY", "")
+	t.Setenv("PROMPT_REFINER_OPENROUTER_API_KEY_FILE", "")
+	t.Setenv("PROVIDER_CALLBACK_SECRET", strings.Repeat("c", 32))
+	t.Setenv("PROVIDER_URL_SIGNING_SECRET", strings.Repeat("u", 32))
+	setDatabasePasswordFile(t, "db-password-000000000000000000000000")
+	if _, err := LoadAPI(); err == nil || !strings.Contains(err.Error(), "PROMPT_REFINER_OPENROUTER_API_KEY") {
+		t.Fatalf("expected dedicated refiner key error, got %v", err)
+	}
+}
+
+func TestLoadAPIRejectsDuplicatePromptRefinerKeys(t *testing.T) {
+	t.Setenv("PROVIDER_MODE", "mock")
+	path := filepath.Join(t.TempDir(), "prompt-refiner-keys")
+	if err := os.WriteFile(path, []byte("same-key\nsame-key\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PROMPT_REFINER_OPENROUTER_API_KEY_FILE", path)
+	if _, err := LoadAPI(); err == nil || !strings.Contains(err.Error(), "duplicate") {
+		t.Fatalf("expected duplicate refiner key error, got %v", err)
 	}
 }
 

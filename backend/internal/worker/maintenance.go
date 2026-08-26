@@ -153,6 +153,7 @@ func (m *Maintenance) cleanup(ctx context.Context) {
 		{"job events", `DELETE FROM job_events WHERE created_at<now()-interval '90 days'`},
 		{"callback events", `DELETE FROM provider_callback_events WHERE created_at<now()-interval '30 days'`},
 		{"provider attempts", `DELETE FROM provider_attempts WHERE created_at<now()-interval '90 days'`},
+		{"prompt refinement metrics", `DELETE FROM prompt_refinement_metrics WHERE created_at<now()-interval '30 days'`},
 		{"generation batches", `DELETE FROM generation_batches WHERE created_at<now()-interval '90 days'`},
 		{"user sessions", `DELETE FROM user_sessions WHERE expires_at<now() OR (revoked_at IS NOT NULL AND revoked_at<now()-interval '7 days')`},
 		{"expire upload sessions", `UPDATE upload_sessions SET status='expired',updated_at=now() WHERE expires_at<now() AND status IN ('created','uploading','validating')`},

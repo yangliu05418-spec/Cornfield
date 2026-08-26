@@ -144,9 +144,13 @@ services:
       <<: *app-env
       DATABASE_URL: "postgres://studio_api@postgres:5432/studio?sslmode=disable"
       DATABASE_PASSWORD_FILE: /run/secrets/postgres_api_password
+      # The Refiner reuses the existing OpenRouter key pool through a separate
+      # client; its limiter and failure state stay isolated from image jobs.
+      PROMPT_REFINER_OPENROUTER_API_KEY_FILE: /run/secrets/openrouter_api_key
     secrets:
       [
         postgres_api_password,
+        openrouter_api_key,
         provider_callback_secret,
         provider_url_signing_secret,
       ]

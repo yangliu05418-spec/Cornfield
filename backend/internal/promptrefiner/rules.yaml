@@ -1,4 +1,4 @@
-version: "2026-07-29.1"
+version: "2026-08-26.1"
 rules:
   - id: gore.blood.en
     locale: en
@@ -24,7 +24,7 @@ rules:
     source: { type: workspace, reference: "规则.md#gore" }
     category: gore
     mode: mapped
-    terms: [corpse, dead body, decapitate, decapitated, severed limbs, mutilated, wound, wounds, bruise, bruises, guts, visceral, gory, gruesome, cut, cutting, cronenberg, khorne, disturbing]
+    terms: [corpse, dead body, decapitate, decapitated, severed limbs, mutilated, exposed wounds, wound, wounds, bruise, bruises, guts, visceral, gore, gory, gruesome, cut, cutting, cronenberg, khorne, disturbing]
     reason: "可能触发伤害或血腥内容审核"
     replacements: [fallen figure, still form, lifeless pose, marble-like statue, pale figure, abstract fragmented form, broken silhouette, marks, weathered surface, organic textures, abstract biomorphic forms]
   - id: gore.body.zh
@@ -44,7 +44,7 @@ rules:
     terms: [slaughter, killing, kill, massacre, cannibal, cannibalism, torture, suicide, crucified, crucifixion, car crash]
     exceptions: [Kill Bill, Kill la Kill]
     reason: "可能触发暴力或伤害内容审核"
-    replacements: [intense conflict scene, dramatic battle aftermath without gore, chaotic confrontation, dark psychological atmosphere, dramatic accident scene without injury]
+    replacements: [intense conflict scene, dramatic non-graphic battle aftermath, chaotic confrontation, dark psychological atmosphere, dramatic accident scene without injury]
   - id: gore.violence.zh
     locale: zh
     translation_of: gore.violence.en

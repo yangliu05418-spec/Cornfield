@@ -10,12 +10,31 @@ func TestEmbeddedRulesLoad(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if engine.version != "2026-07-29.1" || len(engine.rules) < 20 {
+	if engine.version != "2026-08-26.1" || len(engine.rules) < 20 {
 		t.Fatalf("unexpected embedded rules: version=%q count=%d", engine.version, len(engine.rules))
 	}
 	for _, rule := range engine.rules {
 		if rule.Source.Type == "community" && (!strings.Contains(rule.Source.Reference, "@") || rule.Source.License == "") {
 			t.Fatalf("community rule %s is not pinned and licensed", rule.ID)
+		}
+	}
+}
+
+func TestMappedReplacementsDoNotTriggerAnotherActionableRule(t *testing.T) {
+	engine, err := New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, rule := range engine.rules {
+		if rule.Mode != "mapped" {
+			continue
+		}
+		for _, replacement := range rule.Replacements {
+			for _, finding := range engine.Refine(replacement).Findings {
+				if finding.Mode == "mapped" || finding.Mode == "manual_only" {
+					t.Fatalf("rule %s replacement %q triggers actionable rule %s", rule.ID, replacement, finding.RuleID)
+				}
+			}
 		}
 	}
 }

@@ -144,6 +144,35 @@ test('prompt refiner replaces in place, shows its change, and remains undoable',
   expect(studio.refineAttempts()).toBe(2)
 })
 
+test('prompt refiner keeps the original prompt when its response is invalid', async ({
+  page,
+}) => {
+  const studio = await installStudioMocks(page, {
+    refinerFailure: {
+      status: 502,
+      code: 'PROMPT_REFINER_INVALID_RESPONSE',
+      message: '优化结果格式异常，原提示词未被修改',
+    },
+  })
+  await page.goto('/app/create')
+  const prompt = page.getByRole('textbox', { name: '生成提示词' })
+  await prompt.fill('blood over a quiet cornfield')
+
+  await page.getByRole('button', { name: '检查并优化提示词' }).click()
+
+  await expect(
+    page.getByText('优化结果格式异常，原提示词未被修改'),
+  ).toBeVisible()
+  await expect(prompt).toHaveValue('blood over a quiet cornfield')
+  await expect(
+    page.getByRole('button', { name: '检查并优化提示词' }),
+  ).toBeEnabled()
+  await expect(page.getByRole('button', { name: '查看修改' })).toHaveCount(0)
+  await expect(page.getByRole('button', { name: '撤销' })).toHaveCount(0)
+  expect(studio.refineAttempts()).toBe(1)
+  expect(studio.postAttempts()).toBe(0)
+})
+
 test('prompt refiner never overwrites text edited while its request is running', async ({
   page,
 }) => {
@@ -1458,6 +1487,7 @@ async function installStudioMocks(
     generationPages?: Record<string, { items: unknown[]; next_cursor: string }>
     generationPostNetworkFailures?: number
     refinerDelayMs?: number
+    refinerFailure?: { status: number; code: string; message: string }
     feedbackFails?: boolean
     models?: unknown[]
   } = {},
@@ -1643,9 +1673,21 @@ async function installStudioMocks(
         await new Promise((resolve) =>
           setTimeout(resolve, options.refinerDelayMs),
         )
+      if (options.refinerFailure) {
+        return json(
+          route,
+          {
+            error: {
+              code: options.refinerFailure.code,
+              message: options.refinerFailure.message,
+            },
+          },
+          options.refinerFailure.status,
+        )
+      }
       if (input.prompt === 'clean-check') {
         return json(route, {
-          policy_version: '2026-07-29.1',
+          policy_version: '2026-08-26.1',
           refinement_id: `refinement-${refineAttempts}`,
           optimized_prompt: input.prompt,
           changed: false,
@@ -1653,7 +1695,7 @@ async function installStudioMocks(
         })
       }
       return json(route, {
-        policy_version: '2026-07-29.1',
+        policy_version: '2026-08-26.1',
         refinement_id: `refinement-${refineAttempts}`,
         optimized_prompt: 'crimson liquid over a quiet cornfield',
         changed: true,

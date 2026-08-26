@@ -237,7 +237,7 @@ func main() {
 }
 
 func run() error {
-	var baseURL, username, passwordFile, promptFile, providerKeyFile, artifactDir, releaseSHA, configPath, reportPath, profile, layerCases string
+	var baseURL, username, passwordFile, promptFile, providerKeyFile, refinerKeyFile, artifactDir, releaseSHA, configPath, reportPath, profile, layerCases string
 	var allowHTTP bool
 	var archiveOutput bool
 	flag.StringVar(&baseURL, "base-url", "https://corn.kumadrama.com", "Cornfield HTTPS origin")
@@ -245,17 +245,18 @@ func run() error {
 	flag.StringVar(&passwordFile, "password-file", "", "root-managed file containing the canary password")
 	flag.StringVar(&promptFile, "prompt-file", "", "optional file containing one prompt for every canary case")
 	flag.StringVar(&providerKeyFile, "provider-key-file", "", "root-managed BytePlus API key file for layer-protocol")
+	flag.StringVar(&refinerKeyFile, "refiner-key-file", "", "root-managed OpenRouter API key pool file for refiner-protocol")
 	flag.StringVar(&artifactDir, "artifact-dir", "", "private output directory for layer protocol artifacts")
 	flag.StringVar(&releaseSHA, "release", "", "deployed release commit SHA")
 	flag.StringVar(&configPath, "model-config", "./config/models.yaml", "deployed model catalog")
 	flag.StringVar(&reportPath, "report", "", "resumable JSON report path")
-	flag.StringVar(&profile, "profile", "matrix", "canary profile: matrix, launch, byteplus, layer-protocol, or layer-e2e")
+	flag.StringVar(&profile, "profile", "matrix", "canary profile: matrix, launch, byteplus, layer-protocol, layer-e2e, refiner-protocol, or refiner-e2e")
 	flag.StringVar(&layerCases, "layer-cases", "", "comma-separated layer-e2e case names; empty runs the full profile")
 	flag.BoolVar(&archiveOutput, "archive-output", true, "archive generated canary assets")
 	flag.BoolVar(&allowHTTP, "allow-http", false, "allow HTTP for isolated tests only")
 	flag.Parse()
-	if profile != "matrix" && profile != "launch" && profile != "byteplus" && profile != "layer-protocol" && profile != "layer-e2e" {
-		return errors.New("--profile must be matrix, launch, byteplus, layer-protocol, or layer-e2e")
+	if profile != "matrix" && profile != "launch" && profile != "byteplus" && profile != "layer-protocol" && profile != "layer-e2e" && profile != "refiner-protocol" && profile != "refiner-e2e" {
+		return errors.New("--profile must be matrix, launch, byteplus, layer-protocol, layer-e2e, refiner-protocol, or refiner-e2e")
 	}
 	if profile == "layer-protocol" {
 		if providerKeyFile == "" || reportPath == "" || artifactDir == "" {
@@ -263,12 +264,18 @@ func run() error {
 		}
 		return runLayerProtocol(providerKeyFile, reportPath, artifactDir)
 	}
+	if profile == "refiner-protocol" {
+		if refinerKeyFile == "" || reportPath == "" || releaseSHA == "" {
+			return errors.New("refiner-protocol requires --refiner-key-file, --report, and --release")
+		}
+		return runRefinerProtocol(refinerKeyFile, reportPath, releaseSHA)
+	}
 
 	if passwordFile == "" || releaseSHA == "" {
 		return errors.New("--password-file and --release are required")
 	}
 	if reportPath == "" {
-		reportPath = "canary-" + shortSHA(releaseSHA) + ".json"
+		reportPath = defaultCanaryReportPath(profile, releaseSHA)
 	}
 	catalog, err := modelconfig.Load(configPath)
 	if err != nil {
@@ -300,10 +307,10 @@ func run() error {
 	if err = client.probeSSE(ctx); err != nil {
 		return fmt.Errorf("SSE probe: %w", err)
 	}
+	if profile == "refiner-e2e" {
+		return runRefinerE2E(ctx, client, reportPath, releaseSHA, catalog.Hash, catalog)
+	}
 	if profile == "layer-e2e" {
-		if reportPath == "" {
-			reportPath = "layer-e2e-" + shortSHA(releaseSHA) + ".json"
-		}
 		return runLayerE2E(ctx, client, reportPath, releaseSHA, catalog.Hash, username, layerCases)
 	}
 

@@ -487,3 +487,10 @@ func TestPromptRefinementMetricBucketsAndCategories(t *testing.T) {
 		t.Fatalf("large edit bucket=%v", bucket)
 	}
 }
+
+func TestPromptOptimizerHTTPErrorDoesNotExposeTruncationDetail(t *testing.T) {
+	status, code, message, retryable := promptOptimizerHTTPError(&provider.Error{Code: "PROMPT_REFINER_TRUNCATED_RESPONSE"})
+	if status != http.StatusBadGateway || code != "PROMPT_REFINER_INVALID_RESPONSE" || message == "" || !retryable {
+		t.Fatalf("mapping = status:%d code:%q message:%q retryable:%v", status, code, message, retryable)
+	}
+}

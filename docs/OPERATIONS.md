@@ -68,9 +68,9 @@ go run ./cmd/modelctl verify-remote
 
 `openrouter_api_key` 支持单个 key，也支持每行一个 key 的凭据池。Worker 按“当前在途最少、累计派发最少”选择 key；明确的 401、402 或 429 只冷却对应 key，并在安全的拒绝响应下切换下一把 key。请求已写出后的超时、断连或模糊 5xx 不跨 key 重提，继续进入 `submission_uncertain`，避免重复计费。API 的 Prompt Refiner 使用同一文件建立独立进程内 key pool，绝不共享图片生成的 breaker、Provider 状态或 attempt ledger；任一 Refiner 故障都保持原 Prompt 且不影响生成。`modelctl verify-remote` 只使用文件中的第一把 key 做只读能力核验。
 
-Prompt Refiner 请求显式设置 `provider.data_collection=deny`，排除会将输入用于训练的数据端点。当前 `stealth/ox-alpha` 仍由第三方 Provider 按其模型条款保留 Prompt 与输出，因此只能用于已批准该外部数据处理边界的内部环境；它不是零数据保留（ZDR）模型。
+Prompt Refiner 固定使用 `google/gemini-3.6-flash`，请求显式设置 `provider.data_collection=deny`，只路由到声明不收集数据的端点。Prompt 仍会发送到 OpenRouter 与其选定的 Google 推理端点，因此只能用于已批准该外部数据处理边界的内部环境；本项目不把该设置表述为端到端零数据保留（ZDR）。
 
-上述检查均不会创建图片，也不能证明生成协议、图生图参考 URL、callback 公网可达、结果下载、取消语义或最终费用正确。除 OpenRouter 凭据池外，生成 Provider key 仍只由 Worker 使用；API 额外只把 OpenRouter key pool 用于手动触发的 `stealth/ox-alpha` Prompt Refiner。付费 canary 前必须先确认宿主 Nginx/TLS 已上线，并从公网验证 Provider 能访问短期签名的 `GET/HEAD /api/v1/provider-assets/...`；Legnext 的 `POST /api/v1/provider-callbacks/...` 还必须能通过公网到达 API。不要把完整签名 URL 或 Refiner Prompt 记录到终端历史或工单。
+上述检查均不会创建图片，也不能证明生成协议、图生图参考 URL、callback 公网可达、结果下载、取消语义或最终费用正确。除 OpenRouter 凭据池外，生成 Provider key 仍只由 Worker 使用；API 额外只把 OpenRouter key pool 用于手动触发的 `google/gemini-3.6-flash` Prompt Refiner。付费 canary 前必须先确认宿主 Nginx/TLS 已上线，并从公网验证 Provider 能访问短期签名的 `GET/HEAD /api/v1/provider-assets/...`；Legnext 的 `POST /api/v1/provider-callbacks/...` 还必须能通过公网到达 API。不要把完整签名 URL 或 Refiner Prompt 记录到终端历史或工单。
 
 首次上线和 Provider 合约变化后必须在公开 HTTPS 部署上用专用、设有低额度上限的测试用户执行小规模真实 canary；这一步必须人工触发，不能由 CI、健康探针或负载脚本自动执行：
 
@@ -277,7 +277,7 @@ curl -fsS http://127.0.0.1:9090/api/v1/query?query=image_studio_restore_check_la
 
 Prompt Refiner 同样分两步验证：
 
-- `refiner-protocol` 使用权限受控的 OpenRouter key pool 文件，直接验证固定的 `stealth/ox-alpha` 请求协议、严格 JSON 输出和 5 条安全边界；首个失败立即停止。
+- `refiner-protocol` 使用权限受控的 OpenRouter key pool 文件，直接验证固定的 `google/gemini-3.6-flash` 请求协议、JSON Schema 输出和 5 条安全边界；首个失败立即停止。
 - `refiner-e2e` 通过登录态公开 API 运行 10 条代表性用例，覆盖注入防护、语义保真、Midjourney 参数清理和安全过滤。50 条完整合成契约由普通 CI 执行。
 - 两类报告都不得保存 Prompt、优化结果、Hash、推理正文、原始错误、用户名或 Key，只允许记录用例 ID、分类、目标模型、白名单错误码、耗时、字符数和 Token 数。
 

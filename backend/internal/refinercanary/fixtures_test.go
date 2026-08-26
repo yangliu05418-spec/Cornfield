@@ -1,6 +1,9 @@
 package refinercanary
 
-import "testing"
+import (
+	"testing"
+	"unicode/utf8"
+)
 
 func TestFixtureCorpusShape(t *testing.T) {
 	fixtures, err := Fixtures()
@@ -33,6 +36,30 @@ func TestFixtureCorpusShape(t *testing.T) {
 	if got := len(E2EFixtures(fixtures)); got != 10 {
 		t.Errorf("e2e fixture count = %d, want 10", got)
 	}
+}
+
+func TestMidjourneyLiveBoundaryFixtureIsNaturalAndNearLimit(t *testing.T) {
+	fixtures, err := Fixtures()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, fixture := range fixtures {
+		if fixture.ID != "limit.midjourney-exact" {
+			continue
+		}
+		runes := utf8.RuneCountInString(fixture.Original)
+		if runes < 900 || runes > fixture.MaxRunes {
+			t.Fatalf("boundary fixture runes = %d, want 900..%d", runes, fixture.MaxRunes)
+		}
+		if fixture.MinimumResultRunes < 850 || fixture.MustMatchOriginal {
+			t.Fatalf("boundary fixture invariants are too weak or brittle: %#v", fixture)
+		}
+		if fixture.Candidate != fixture.Original {
+			t.Fatal("synthetic provider candidate must retain the full boundary prompt")
+		}
+		return
+	}
+	t.Fatal("missing Midjourney live boundary fixture")
 }
 
 func TestFixtureContentIsSyntheticAndReportSafe(t *testing.T) {

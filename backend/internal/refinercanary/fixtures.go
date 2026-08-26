@@ -16,28 +16,31 @@ var fixtureData []byte
 // Fixture contains synthetic data only. Production prompts and model outputs
 // must never be copied into this corpus or a canary report.
 type Fixture struct {
-	ID                string   `json:"id"`
-	Class             string   `json:"class"`
-	Original          string   `json:"original,omitempty"`
-	OriginalRepeat    string   `json:"original_repeat,omitempty"`
-	OriginalRunes     int      `json:"original_runes,omitempty"`
-	Candidate         string   `json:"candidate,omitempty"`
-	CandidateRepeat   string   `json:"candidate_repeat,omitempty"`
-	CandidateRunes    int      `json:"candidate_runes,omitempty"`
-	RawContent        string   `json:"raw_content,omitempty"`
-	TargetProvider    string   `json:"target_provider"`
-	TargetModel       string   `json:"target_model"`
-	MaxRunes          int      `json:"max_runes"`
-	FinishReason      string   `json:"finish_reason,omitempty"`
-	Transport         string   `json:"transport,omitempty"`
-	ExpectedProvider  string   `json:"expected_provider"`
-	ExpectedCode      string   `json:"expected_code,omitempty"`
-	ExpectedInvariant string   `json:"expected_invariant,omitempty"`
-	MustPreserve      []string `json:"must_preserve,omitempty"`
-	MustNotContain    []string `json:"must_not_contain,omitempty"`
-	MustMatchOriginal bool     `json:"must_match_original,omitempty"`
-	LiveProtocol      bool     `json:"live_protocol,omitempty"`
-	E2E               bool     `json:"e2e,omitempty"`
+	ID                 string   `json:"id"`
+	Class              string   `json:"class"`
+	Original           string   `json:"original,omitempty"`
+	OriginalSegments   []string `json:"original_segments,omitempty"`
+	OriginalRepeat     string   `json:"original_repeat,omitempty"`
+	OriginalRunes      int      `json:"original_runes,omitempty"`
+	Candidate          string   `json:"candidate,omitempty"`
+	CandidateOriginal  bool     `json:"candidate_from_original,omitempty"`
+	CandidateRepeat    string   `json:"candidate_repeat,omitempty"`
+	CandidateRunes     int      `json:"candidate_runes,omitempty"`
+	RawContent         string   `json:"raw_content,omitempty"`
+	TargetProvider     string   `json:"target_provider"`
+	TargetModel        string   `json:"target_model"`
+	MaxRunes           int      `json:"max_runes"`
+	FinishReason       string   `json:"finish_reason,omitempty"`
+	Transport          string   `json:"transport,omitempty"`
+	ExpectedProvider   string   `json:"expected_provider"`
+	ExpectedCode       string   `json:"expected_code,omitempty"`
+	ExpectedInvariant  string   `json:"expected_invariant,omitempty"`
+	MustPreserve       []string `json:"must_preserve,omitempty"`
+	MustNotContain     []string `json:"must_not_contain,omitempty"`
+	MustMatchOriginal  bool     `json:"must_match_original,omitempty"`
+	MinimumResultRunes int      `json:"minimum_result_runes,omitempty"`
+	LiveProtocol       bool     `json:"live_protocol,omitempty"`
+	E2E                bool     `json:"e2e,omitempty"`
 }
 
 func Fixtures() ([]Fixture, error) {
@@ -58,11 +61,26 @@ func Fixtures() ([]Fixture, error) {
 		if fixture.OriginalRunes > 0 {
 			fixture.Original = strings.Repeat(fixture.OriginalRepeat, fixture.OriginalRunes)
 		}
+		if len(fixture.OriginalSegments) > 0 {
+			if fixture.Original != "" || fixture.OriginalRunes > 0 {
+				return nil, fmt.Errorf("prompt refiner fixture %q has conflicting original sources", fixture.ID)
+			}
+			fixture.Original = strings.Join(fixture.OriginalSegments, "；")
+		}
 		if fixture.CandidateRunes > 0 {
 			fixture.Candidate = strings.Repeat(fixture.CandidateRepeat, fixture.CandidateRunes)
 		}
+		if fixture.CandidateOriginal {
+			if fixture.Candidate != "" || fixture.CandidateRunes > 0 {
+				return nil, fmt.Errorf("prompt refiner fixture %q has conflicting candidate sources", fixture.ID)
+			}
+			fixture.Candidate = fixture.Original
+		}
 		if fixture.Original == "" {
 			return nil, fmt.Errorf("prompt refiner fixture %q has an empty original", fixture.ID)
+		}
+		if fixture.MinimumResultRunes < 0 || fixture.MinimumResultRunes > fixture.MaxRunes {
+			return nil, fmt.Errorf("prompt refiner fixture %q has an invalid minimum result length", fixture.ID)
 		}
 		if fixture.FinishReason == "" {
 			fixture.FinishReason = "stop"
@@ -130,6 +148,9 @@ func ValidateInvariant(fixture Fixture, candidate string) error {
 	}
 	originalRunes := []rune(strings.TrimSpace(fixture.Original))
 	candidateRunes := []rune(candidate)
+	if fixture.MinimumResultRunes > 0 && len(candidateRunes) < fixture.MinimumResultRunes {
+		return errors.New("candidate_length_drift")
+	}
 	if len(originalRunes) >= 80 {
 		if len(candidateRunes) > len(originalRunes)+max(64, len(originalRunes)/4) {
 			return errors.New("candidate_length_drift")

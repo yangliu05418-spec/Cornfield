@@ -327,8 +327,8 @@ func promptOptimizerHTTPError(err error) (status int, code, message string, retr
 			return http.StatusGatewayTimeout, typed.Code, "提示词优化超时，原提示词未被修改", true
 		case "PROMPT_REFINER_KEYS_BUSY", "PROMPT_REFINER_HTTP_429":
 			return http.StatusTooManyRequests, typed.Code, "提示词优化服务繁忙，请稍后再试", true
-		case "PROMPT_REFINER_INVALID_RESPONSE":
-			return http.StatusBadGateway, typed.Code, "优化结果格式异常，原提示词未被修改", true
+		case "PROMPT_REFINER_INVALID_RESPONSE", "PROMPT_REFINER_TRUNCATED_RESPONSE":
+			return http.StatusBadGateway, "PROMPT_REFINER_INVALID_RESPONSE", "优化结果格式异常，原提示词未被修改", true
 		}
 	}
 	return http.StatusServiceUnavailable, "PROMPT_REFINER_UNAVAILABLE", "提示词优化服务暂不可用，原提示词未被修改", true

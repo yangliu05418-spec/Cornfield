@@ -234,7 +234,7 @@ func TestNormalizeBytePlusPromptOptimization(t *testing.T) {
 
 func TestLegnextPromptLengthValidationUsesFinalParameters(t *testing.T) {
 	input := generationRequest{
-		Prompt:      strings.Repeat("界", 990),
+		Prompt:      strings.Repeat("界", provider.LegnextPromptMaxRunes),
 		AspectRatio: "16:9",
 		Options: provider.GenerationOptions{Midjourney: &provider.MidjourneyOptions{
 			Version: "8.2", Resolution: "sd", Speed: "fast", Stylize: 100,
@@ -243,9 +243,9 @@ func TestLegnextPromptLengthValidationUsesFinalParameters(t *testing.T) {
 	if err := validateLegnextPromptLength(input); err == nil {
 		t.Fatal("over-limit final Midjourney prompt was accepted")
 	}
-	input.Prompt = "quiet field at dusk"
+	input.Prompt = strings.Repeat("界", 2048)
 	if err := validateLegnextPromptLength(input); err != nil {
-		t.Fatalf("valid prompt rejected: %v", err)
+		t.Fatalf("officially valid 2048-character prompt rejected: %v", err)
 	}
 }
 

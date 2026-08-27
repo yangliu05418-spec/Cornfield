@@ -197,9 +197,6 @@ func (s *Server) refinePrompt(w http.ResponseWriter, r *http.Request) {
 	if finalLength > 8192 {
 		diagnostics = append(diagnostics, promptDiagnostic{Code: "PROMPT_TOO_LONG", Severity: "warning", Message: "拼接模型参数后的提示词超过 Cornfield 生成上限", Used: finalLength, Limit: 8192})
 	}
-	if model.Provider == "legnext" && finalLength > 1024 {
-		diagnostics = append(diagnostics, promptDiagnostic{Code: "MIDJOURNEY_COMPATIBILITY_LIMIT", Severity: "warning", Message: "最终提示词超过 Midjourney 兼容长度，建议精简后再生成", Used: finalLength, Limit: 1024})
-	}
 	status := result.Status
 	if len(diagnostics) > 0 {
 		status = "findings"
@@ -237,7 +234,7 @@ func (s *Server) refinePrompt(w http.ResponseWriter, r *http.Request) {
 	if s.promptOptimizer != nil {
 		limit := 8192
 		if model.Provider == "legnext" {
-			limit = 1024
+			limit = provider.LegnextPromptMaxRunes
 		}
 		overhead := max(0, finalLength-utf8.RuneCountInString(strings.TrimSpace(input.Prompt)))
 		outputLimit := limit - overhead

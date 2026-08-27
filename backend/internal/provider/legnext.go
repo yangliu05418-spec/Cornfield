@@ -13,6 +13,10 @@ import (
 	"unicode/utf8"
 )
 
+// LegnextPromptMaxRunes matches DiffusionRequest.text.maxLength in the
+// official Legnext API contract.
+const LegnextPromptMaxRunes = 8192
+
 type Legnext struct {
 	APIKey  string
 	BaseURL string

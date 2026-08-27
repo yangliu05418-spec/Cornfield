@@ -176,8 +176,8 @@ func validateLegnextPromptLength(input generationRequest) error {
 	if err != nil {
 		return err
 	}
-	if utf8.RuneCountInString(finalPrompt) > 1024 {
-		return errors.New("最终 Midjourney 提示词不能超过 1024 个字符，请精简描述")
+	if utf8.RuneCountInString(finalPrompt) > provider.LegnextPromptMaxRunes {
+		return errors.New("最终 Midjourney 提示词不能超过 8192 个字符，请精简描述")
 	}
 	return nil
 }

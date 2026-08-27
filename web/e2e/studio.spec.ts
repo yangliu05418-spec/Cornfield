@@ -119,7 +119,19 @@ test('prompt refiner replaces in place, shows its change, and remains undoable',
 
   await page.getByRole('button', { name: '检查并优化提示词' }).click()
   await expect(prompt).toHaveValue('crimson liquid over a quiet cornfield')
-  await expect(page.getByText('提示词已优化')).toBeVisible()
+  const refinerNotice = page.locator('.prompt-refiner-undo')
+  await expect(refinerNotice).toBeVisible()
+  await expect(refinerNotice).toHaveCSS('position', 'absolute')
+  await page.waitForTimeout(200)
+  const noticeBox = await refinerNotice.boundingBox()
+  const generatorBox = await page.locator('.generator').boundingBox()
+  expect(noticeBox).not.toBeNull()
+  expect(generatorBox).not.toBeNull()
+  expect(noticeBox!.y + noticeBox!.height).toBeLessThan(generatorBox!.y)
+  expect(noticeBox!.x).toBeGreaterThanOrEqual(generatorBox!.x)
+  expect(noticeBox!.x + noticeBox!.width).toBeLessThanOrEqual(
+    generatorBox!.x + generatorBox!.width,
+  )
   await page.getByRole('button', { name: '查看修改' }).click()
   const review = page.getByRole('dialog', { name: '查看提示词修改' })
   await expect(review.getByLabel('修改前')).toContainText(

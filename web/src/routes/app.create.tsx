@@ -1883,42 +1883,42 @@ function CreatePage() {
                 ? '提交中…'
                 : '生成'}
           </button>
-        </form>
-        {refinerUndo && (
-          <div className="prompt-refiner-undo" role="status">
-            <span>提示词已优化</span>
-            <div className="prompt-refiner-undo-actions">
-              <button
-                type="button"
-                className="is-review"
-                onClick={() => setRefinerReviewOpen(true)}
-              >
-                查看修改
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  const undo = refinerUndo
-                  reportPromptRefinementFeedback(undo.refinementID, {
-                    event: 'undone',
-                  })
-                  setPrompt(undo.before)
-                  setRefinerUndo(null)
-                  setRefinerReviewOpen(false)
-                  requestAnimationFrame(() => {
-                    promptRef.current?.focus()
-                    promptRef.current?.setSelectionRange(
-                      undo.selection.start,
-                      undo.selection.end,
-                    )
-                  })
-                }}
-              >
-                撤销
-              </button>
+          {refinerUndo && (
+            <div className="prompt-refiner-undo" role="status">
+              <span>提示词已优化</span>
+              <div className="prompt-refiner-undo-actions">
+                <button
+                  type="button"
+                  className="is-review"
+                  onClick={() => setRefinerReviewOpen(true)}
+                >
+                  查看修改
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const undo = refinerUndo
+                    reportPromptRefinementFeedback(undo.refinementID, {
+                      event: 'undone',
+                    })
+                    setPrompt(undo.before)
+                    setRefinerUndo(null)
+                    setRefinerReviewOpen(false)
+                    requestAnimationFrame(() => {
+                      promptRef.current?.focus()
+                      promptRef.current?.setSelectionRange(
+                        undo.selection.start,
+                        undo.selection.end,
+                      )
+                    })
+                  }}
+                >
+                  撤销
+                </button>
+              </div>
             </div>
-          </div>
-        )}
+          )}
+        </form>
         <PromptRefinerReview
           open={refinerReviewOpen && refinerUndo !== null}
           before={refinerUndo?.before ?? ''}

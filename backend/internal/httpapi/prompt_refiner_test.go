@@ -377,7 +377,7 @@ func TestRefinePromptReportsRulesAndMidjourneyDiagnostics(t *testing.T) {
 	for _, item := range result.Diagnostics {
 		codes[item.Code] = true
 	}
-	if !codes["CONTROLLED_PROVIDER_INPUT"] || !codes["MIDJOURNEY_COMPATIBILITY_LIMIT"] {
+	if !codes["CONTROLLED_PROVIDER_INPUT"] || codes["MIDJOURNEY_COMPATIBILITY_LIMIT"] {
 		t.Fatalf("diagnostics=%#v", result.Diagnostics)
 	}
 	if got := response.Header().Get("Cache-Control"); got != "private, no-store" {
@@ -453,7 +453,7 @@ func TestRefinePromptCountsDeferredReferences(t *testing.T) {
 			t.Fatalf("deferred reference was not counted: %#v", result.Diagnostics)
 		}
 	}
-	if optimizer.request.MaxRunes >= 900 {
+	if optimizer.request.MaxRunes >= provider.LegnextPromptMaxRunes {
 		t.Fatalf("pending reference URL length was not reserved: max_runes=%d", optimizer.request.MaxRunes)
 	}
 }

@@ -976,8 +976,8 @@ func (w *GenerateWorker) canonicalRequest(ctx context.Context, item generationRe
 			return request, buildErr
 		}
 		providerPromptLength = utf8.RuneCountInString(finalPrompt)
-		if providerPromptLength > 1024 {
-			return request, &provider.Error{Code: "PROMPT_TOO_LONG", Message: "final Midjourney prompt exceeds 1024 characters"}
+		if providerPromptLength > provider.LegnextPromptMaxRunes {
+			return request, &provider.Error{Code: "PROMPT_TOO_LONG", Message: "final Midjourney prompt exceeds 8192 characters"}
 		}
 	}
 	if providerPromptLength > 8192 {

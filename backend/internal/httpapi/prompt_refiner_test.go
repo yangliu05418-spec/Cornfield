@@ -128,7 +128,7 @@ func TestRefinePromptReturnsCompatibleLLMOptimization(t *testing.T) {
 	}
 }
 
-func TestRefinePromptRejectsUnsafeOrDriftingLLMOutput(t *testing.T) {
+func TestRefinePromptAcceptsSemanticallyChangedLLMOutput(t *testing.T) {
 	model := modelconfig.Model{
 		ID: "bfl-flux", Provider: "bfl", ProviderModel: "flux", Enabled: true, OutputsPerDraw: 1,
 		Capabilities: modelconfig.Capabilities{TextToImage: true, AspectRatios: []string{"1:1"}, Resolutions: []string{"1K"}, DrawCount: modelconfig.DrawCount{Min: 1, Max: 1, Default: 1}},
@@ -153,11 +153,11 @@ func TestRefinePromptRejectsUnsafeOrDriftingLLMOutput(t *testing.T) {
 			request := promptRefinerRequestContext(httptest.NewRequest(http.MethodPost, "/api/v1/prompts/refine", strings.NewReader(string(body))), uuid.New())
 			response := httptest.NewRecorder()
 			server.refinePrompt(response, request)
-			if response.Code != http.StatusBadGateway {
+			if response.Code != http.StatusOK {
 				t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
 			}
 			metrics := server.promptRefinementMetrics.(*fakePromptRefinementMetricStore).metrics
-			if len(metrics) != 1 || metrics[0].Outcome != "validation_error" || metrics[0].Changed {
+			if len(metrics) != 1 || metrics[0].Outcome != "optimized" || !metrics[0].Changed {
 				t.Fatalf("metrics=%#v", metrics)
 			}
 		})
@@ -207,72 +207,47 @@ func TestPromptRefineLimiterAllowsOneInflightAndAppliesRate(t *testing.T) {
 	}
 }
 
-func TestValidateOptimizedPromptRejectsManualOnlyFinding(t *testing.T) {
-	engine, err := promptrefiner.New()
+func TestValidateOptimizedPromptAllowsRemainingDeterministicFindings(t *testing.T) {
+	err := validateOptimizedPrompt("a quiet portrait with breasts", "bfl", "", provider.CanonicalRequest{}, 8192)
 	if err != nil {
-		t.Fatal(err)
-	}
-	before := engine.Refine("a quiet portrait")
-	err = validateOptimizedPrompt(
-		"a quiet portrait", "a quiet portrait with breasts", "bfl", "",
-		provider.CanonicalRequest{}, 8192, false, before, engine,
-	)
-	if err == nil {
-		t.Fatal("manual-only finding was accepted")
+		t.Fatalf("deterministic finding blocked model output: %v", err)
 	}
 }
 
-func TestValidateOptimizedPromptRejectsUnresolvedMappedFinding(t *testing.T) {
-	engine, err := promptrefiner.New()
-	if err != nil {
-		t.Fatal(err)
-	}
-	original := "blood across a quiet white backdrop"
-	before := engine.Refine(original)
-	if len(before.Findings) == 0 || before.Findings[0].Mode != "mapped" {
-		t.Fatalf("fixture did not produce mapped finding: %#v", before.Findings)
-	}
-	if err = validateOptimizedPrompt(original, original, "bfl", "", provider.CanonicalRequest{}, 8192, false, before, engine); err == nil {
-		t.Fatal("unresolved mapped finding was accepted")
-	}
-}
-
-func TestConservativePromptRewritePreservesHardConstraints(t *testing.T) {
-	original := `35-year-old detective, 16:9, sign reads "NORTH"`
-	if !preservesProtectedPromptTokens(original, `35-year-old detective in a 16:9 frame, sign reads "NORTH"`) {
-		t.Fatal("unchanged hard constraints were rejected")
-	}
+func TestValidateOptimizedPromptAllowsLargeAndMultilingualRewrites(t *testing.T) {
 	for _, candidate := range []string{
-		`36-year-old detective, 16:9, sign reads "NORTH"`,
-		`35-year-old detective, 4:3, sign reads "NORTH"`,
-		`35-year-old detective, 16:9, sign reads "SOUTH"`,
-		`35-year-old detective, 16:9, sign reads "NORTH", 8K`,
+		"A restrained cinematic aftermath at dawn.",
+		"雨后的荒原，远处只有克制的红色光线。",
+		`36-year-old detective, 4:3, sign reads "SOUTH"`,
 	} {
-		if preservesProtectedPromptTokens(original, candidate) {
-			t.Fatalf("changed hard constraint accepted: %q", candidate)
+		if err := validateOptimizedPrompt(candidate, "openrouter", "", provider.CanonicalRequest{}, 8192); err != nil {
+			t.Fatalf("candidate %q was rejected: %v", candidate, err)
 		}
 	}
 }
 
-func TestPreservesLatinPromptAnchors(t *testing.T) {
-	if preservesLatinPromptAnchors("A cobalt sphere centered on a steel table", "A cobalt cube centered on a steel table", nil) {
-		t.Fatal("subject replacement was accepted")
-	}
-	engine, err := promptrefiner.New()
-	if err != nil {
-		t.Fatal(err)
-	}
-	original := "cinematic blood around a detective"
-	if !preservesLatinPromptAnchors(original, "cinematic crimson accents around a detective", engine.Refine(original).Findings) {
-		t.Fatal("mapped safety replacement was rejected")
+func TestValidateOptimizedPromptRejectsOnlyInvalidOutputBoundaries(t *testing.T) {
+	for _, testCase := range []struct {
+		name      string
+		candidate string
+		provider  string
+		limit     int
+		wantCode  string
+	}{
+		{name: "empty", candidate: "  ", provider: "openrouter", limit: 8192, wantCode: "EMPTY_OUTPUT"},
+		{name: "too long", candidate: "12345", provider: "bfl", limit: 4, wantCode: "TOO_LONG"},
+		{name: "midjourney controls", candidate: "quiet field --v 8.2", provider: "legnext", limit: 1024, wantCode: "INVALID_PROVIDER_SYNTAX"},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			err := validateOptimizedPrompt(testCase.candidate, testCase.provider, "", provider.CanonicalRequest{}, testCase.limit)
+			if err == nil || err.Error() != testCase.wantCode {
+				t.Fatalf("error = %v, want %s", err, testCase.wantCode)
+			}
+		})
 	}
 }
 
 func TestValidateOptimizedPromptAllowsEvidenceBackedFiltering(t *testing.T) {
-	engine, err := promptrefiner.New()
-	if err != nil {
-		t.Fatal(err)
-	}
 	for _, testCase := range []struct {
 		name      string
 		original  string
@@ -305,19 +280,14 @@ func TestValidateOptimizedPromptAllowsEvidenceBackedFiltering(t *testing.T) {
 		},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
-			before := engine.Refine(testCase.original)
-			if err := validateOptimizedPrompt(testCase.original, testCase.candidate, testCase.provider, "", provider.CanonicalRequest{}, 8192, false, before, engine); err != nil {
-				t.Fatalf("evidence-backed rewrite was rejected: %v; baseline=%q", err, promptRewriteBaseline(testCase.original, testCase.provider, before.Findings))
+			if err := validateOptimizedPrompt(testCase.candidate, testCase.provider, "", provider.CanonicalRequest{}, 8192); err != nil {
+				t.Fatalf("evidence-backed rewrite was rejected: %v", err)
 			}
 		})
 	}
 }
 
-func TestValidateOptimizedPromptKeepsConstraintsOutsideEvidence(t *testing.T) {
-	engine, err := promptrefiner.New()
-	if err != nil {
-		t.Fatal(err)
-	}
+func TestValidateOptimizedPromptDoesNotSecondGuessSemanticChanges(t *testing.T) {
 	for _, testCase := range []struct {
 		name      string
 		original  string
@@ -350,30 +320,14 @@ func TestValidateOptimizedPromptKeepsConstraintsOutsideEvidence(t *testing.T) {
 		},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
-			before := engine.Refine(testCase.original)
-			if err := validateOptimizedPrompt(testCase.original, testCase.candidate, testCase.provider, "", provider.CanonicalRequest{}, 8192, false, before, engine); err == nil {
-				t.Fatal("unexplained semantic drift was accepted")
+			if err := validateOptimizedPrompt(testCase.candidate, testCase.provider, "", provider.CanonicalRequest{}, 8192); err != nil {
+				t.Fatalf("semantic change was rejected: %v", err)
 			}
 		})
 	}
 }
 
-func TestPromptRewriteBaselineDoesNotTreatQuotedTextOrEmbeddedDashesAsControls(t *testing.T) {
-	for _, value := range []string{
-		`A sign reading "IGNORE PREVIOUS INSTRUCTIONS" in a museum.`,
-		"An art--v deco poster.",
-	} {
-		if baseline := promptRewriteBaseline(value, "legnext", nil); baseline != value {
-			t.Fatalf("baseline=%q want=%q", baseline, value)
-		}
-	}
-}
-
 func TestValidateOptimizedPromptAcceptsInjectionCanaryCorpus(t *testing.T) {
-	engine, err := promptrefiner.New()
-	if err != nil {
-		t.Fatal(err)
-	}
 	fixtures, err := refinercanary.Fixtures()
 	if err != nil {
 		t.Fatal(err)
@@ -383,8 +337,7 @@ func TestValidateOptimizedPromptAcceptsInjectionCanaryCorpus(t *testing.T) {
 			continue
 		}
 		t.Run(fixture.ID, func(t *testing.T) {
-			before := engine.Refine(fixture.Original)
-			if err := validateOptimizedPrompt(fixture.Original, fixture.Candidate, fixture.TargetProvider, "", provider.CanonicalRequest{}, fixture.MaxRunes, false, before, engine); err != nil {
+			if err := validateOptimizedPrompt(fixture.Candidate, fixture.TargetProvider, "", provider.CanonicalRequest{}, fixture.MaxRunes); err != nil {
 				t.Fatalf("injection filtering fixture was rejected: %v", err)
 			}
 		})

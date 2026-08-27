@@ -5,9 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"path/filepath"
-	"regexp"
 	"slices"
-	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -293,7 +291,10 @@ func (s *Server) refinePrompt(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		candidate := strings.TrimSpace(optimization.Prompt)
-		if err := validateOptimizedPrompt(input.Prompt, candidate, model.Provider, model.PromptSuffix, canonical, limit, finalLength > limit, result, s.promptRefiner); err != nil {
+		if err := validateOptimizedPrompt(candidate, model.Provider, model.PromptSuffix, canonical, limit); err != nil {
+			if s.log != nil {
+				s.log.Warn("prompt refinement output rejected", "request_id", requestIDFromContext(r), "reason", err.Error())
+			}
 			recordFailureMetric("validation_error", &candidate, optimization)
 			writeError(w, http.StatusBadGateway, "PROMPT_REFINER_INVALID_RESPONSE", "优化结果未通过安全校验，原提示词未被修改", true, r)
 			return
@@ -344,13 +345,16 @@ func boundedRefinerContext(value string, maximum int) string {
 	return string(runes[:maximum])
 }
 
-func validateOptimizedPrompt(original, candidate, providerID, promptSuffix string, canonical provider.CanonicalRequest, limit int, sourceOverLimit bool, before promptrefiner.Result, engine *promptrefiner.Engine) error {
-	baseline := promptRewriteBaseline(original, providerID, before.Findings)
-	if candidate == "" || utf8.RuneCountInString(candidate) > limit || !conservativePromptRewrite(baseline, candidate, sourceOverLimit) || !preservesProtectedPromptTokens(baseline, candidate) || !preservesLatinPromptAnchors(baseline, candidate, before.Findings) {
-		return errors.New("invalid prompt rewrite")
+func validateOptimizedPrompt(candidate, providerID, promptSuffix string, canonical provider.CanonicalRequest, limit int) error {
+	candidate = strings.TrimSpace(candidate)
+	if candidate == "" {
+		return errors.New("EMPTY_OUTPUT")
+	}
+	if utf8.RuneCountInString(candidate) > limit {
+		return errors.New("TOO_LONG")
 	}
 	if providerID == "legnext" && containsControlledLegnextInput(candidate) {
-		return errors.New("controlled provider input remains")
+		return errors.New("INVALID_PROVIDER_SYNTAX")
 	}
 	canonical.Prompt = candidate
 	if promptSuffix != "" {
@@ -360,330 +364,16 @@ func validateOptimizedPrompt(original, candidate, providerID, promptSuffix strin
 	if providerID == "legnext" {
 		value, err := provider.BuildLegnextPrompt(canonical)
 		if err != nil {
-			return err
+			return errors.New("INVALID_PROVIDER_SYNTAX")
 		}
 		finalPrompt = value
 	} else if providerID == "openrouter" {
 		finalPrompt = provider.BuildOpenRouterPrompt(canonical)
 	}
 	if utf8.RuneCountInString(finalPrompt) > limit {
-		return errors.New("final prompt exceeds target limit")
-	}
-	knownRules := make(map[string]struct{}, len(before.Findings))
-	actionableRules := make(map[string]struct{}, len(before.Findings))
-	for _, finding := range before.Findings {
-		knownRules[finding.RuleID] = struct{}{}
-		if finding.Mode == "mapped" || finding.Mode == "manual_only" {
-			actionableRules[finding.RuleID] = struct{}{}
-		}
-	}
-	for _, finding := range engine.Refine(candidate).Findings {
-		if finding.Mode == "manual_only" {
-			return errors.New("manual-only finding remains")
-		}
-		if _, remains := actionableRules[finding.RuleID]; remains {
-			return errors.New("actionable finding remains")
-		}
-		if _, existed := knownRules[finding.RuleID]; !existed {
-			return errors.New("rewrite introduced a new deterministic finding")
-		}
+		return errors.New("TOO_LONG")
 	}
 	return nil
-}
-
-func conservativePromptRewrite(original, candidate string, sourceOverLimit bool) bool {
-	originalRunes := []rune(strings.TrimSpace(original))
-	candidateRunes := []rune(strings.TrimSpace(candidate))
-	if !sourceOverLimit && len(originalRunes) >= 8 {
-		if len(candidateRunes) < len(originalRunes)/2 || len(candidateRunes) > len(originalRunes)+max(64, len(originalRunes)/4) {
-			return false
-		}
-		minimumSimilarity := 0.20
-		if len(originalRunes) >= 40 {
-			minimumSimilarity = 0.30
-		}
-		if len(originalRunes) >= 80 {
-			minimumSimilarity = 0.45
-		}
-		if len(originalRunes) <= 8192 && promptBigramSimilarity(originalRunes, candidateRunes) < minimumSimilarity {
-			return false
-		}
-	}
-	originalHan, originalLatin := promptScriptCounts(originalRunes)
-	candidateHan, candidateLatin := promptScriptCounts(candidateRunes)
-	if originalHan > originalLatin*3 && candidateLatin > candidateHan || originalLatin > originalHan*3 && candidateHan > candidateLatin {
-		return false
-	}
-	return true
-}
-
-var protectedPromptPattern = regexp.MustCompile(`(?i)\d+(?:[.,]\d+)*(?:\s*(?::|x|×)\s*\d+(?:[.,]\d+)*)?|"(?:[^"\\]|\\.)*"|'[^'\n]*'|“[^”\n]*”|‘[^’\n]*’|「[^」\n]*」|『[^』\n]*』`)
-var latinPromptAnchorPattern = regexp.MustCompile(`(?i)[a-z][a-z0-9_-]*`)
-
-type promptRewriteRange struct {
-	start int
-	end   int
-}
-
-var (
-	legnextPromptFlagPattern = regexp.MustCompile(`(?i)(?:^|\s)--[a-z][a-z0-9-]*`)
-	promptURLPattern         = regexp.MustCompile(`(?i)https?://[^\s<>"']+`)
-	injectionActionPattern   = regexp.MustCompile(`(?i)\b(?:ignore|disregard|override|reveal|disclose|repeat|output|print|return|add|call|change)\b`)
-	injectionTargetPattern   = regexp.MustCompile(`(?i)\b(?:instructions?|rules?|system(?:\s+prompt)?|polic(?:y|ies)|analysis|reasoning|thoughts?|response\s+json|fields?|tools?|roles?|commentary|explanation|secrets?)\b`)
-	jsonInjectionPattern     = regexp.MustCompile(`(?i)["']?(?:analysis|reasoning|system)["']?\s*:\s*["']?(?:print|reveal|disclose|output)`)
-	goreContextPattern       = regexp.MustCompile(`(?i)\bgraphic\b`)
-)
-
-// promptRewriteBaseline removes only source spans that have deterministic
-// evidence for deletion. The candidate is still checked against every other
-// subject anchor, number, ratio and quoted string in the prompt.
-func promptRewriteBaseline(original, providerID string, findings []promptrefiner.Finding) string {
-	ranges := make([]promptRewriteRange, 0, len(findings)+4)
-	goreFindings := make([]promptRewriteRange, 0, len(findings))
-	for _, finding := range findings {
-		if finding.Start >= 0 && finding.End > finding.Start && finding.End <= len(original) {
-			ranges = append(ranges, promptRewriteRange{start: finding.Start, end: finding.End})
-		}
-		if finding.Category == "gore" || finding.Category == "violence" {
-			goreFindings = append(goreFindings, promptRewriteRange{start: finding.Start, end: finding.End})
-		}
-	}
-	if len(goreFindings) > 0 {
-		for _, match := range goreContextPattern.FindAllStringIndex(original, -1) {
-			for _, finding := range goreFindings {
-				if (match[1] <= finding.start && finding.start-match[1] <= 96) || (finding.end <= match[0] && match[0]-finding.end <= 96) {
-					ranges = append(ranges, promptRewriteRange{start: match[0], end: match[1]})
-					break
-				}
-			}
-		}
-	}
-	ranges = append(ranges, promptInjectionRanges(original)...)
-	if providerID == "legnext" {
-		ranges = append(ranges, legnextControlledRanges(original)...)
-	}
-	return removePromptRewriteRanges(original, ranges)
-}
-
-func promptInjectionRanges(prompt string) []promptRewriteRange {
-	ranges := make([]promptRewriteRange, 0, 2)
-	start := 0
-	for index, character := range prompt {
-		if character != '.' && character != '!' && character != '?' && character != ';' && character != '\n' && character != '。' && character != '！' && character != '？' && character != '；' {
-			continue
-		}
-		end := index + utf8.RuneLen(character)
-		if offset, ok := promptInjectionOffset(prompt[start:end]); ok {
-			ranges = append(ranges, promptRewriteRange{start: start + offset, end: end})
-		}
-		start = end
-	}
-	if start < len(prompt) {
-		if offset, ok := promptInjectionOffset(prompt[start:]); ok {
-			ranges = append(ranges, promptRewriteRange{start: start + offset, end: len(prompt)})
-		}
-	}
-	return ranges
-}
-
-func promptInjectionOffset(clause string) (int, bool) {
-	if match := jsonInjectionPattern.FindStringIndex(clause); match != nil {
-		if quote := strings.IndexAny(clause[:match[0]], `"'`); quote >= 0 {
-			return quote, true
-		}
-		return match[0], true
-	}
-	masked := maskQuotedPromptText(clause)
-	lower := strings.ToLower(masked)
-	action := injectionActionPattern.FindStringIndex(masked)
-	target := injectionTargetPattern.FindStringIndex(masked)
-	zhAction := firstSubstringIndex(masked, []string{"忽略", "无视", "覆盖", "输出", "返回", "展示", "透露", "重复", "调用", "改写"})
-	zhTarget := firstSubstringIndex(masked, []string{"指令", "规则", "系统提示", "思考过程", "推理", "分析", "策略", "工具", "角色", "解释"})
-	if action != nil && target != nil {
-		start := action[0]
-		if marker := strings.Index(lower, "<system>"); marker >= 0 && marker < start {
-			start = marker
-		}
-		if marker := strings.Index(lower, "```"); marker >= 0 && marker < start {
-			start = marker
-		}
-		if marker := strings.LastIndex(lower[:start], "system:"); marker >= 0 {
-			start = marker
-		}
-		return start, true
-	}
-	if zhAction >= 0 && zhTarget >= 0 {
-		return zhAction, true
-	}
-	return 0, false
-}
-
-func maskQuotedPromptText(value string) string {
-	masked := []byte(value)
-	for _, pair := range [][2]string{{`"`, `"`}, {"“", "”"}, {"‘", "’"}, {"「", "」"}, {"『", "』"}} {
-		searchFrom := 0
-		for searchFrom < len(value) {
-			openRelative := strings.Index(value[searchFrom:], pair[0])
-			if openRelative < 0 {
-				break
-			}
-			open := searchFrom + openRelative
-			closeRelative := strings.Index(value[open+len(pair[0]):], pair[1])
-			if closeRelative < 0 {
-				break
-			}
-			close := open + len(pair[0]) + closeRelative + len(pair[1])
-			for index := open; index < close; index++ {
-				masked[index] = ' '
-			}
-			searchFrom = close
-		}
-	}
-	return string(masked)
-}
-
-func firstSubstringIndex(value string, options []string) int {
-	result := -1
-	for _, option := range options {
-		if index := strings.Index(value, option); index >= 0 && (result < 0 || index < result) {
-			result = index
-		}
-	}
-	return result
-}
-
-func legnextControlledRanges(prompt string) []promptRewriteRange {
-	ranges := make([]promptRewriteRange, 0, 4)
-	valueless := map[string]struct{}{"raw": {}, "tile": {}, "draft": {}, "turbo": {}}
-	for _, match := range legnextPromptFlagPattern.FindAllStringIndex(prompt, -1) {
-		start := skipPromptSpaces(prompt, match[0], match[1])
-		end := match[1]
-		name := strings.TrimPrefix(strings.ToLower(prompt[start:end]), "--")
-		if _, ok := valueless[name]; !ok {
-			cursor := skipPromptSpaces(prompt, end, len(prompt))
-			argumentEnd := scanPromptToken(prompt, cursor)
-			if cursor < argumentEnd && !strings.HasPrefix(prompt[cursor:argumentEnd], "--") {
-				end = argumentEnd
-			}
-		}
-		ranges = append(ranges, promptRewriteRange{start: start, end: end})
-	}
-	for _, match := range promptURLPattern.FindAllStringIndex(prompt, -1) {
-		ranges = append(ranges, promptRewriteRange{start: match[0], end: match[1]})
-	}
-	for index, character := range prompt {
-		if character == '{' || character == '}' {
-			ranges = append(ranges, promptRewriteRange{start: index, end: index + utf8.RuneLen(character)})
-		}
-	}
-	return ranges
-}
-
-func skipPromptSpaces(value string, start, end int) int {
-	for start < end {
-		character, size := utf8.DecodeRuneInString(value[start:end])
-		if !unicode.IsSpace(character) {
-			break
-		}
-		start += size
-	}
-	return start
-}
-
-func scanPromptToken(value string, start int) int {
-	for start < len(value) {
-		character, size := utf8.DecodeRuneInString(value[start:])
-		if unicode.IsSpace(character) {
-			break
-		}
-		start += size
-	}
-	return start
-}
-
-func removePromptRewriteRanges(value string, ranges []promptRewriteRange) string {
-	if len(ranges) == 0 {
-		return strings.TrimSpace(value)
-	}
-	sort.Slice(ranges, func(i, j int) bool {
-		if ranges[i].start != ranges[j].start {
-			return ranges[i].start < ranges[j].start
-		}
-		return ranges[i].end < ranges[j].end
-	})
-	var result strings.Builder
-	cursor := 0
-	for _, item := range ranges {
-		if item.start < 0 || item.end <= item.start || item.start >= len(value) {
-			continue
-		}
-		item.end = min(item.end, len(value))
-		if item.start > cursor {
-			result.WriteString(value[cursor:item.start])
-		}
-		if item.end > cursor {
-			result.WriteByte(' ')
-			cursor = item.end
-		}
-	}
-	if cursor < len(value) {
-		result.WriteString(value[cursor:])
-	}
-	return strings.TrimSpace(result.String())
-}
-
-func preservesProtectedPromptTokens(original, candidate string) bool {
-	want := make(map[string]int)
-	for _, token := range protectedPromptPattern.FindAllString(original, -1) {
-		want[token]++
-	}
-	got := make(map[string]int)
-	for _, token := range protectedPromptPattern.FindAllString(candidate, -1) {
-		got[token]++
-	}
-	if len(want) != len(got) {
-		return false
-	}
-	for token, count := range want {
-		if got[token] != count {
-			return false
-		}
-	}
-	return true
-}
-
-func preservesLatinPromptAnchors(original, candidate string, findings []promptrefiner.Finding) bool {
-	excluded := make(map[string]struct{})
-	for _, finding := range findings {
-		for _, token := range latinPromptAnchorPattern.FindAllString(strings.ToLower(finding.Original), -1) {
-			excluded[token] = struct{}{}
-		}
-	}
-	candidateTokens := make(map[string]struct{})
-	for _, token := range latinPromptAnchorPattern.FindAllString(strings.ToLower(candidate), -1) {
-		candidateTokens[token] = struct{}{}
-	}
-	for _, token := range latinPromptAnchorPattern.FindAllString(strings.ToLower(original), -1) {
-		if len(token) < 3 {
-			continue
-		}
-		if len(findings) > 0 {
-			if _, isGlue := latinPromptAnchorStopwords[token]; isGlue {
-				continue
-			}
-		}
-		if _, isFinding := excluded[token]; isFinding {
-			continue
-		}
-		if _, preserved := candidateTokens[token]; !preserved {
-			return false
-		}
-	}
-	return true
-}
-
-var latinPromptAnchorStopwords = map[string]struct{}{
-	"scene": {}, "image": {}, "photo": {}, "picture": {},
 }
 
 func promptBigramSimilarity(left, right []rune) float64 {
@@ -716,18 +406,6 @@ func promptBigramSimilarity(left, right []rune) float64 {
 		}
 	}
 	return 2 * float64(intersection) / float64(len(left)+len(right)-2)
-}
-
-func promptScriptCounts(value []rune) (han, latin int) {
-	for _, character := range value {
-		switch {
-		case unicode.Is(unicode.Han, character):
-			han++
-		case unicode.Is(unicode.Latin, character):
-			latin++
-		}
-	}
-	return han, latin
 }
 
 func (s *Server) refinerReferenceURLs(r *http.Request, ids []uuid.UUID) ([]string, error) {

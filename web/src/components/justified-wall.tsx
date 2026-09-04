@@ -34,6 +34,7 @@ const terminalJobStatuses = new Set([
 ])
 const refinableGenerationErrors = new Set([
   'CONTENT_POLICY_REJECTED',
+  'PROVIDER_HTTP_403',
   'PROMPT_TOO_LONG',
   'PROVIDER_HTTP_400',
   'PROVIDER_HTTP_422',
@@ -688,6 +689,8 @@ function generationErrorMessage(code?: string, _fallback?: string): string {
   switch (code) {
     case 'CONTENT_POLICY_REJECTED':
       return '图片可能触发安全策略，请调整描述'
+    case 'PROVIDER_HTTP_403':
+      return '请求被生成服务拒绝，请调整描述后重试'
     case 'PROMPT_TOO_LONG':
       return '提示词过长，请精简描述后重试'
     case 'REFERENCE_FETCH_FAILED':

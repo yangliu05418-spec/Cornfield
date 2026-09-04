@@ -485,6 +485,7 @@ func contentPolicyErrorDetail(detail string) bool {
 		"sensitive information", "sensitive content", "safety policy",
 		"safety system", "moderation policy", "content moderation",
 		"prohibited_content", "image_prohibited_content", "copyright policy",
+		"violation of provider terms of service",
 	} {
 		if strings.Contains(detail, marker) {
 			return true

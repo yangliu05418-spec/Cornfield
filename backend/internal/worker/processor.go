@@ -1318,6 +1318,8 @@ func userFacingGenerationError(code string) string {
 	switch code {
 	case "CONTENT_POLICY_REJECTED":
 		return "图片可能触发安全策略，请调整描述"
+	case "PROVIDER_HTTP_403":
+		return "请求被生成服务拒绝，请调整描述后重试"
 	case "PROMPT_TOO_LONG":
 		return "提示词过长，请精简描述后重试"
 	case "REFERENCE_FETCH_FAILED":

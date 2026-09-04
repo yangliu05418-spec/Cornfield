@@ -38,6 +38,7 @@ func TestGenerationRequestHash(t *testing.T) {
 func TestPublicJobErrorNeverReturnsProviderDetail(t *testing.T) {
 	for code, want := range map[string]string{
 		"CONTENT_POLICY_REJECTED": "图片可能触发安全策略，请调整描述",
+		"PROVIDER_HTTP_403":       "请求被生成服务拒绝，请调整描述后重试",
 		"PROMPT_TOO_LONG":         "提示词过长，请精简描述后重试",
 		"REFERENCE_FETCH_FAILED":  "参考图暂时无法传递，请稍后重试",
 		"PROVIDER_HTTP_400":       "当前参数无法生成，请调整后重试",

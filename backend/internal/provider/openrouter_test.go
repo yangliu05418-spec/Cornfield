@@ -287,6 +287,7 @@ func TestOpenRouterContentPolicyClassificationUsesExplicitDetail(t *testing.T) {
 		{detail: "Gemini blocked the request (PROHIBITED_CONTENT)", want: true},
 		{detail: "xAI content moderation rejected this request", want: true},
 		{detail: "output rejected due to copyright policy", want: true},
+		{detail: "The request is prohibited due to a violation of provider Terms Of Service.", want: true},
 		{detail: "invalid width and height", want: false},
 		{detail: "permission denied", want: false},
 	} {

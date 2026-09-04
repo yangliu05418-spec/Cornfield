@@ -25,6 +25,7 @@ import (
 func TestUserFacingGenerationError(t *testing.T) {
 	for code, want := range map[string]string{
 		"CONTENT_POLICY_REJECTED": "图片可能触发安全策略，请调整描述",
+		"PROVIDER_HTTP_403":       "请求被生成服务拒绝，请调整描述后重试",
 		"PROVIDER_HTTP_422":       "当前参数无法生成，请调整后重试",
 		"PROVIDER_IMAGE_INVALID":  "生成结果无法处理，请调整参数后重试",
 		"PROVIDER_HTTP_429":       "生成服务繁忙，请稍后重试",

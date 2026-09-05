@@ -374,7 +374,7 @@ function waitFor(ms: number, signal: AbortSignal): Promise<void> {
 }
 
 function CreatePage() {
-  const [streamConnected, setStreamConnected] = useState(false)
+  const streamConnected = useRef(false)
   const queryClient = useQueryClient()
   const navigate = useNavigate()
   const wallRef = useRef<JustifiedWallHandle>(null)
@@ -795,8 +795,12 @@ function CreatePage() {
         ? `/api/v1/events?after=${encodeURIComponent(lastEventID)}`
         : '/api/v1/events',
     )
-    stream.onopen = () => setStreamConnected(true)
-    stream.onerror = () => setStreamConnected(false)
+    stream.onopen = () => {
+      streamConnected.current = true
+    }
+    stream.onerror = () => {
+      streamConnected.current = false
+    }
     const reconcileTimers = new Map<string, number>()
     const reconcileAssets = new Set<string>()
     const reconcileInFlight = new Map<string, Promise<void>>()
@@ -872,6 +876,7 @@ function CreatePage() {
     return () => {
       for (const timer of reconcileTimers.values()) window.clearTimeout(timer)
       stream.close()
+      streamConnected.current = false
     }
   }, [me.data?.user.id, queryClient, refreshAssetHead])
   useEffect(() => {
@@ -884,7 +889,7 @@ function CreatePage() {
       if (busy || document.hidden) return
       busy = true
       try {
-        if (!streamConnected || Date.now() - lastHead >= 60_000) {
+        if (!streamConnected.current || Date.now() - lastHead >= 60_000) {
           const head = await api<GenerationPage>(
             '/api/v1/generations?limit=100',
           )
@@ -938,7 +943,7 @@ function CreatePage() {
       window.clearInterval(timer)
       window.removeEventListener('focus', onFocus)
     }
-  }, [me.data?.user.id, streamConnected, queryClient, refreshAssetHead])
+  }, [me.data?.user.id, queryClient, refreshAssetHead])
   const create = useMutation({
     mutationFn: ({ idempotencyKey, request }: PendingSubmission) =>
       api<GenerationBatch>('/api/v1/generations', {

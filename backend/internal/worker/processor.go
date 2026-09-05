@@ -662,6 +662,9 @@ func (w *GenerateWorker) claimSubmissionSlot(ctx context.Context, item generatio
 	if err = tx.Commit(ctx); err != nil {
 		return submissionClaim{}, err
 	}
+	if w.Log != nil {
+		w.Log.Info("generation submission claimed", "generation_job_id", item.JobID, "provider", item.ProviderID, "provider_active", providerActive, "provider_limit", providerLimit)
+	}
 	return submissionClaim{Claimed: true, Attempt: attempt, AttemptID: attemptID, Deadline: storedDeadline}, nil
 }
 
@@ -1319,7 +1322,7 @@ func userFacingGenerationError(code string) string {
 	case "CONTENT_POLICY_REJECTED":
 		return "图片可能触发安全策略，请调整描述"
 	case "PROVIDER_HTTP_403":
-		return "请求被生成服务拒绝，请调整描述后重试"
+		return "生成渠道拒绝了请求，请联系管理员核查，不必重复修改描述"
 	case "PROMPT_TOO_LONG":
 		return "提示词过长，请精简描述后重试"
 	case "REFERENCE_FETCH_FAILED":

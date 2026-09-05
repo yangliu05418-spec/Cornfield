@@ -461,6 +461,10 @@ var errInvalidGenerationCursor = errors.New("invalid generation cursor")
 
 func (s *Server) models(w http.ResponseWriter, r *http.Request) {
 	items := make([]any, 0, len(s.catalog.Models))
+	// Wait estimates are best-effort and must never block model selection.
+	waitCtx, cancelWait := context.WithTimeout(r.Context(), 500*time.Millisecond)
+	waits, _ := s.generationWaits(waitCtx)
+	cancelWait()
 	availabilityByProvider := make(map[string]providerAvailability)
 	for _, model := range s.catalog.Models {
 		if !model.Enabled {
@@ -479,6 +483,7 @@ func (s *Server) models(w http.ResponseWriter, r *http.Request) {
 		items = append(items, map[string]any{
 			"id": model.ID, "display_name": model.DisplayName, "provider": model.Provider,
 			"outputs_per_draw": model.OutputsPerDraw, "capabilities": model.Capabilities, "availability": availability,
+			"estimated_wait": waits[model.ID],
 		})
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"revision": s.catalog.Hash, "models": items})

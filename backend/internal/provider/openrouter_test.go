@@ -330,8 +330,12 @@ func TestOpenRouterProbeUsesKeyEndpoint(t *testing.T) {
 	adapter := NewOpenRouter("test-key", "")
 	adapter.BaseURL = server.URL
 	adapter.Client = server.Client()
+	adapter.keyPool.coolDown(0, time.Minute)
 	if health := adapter.Probe(context.Background()); !health.Healthy {
 		t.Fatalf("health = %+v", health)
+	}
+	if lease, delay := adapter.keyPool.lease(nil); lease != nil || delay <= 0 {
+		t.Fatal("account probe cleared generation cooldown")
 	}
 }
 

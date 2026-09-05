@@ -23,6 +23,7 @@ import type { DragEvent, FormEvent } from 'react'
 
 import { AppShell } from '#/components/app-shell'
 import { ConfirmDialog } from '#/components/confirm-dialog'
+import { VirtualAssetGrid } from '#/components/virtual-asset-grid'
 import { api } from '#/lib/api'
 import {
   optimisticallyRemoveAssets,
@@ -448,8 +449,8 @@ function AssetsPage() {
                 </button>
               </div>
             )}
-            <div className="asset-grid">
-              {items.map((asset) => (
+            <VirtualAssetGrid items={items}>
+              {(asset) => (
                 <article
                   key={asset.id}
                   draggable
@@ -528,7 +529,11 @@ function AssetsPage() {
                   </div>
                   <div className="asset-card-meta">
                     <span>
-                      {asset.kind === 'generation' ? 'GENERATED' : 'REFERENCE'}
+                      {asset.kind === 'generation'
+                        ? '生成图片'
+                        : asset.kind === 'editor'
+                          ? '编辑结果'
+                          : '上传图片'}
                     </span>
                     <label>
                       <span className="sr-only">移动到文件夹</span>
@@ -552,8 +557,8 @@ function AssetsPage() {
                     </p>
                   </div>
                 </article>
-              ))}
-            </div>
+              )}
+            </VirtualAssetGrid>
             {assets.hasNextPage && (
               <button
                 type="button"

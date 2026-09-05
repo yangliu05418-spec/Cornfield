@@ -3,10 +3,12 @@ package provider
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptrace"
 	"regexp"
@@ -231,6 +233,7 @@ func (o *OpenRouter) Submit(ctx context.Context, input CanonicalRequest) (Submis
 	allSecrets := o.keyPool.secrets()
 	excluded := make(map[int]struct{}, len(allSecrets))
 	var res *http.Response
+	var completedKeyIndex int
 	for {
 		lease, retryAfter := o.keyPool.lease(excluded)
 		if lease == nil {
@@ -250,18 +253,28 @@ func (o *OpenRouter) Submit(ctx context.Context, input CanonicalRequest) (Submis
 		req = req.WithContext(httptrace.WithClientTrace(req.Context(), &httptrace.ClientTrace{
 			WroteRequest: func(httptrace.WroteRequestInfo) { requestWritten.Store(true) },
 		}))
+		requestStarted := time.Now()
 		res, err = o.Client.Do(req)
-		lease.release()
+		// A non-secret, stable identifier ties real model outcomes to a credential.
+		fingerprint := sha256.Sum256([]byte(lease.value))
+		status := 0
+		if res != nil {
+			status = res.StatusCode
+		}
+		slog.Info("openrouter model response", "credential_id", fmt.Sprintf("%x", fingerprint[:6]), "model", input.Model, "http_status", status, "duration_ms", time.Since(requestStarted).Milliseconds())
 		if err != nil {
+			lease.release()
 			if !requestWritten.Load() {
 				return Submission{}, &Error{Code: "PROVIDER_CONNECT_FAILED", Message: "provider connection failed before the request was written", Retryable: true}
 			}
 			return Submission{}, &Error{Code: "SUBMISSION_UNCERTAIN", Message: err.Error(), SubmissionUncertain: true}
 		}
 		if res.StatusCode >= 200 && res.StatusCode < 300 {
-			o.keyPool.markHealthy(lease.index)
+			completedKeyIndex = lease.index
+			defer lease.release()
 			break
 		}
+		lease.release()
 		providerErr := openRouterSubmissionError(res, allSecrets...)
 		res.Body.Close()
 		if res.StatusCode != http.StatusUnauthorized && res.StatusCode != http.StatusPaymentRequired && res.StatusCode != http.StatusTooManyRequests {
@@ -299,6 +312,7 @@ func (o *OpenRouter) Submit(ctx context.Context, input CanonicalRequest) (Submis
 		return Submission{}, &Error{Code: "SUBMISSION_UNCERTAIN", Message: "provider returned no images after accepting the request", SubmissionUncertain: true, Telemetry: telemetry}
 	}
 	result.Usage["duration_ms"] = time.Since(started).Milliseconds()
+	o.keyPool.markHealthy(completedKeyIndex)
 	return Submission{ProviderJobID: responseID, Completed: true, Result: result, Telemetry: telemetry}, nil
 }
 
@@ -448,12 +462,13 @@ func (o *OpenRouter) Probe(ctx context.Context) Health {
 			continue
 		}
 		healthy++
-		o.keyPool.markHealthy(index)
+		// Account access is not evidence that a model can generate. In particular,
+		// never clear a request's Retry-After cooldown with a successful key probe.
 	}
 	if healthy == 0 {
 		return Health{Message: lastMessage}
 	}
-	return Health{Healthy: true, Message: fmt.Sprintf("%d/%d credentials healthy", healthy, len(secrets))}
+	return Health{Healthy: true, Message: fmt.Sprintf("%d/%d accounts accessible; model availability is determined by generation outcomes", healthy, len(secrets))}
 }
 
 func httpProviderError(res *http.Response, secrets ...string) error {

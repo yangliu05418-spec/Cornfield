@@ -6,7 +6,7 @@ import type { Asset, GenerationBatch } from '#/lib/api'
 describe('failed generation actions', () => {
   it('offers prompt refinement only for text-fixable failures', () => {
     expect(canRefineGenerationError('CONTENT_POLICY_REJECTED')).toBe(true)
-    expect(canRefineGenerationError('PROVIDER_HTTP_403')).toBe(true)
+    expect(canRefineGenerationError('PROVIDER_HTTP_403')).toBe(false)
     expect(canRefineGenerationError('PROMPT_TOO_LONG')).toBe(true)
     expect(canRefineGenerationError('PROVIDER_HTTP_400')).toBe(true)
     expect(canRefineGenerationError('UNSUPPORTED_PARAMETER')).toBe(true)

@@ -5,6 +5,114 @@ import type { EditorDocumentV3 } from '../src/features/editor/domain/document-v3
 
 const mockImage = `<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="900" viewBox="0 0 1200 900"><defs><linearGradient id="g" x2="1" y2="1"><stop stop-color="#15191d"/><stop offset=".52" stop-color="#556b3a"/><stop offset="1" stop-color="#d1fe17"/></linearGradient></defs><rect width="1200" height="900" fill="url(#g)"/><circle cx="770" cy="300" r="180" fill="#d1fe17" opacity=".28"/><path d="M0 690 Q330 510 660 700 T1200 620 V900 H0Z" fill="#090b0c" opacity=".76"/></svg>`
 
+test('creation draft restores text and local reference bytes without uploading', async ({
+  page,
+}) => {
+  const studio = await installStudioMocks(page)
+  await page.goto('/app/create')
+  const prompt = page.getByRole('textbox', { name: '生成提示词' })
+  await prompt.fill('保留这份未提交的创作草稿')
+  await page
+    .locator('input[type="file"][aria-label="添加参考图"]')
+    .setInputFiles({
+      name: 'draft.png',
+      mimeType: 'image/png',
+      buffer: Buffer.from(
+        'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9ZQmcAAAAASUVORK5CYII=',
+        'base64',
+      ),
+    })
+  await expect(page.getByRole('img', { name: '参考图' })).toHaveCount(1)
+  await expect
+    .poll(() =>
+      page.evaluate(async () => {
+        const db = await new Promise<IDBDatabase>((resolve) => {
+          const request = indexedDB.open('cornfield-creation-drafts', 1)
+          request.onsuccess = () => resolve(request.result)
+        })
+        const count = await new Promise<number>((resolve) => {
+          const request = db.transaction('files').objectStore('files').count()
+          request.onsuccess = () => resolve(request.result)
+        })
+        db.close()
+        return count
+      }),
+    )
+    .toBe(1)
+  await page.reload()
+  await expect(prompt).toHaveValue('保留这份未提交的创作草稿')
+  await expect(page.getByRole('img', { name: '参考图' })).toHaveCount(1)
+  expect(studio.uploadAttempts()).toBe(0)
+  await page.getByRole('button', { name: '移除参考图' }).click()
+  await prompt.fill('移除图片后仍保留文字')
+  await expect
+    .poll(() =>
+      page.evaluate(async () => {
+        const db = await new Promise<IDBDatabase>((resolve) => {
+          const request = indexedDB.open('cornfield-creation-drafts', 1)
+          request.onsuccess = () => resolve(request.result)
+        })
+        const count = await new Promise<number>((resolve) => {
+          const request = db.transaction('files').objectStore('files').count()
+          request.onsuccess = () => resolve(request.result)
+        })
+        db.close()
+        return count
+      }),
+    )
+    .toBe(0)
+  await page.unroute('**/api/**')
+  await installStudioMocks(page, {
+    user: {
+      id: 'other-owner',
+      username: 'other',
+      display_name: 'Other',
+      role: 'member',
+      must_change_password: false,
+    },
+  })
+  await page.reload()
+  await expect(prompt).toBeEnabled()
+  await expect(prompt).toHaveValue('')
+  await expect(page.getByRole('img', { name: '参考图' })).toHaveCount(0)
+})
+
+test('asset library keeps mounted cards bounded while browsing a large library', async ({
+  page,
+}) => {
+  await installStudioMocks(page, { assetCount: 2000 })
+  await page.goto('/app/assets')
+  await expect(page.locator('.asset-grid article').first()).toBeVisible()
+  expect(await page.locator('.asset-grid article').count()).toBeLessThan(100)
+  await page.locator('.library-page').evaluate((element) => {
+    element.scrollTop = element.scrollHeight
+  })
+  await expect(page.locator('.asset-grid article').last()).toBeVisible()
+  expect(await page.locator('.asset-grid article').count()).toBeLessThan(100)
+})
+
+test('wall thumbnail failure offers a working retry without generation', async ({
+  page,
+}) => {
+  const studio = await installStudioMocks(page)
+  let failing = true
+  await page.route('**/mock-image.svg?asset=0*', (route) =>
+    failing
+      ? route.abort('failed')
+      : route.fulfill({ contentType: 'image/svg+xml', body: mockImage }),
+  )
+  await page.goto('/app/create')
+  const retry = page.getByRole('button', { name: '图片加载失败，点击重试' })
+  await expect(retry).toBeVisible()
+  failing = false
+  await retry.click()
+  await expect(retry).toBeHidden()
+  await expect(page.locator('img[src*="asset=0"]').first()).toHaveClass(
+    'is-loaded',
+  )
+  expect(studio.postAttempts()).toBe(0)
+})
+
 test('landing page uses the production static shell', async ({
   page,
 }, testInfo) => {
@@ -1502,9 +1610,10 @@ async function installStudioMocks(
     refinerFailure?: { status: number; code: string; message: string }
     feedbackFails?: boolean
     models?: unknown[]
+    assetCount?: number
   } = {},
 ) {
-  let assets = Array.from({ length: 18 }, (_, index) => ({
+  let assets = Array.from({ length: options.assetCount ?? 18 }, (_, index) => ({
     id: `asset-${index}`,
     kind: 'generation',
     media_type: 'image/webp',

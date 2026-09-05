@@ -33,6 +33,7 @@ import {
 } from '#/components/prompt-refiner-review'
 import type { JustifiedWallHandle } from '#/components/justified-wall'
 import { api, APIError, getMe } from '#/lib/api'
+import { creationDraft } from '#/lib/creation-draft'
 import {
   optimisticallyRemoveAssets,
   restoreAssetCaches,
@@ -373,6 +374,7 @@ function waitFor(ms: number, signal: AbortSignal): Promise<void> {
 }
 
 function CreatePage() {
+  const streamConnected = useRef(false)
   const queryClient = useQueryClient()
   const navigate = useNavigate()
   const wallRef = useRef<JustifiedWallHandle>(null)
@@ -393,7 +395,7 @@ function CreatePage() {
     queryKey: ['models'],
     queryFn: () => api<{ revision: string; models: Model[] }>('/api/v1/models'),
     refetchInterval: 30_000,
-    refetchIntervalInBackground: true,
+    refetchIntervalInBackground: false,
     refetchOnWindowFocus: true,
   })
   const assets = useInfiniteQuery({
@@ -414,7 +416,7 @@ function CreatePage() {
       ),
     initialPageParam: '',
     getNextPageParam: (page) => page.next_cursor || undefined,
-    refetchInterval: 10_000,
+    staleTime: Infinity,
   })
   const [modelID, setModelID] = useState('')
   const [prompt, setPrompt] = useState('')
@@ -444,6 +446,112 @@ function CreatePage() {
   )
   const [notice, setNotice] = useState('')
   const [referenceDropActive, setReferenceDropActive] = useState(false)
+  const [uploadStates, setUploadStates] = useState<Record<string, string>>({})
+  const [draftOwner, setDraftOwner] = useState('')
+  const draftSnapshot = {
+    modelID,
+    prompt,
+    ratio,
+    resolution,
+    quality,
+    promptOptimizationMode,
+    draws,
+    midjourney,
+    density,
+    references: references.map((reference) =>
+      reference.source === 'local'
+        ? { ...reference, previewURL: '' }
+        : reference,
+    ),
+  }
+  const draftSnapshotRef = useRef(draftSnapshot)
+  draftSnapshotRef.current = draftSnapshot
+  const draftUserRef = useRef(me.data?.user.id)
+  draftUserRef.current = me.data?.user.id
+  const draftWriteTail = useRef(Promise.resolve())
+  const saveDraft = useCallback(
+    (owner: string, snapshot: typeof draftSnapshot) => {
+      draftWriteTail.current = draftWriteTail.current
+        .then(() => creationDraft(owner, snapshot))
+        .then(() => undefined)
+        .catch(() => {
+          setNotice('浏览器草稿保存失败，请保留当前页面或复制描述')
+        })
+    },
+    [],
+  )
+  useEffect(() => {
+    const owner = me.data?.user.id
+    if (!owner) return
+    let disposed = false
+    void creationDraft<typeof draftSnapshot>(owner)
+      .then((draft) => {
+        if (disposed) return
+        if (draft) {
+          setModelID(draft.modelID)
+          setPrompt(draft.prompt)
+          setRatio(draft.ratio)
+          setResolution(draft.resolution)
+          setQuality(draft.quality)
+          setPromptOptimizationMode(draft.promptOptimizationMode)
+          setDraws(draft.draws)
+          setMidjourney(draft.midjourney)
+          setDensity(draft.density)
+          setReferences(
+            draft.references.map((reference) => {
+              if (reference.source !== 'local') return reference
+              const previewURL = URL.createObjectURL(reference.file)
+              localReferenceURLs.current.add(previewURL)
+              return { ...reference, previewURL }
+            }),
+          )
+        }
+        setDraftOwner(owner)
+      })
+      .catch(() => {
+        if (!disposed) {
+          setDraftOwner(owner)
+          setNotice('浏览器无法恢复草稿，本次仍可正常创作')
+        }
+      })
+    return () => {
+      disposed = true
+    }
+  }, [me.data?.user.id])
+  useEffect(() => {
+    if (!draftOwner || draftOwner !== me.data?.user.id) return
+    const timer = window.setTimeout(
+      () => saveDraft(draftOwner, draftSnapshotRef.current),
+      500,
+    )
+    return () => window.clearTimeout(timer)
+  }, [
+    draftOwner,
+    me.data?.user.id,
+    modelID,
+    prompt,
+    ratio,
+    resolution,
+    quality,
+    promptOptimizationMode,
+    draws,
+    midjourney,
+    density,
+    references,
+    saveDraft,
+  ])
+  useEffect(() => {
+    if (!draftOwner) return
+    const flush = () => {
+      if (draftUserRef.current === draftOwner)
+        saveDraft(draftOwner, draftSnapshotRef.current)
+    }
+    window.addEventListener('pagehide', flush)
+    return () => {
+      window.removeEventListener('pagehide', flush)
+      flush()
+    }
+  }, [draftOwner, saveDraft])
 
   useLayoutEffect(() => {
     resizePromptTextarea(promptRef.current)
@@ -632,7 +740,7 @@ function CreatePage() {
     void refreshAssetHead()
   }, [missingCompletedAssetRevision, refreshAssetHead])
   useEffect(() => {
-    if (!activeModel) return
+    if (!activeModel || draftOwner !== me.data?.user.id) return
     if (!modelID) setModelID(activeModel.id)
     if (!availableRatios.includes(ratio)) setRatio(availableRatios[0] ?? 'auto')
     if (!activeModel.capabilities.resolutions.includes(resolution))
@@ -667,6 +775,8 @@ function CreatePage() {
         .slice(0, limit)
     })
   }, [
+    draftOwner,
+    me.data?.user.id,
     activeModel,
     availableRatios,
     modelID,
@@ -685,6 +795,12 @@ function CreatePage() {
         ? `/api/v1/events?after=${encodeURIComponent(lastEventID)}`
         : '/api/v1/events',
     )
+    stream.onopen = () => {
+      streamConnected.current = true
+    }
+    stream.onerror = () => {
+      streamConnected.current = false
+    }
     const reconcileTimers = new Map<string, number>()
     const reconcileAssets = new Set<string>()
     const reconcileInFlight = new Map<string, Promise<void>>()
@@ -760,6 +876,72 @@ function CreatePage() {
     return () => {
       for (const timer of reconcileTimers.values()) window.clearTimeout(timer)
       stream.close()
+      streamConnected.current = false
+    }
+  }, [me.data?.user.id, queryClient, refreshAssetHead])
+  useEffect(() => {
+    if (!me.data?.user.id) return
+    let busy = false
+    let disposed = false
+    const isDisposed = () => disposed
+    let lastHead = 0
+    const reconcile = async () => {
+      if (busy || document.hidden) return
+      busy = true
+      try {
+        if (!streamConnected.current || Date.now() - lastHead >= 60_000) {
+          const head = await api<GenerationPage>(
+            '/api/v1/generations?limit=100',
+          )
+          if (disposed) return
+          for (const batch of head.items)
+            mergeGenerationBatch(queryClient, batch)
+          lastHead = Date.now()
+        }
+        const current = queryClient.getQueryData<GenerationPages>([
+          'generations',
+        ])
+        const active = (
+          current?.pages.flatMap((page) => page.items) ?? []
+        ).filter((batch) =>
+          batch.jobs.some(
+            (job) =>
+              ![
+                'succeeded',
+                'failed',
+                'cancelled',
+                'submission_uncertain',
+              ].includes(job.status),
+          ),
+        )
+        let index = 0
+        await Promise.all(
+          Array.from({ length: Math.min(3, active.length) }, async () => {
+            while (index < active.length && !isDisposed()) {
+              const batch = await api<GenerationBatch>(
+                `/api/v1/generations/${active[index++].id}`,
+              )
+              if (!isDisposed()) mergeGenerationBatch(queryClient, batch)
+            }
+          }),
+        )
+      } catch {
+        // The next bounded tick retries; historical pages are never refetched.
+      } finally {
+        busy = false
+      }
+    }
+    const timer = window.setInterval(() => void reconcile(), 10_000)
+    const onFocus = () => {
+      lastHead = 0
+      void reconcile()
+      void refreshAssetHead()
+    }
+    window.addEventListener('focus', onFocus)
+    return () => {
+      disposed = true
+      window.clearInterval(timer)
+      window.removeEventListener('focus', onFocus)
     }
   }, [me.data?.user.id, queryClient, refreshAssetHead])
   const create = useMutation({
@@ -1400,6 +1582,7 @@ function CreatePage() {
   ): Promise<Asset> {
     const controller = new AbortController()
     uploadControllers.current.add(controller)
+    setUploadStates((current) => ({ ...current, [reference.key]: '上传中' }))
     try {
       const session = await api<{ id: string; content_url: string }>(
         '/api/v1/uploads',
@@ -1419,6 +1602,7 @@ function CreatePage() {
         body: reference.file,
         signal: controller.signal,
       })
+      setUploadStates((current) => ({ ...current, [reference.key]: '验证中' }))
       let assetID = ''
       let pollDelay = 500
       const deadline = Date.now() + uploadValidationTimeout
@@ -1443,6 +1627,12 @@ function CreatePage() {
       return await api<Asset>(`/api/v1/assets/${assetID}`, {
         signal: controller.signal,
       })
+    } catch (error) {
+      setUploadStates((current) => ({
+        ...current,
+        [reference.key]: '上传失败，生成时重试',
+      }))
+      throw error
     } finally {
       uploadControllers.current.delete(controller)
     }
@@ -1661,6 +1851,7 @@ function CreatePage() {
                     <button
                       type="button"
                       title="移除参考图"
+                      disabled={referenceSubmitBusy}
                       aria-label="移除参考图"
                       onClick={() =>
                         setReferences((items) =>
@@ -1670,6 +1861,11 @@ function CreatePage() {
                     >
                       <X size={12} />
                     </button>
+                    <span className="reference-upload-status" role="status">
+                      {reference.source === 'asset'
+                        ? '已就绪'
+                        : (uploadStates[reference.key] ?? '待上传')}
+                    </span>
                   </div>
                 ))}
               </div>
@@ -1716,6 +1912,7 @@ function CreatePage() {
                 />
               </label>
               <textarea
+                disabled={!draftOwner || draftOwner !== me.data?.user.id}
                 ref={promptRef}
                 aria-label="生成提示词"
                 value={prompt}
@@ -1747,6 +1944,15 @@ function CreatePage() {
               </button>
             </div>
             <div className="generator-controls">
+              {(activeModel?.estimated_wait?.upper_seconds ?? 0) > 0 && (
+                <span className="generator-wait-estimate" role="status">
+                  预计 {activeModel!.estimated_wait!.lower_seconds}–
+                  {activeModel!.estimated_wait!.upper_seconds} 秒（历史估算）
+                  {activeModel!.estimated_wait!.queued_draws > 0
+                    ? ` · ${activeModel!.estimated_wait!.queued_draws} 次抽卡排队中`
+                    : ''}
+                </span>
+              )}
               <GeneratorSelect
                 label="选择模型"
                 value={activeModel?.id ?? ''}
@@ -1869,6 +2075,7 @@ function CreatePage() {
           <button
             className="generate-button"
             disabled={
+              !draftOwner ||
               !prompt.trim() ||
               create.isPending ||
               refinerBusy ||
@@ -1878,7 +2085,7 @@ function CreatePage() {
             }
           >
             {referenceSubmitBusy
-              ? '上传参考图…'
+              ? `准备参考图 ${references.filter((reference) => reference.source === 'asset').length}/${references.length}`
               : create.isPending
                 ? '提交中…'
                 : '生成'}

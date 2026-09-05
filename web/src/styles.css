@@ -4553,6 +4553,40 @@ select {
   grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
   gap: 22px 7px;
 }
+.reference-upload-status {
+  position: absolute;
+  bottom: 5px;
+  left: 5px;
+  right: 5px;
+  padding: 3px 5px;
+  border-radius: 5px;
+  background: rgba(15, 17, 19, 0.85);
+  color: var(--text);
+  font-size: 10px;
+  pointer-events: none;
+}
+.wall-image-retry {
+  position: absolute;
+  inset: 35% 10%;
+  z-index: 2;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface);
+  color: var(--text);
+  font-size: 12px;
+}
+.generation-wait {
+  display: block;
+  margin-top: 5px;
+  font-size: 10px;
+  font-weight: 400;
+}
+.generator-wait-estimate {
+  flex-basis: 100%;
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1.5;
+}
 .asset-bulk-toolbar {
   position: sticky;
   z-index: 12;

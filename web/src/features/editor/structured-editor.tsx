@@ -223,8 +223,9 @@ export function StructuredEditor({
     if (saveBlockedRef.current)
       throw new Error('structured editor save is blocked')
     if (saveTailRef.current) return saveTailRef.current
-    const snapshot = structuredClone(projectDocumentRef.current)
-    const signature = JSON.stringify(snapshot)
+    // Domain commands replace documents immutably. Identity detects edits made
+    // during a save without serializing up to 2 MiB again on the main thread.
+    const snapshot = projectDocumentRef.current
     setSaveState('saving')
     const task = saveStructuredDocument(
       project.id,
@@ -233,7 +234,7 @@ export function StructuredEditor({
     )
       .then((result) => {
         revisionRef.current = result.revision
-        if (JSON.stringify(projectDocumentRef.current) === signature) {
+        if (projectDocumentRef.current === snapshot) {
           dirtyRef.current = false
           setSaveState('saved')
         } else {

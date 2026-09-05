@@ -34,7 +34,6 @@ const terminalJobStatuses = new Set([
 ])
 const refinableGenerationErrors = new Set([
   'CONTENT_POLICY_REJECTED',
-  'PROVIDER_HTTP_403',
   'PROMPT_TOO_LONG',
   'PROVIDER_HTTP_400',
   'PROVIDER_HTTP_422',
@@ -53,6 +52,7 @@ export type WallItem = {
   jobID?: string
   batchID?: string
   modelID?: string
+  createdAt?: string
   status?: string
   prompt?: string
   errorMessage?: string
@@ -191,6 +191,7 @@ export function buildWallItems(
             jobID: job.id,
             batchID: batch.id,
             modelID: batch.model_id,
+            createdAt: batch.created_at,
             status: job.status,
             prompt: batch.prompt,
             errorMessage: job.error_message,
@@ -518,6 +519,8 @@ function WallCard({
   onNotice?: (message: string) => void
 }) {
   const [imageLoaded, setImageLoaded] = useState(false)
+  const [imageFailed, setImageFailed] = useState(false)
+  const [imageAttempt, setImageAttempt] = useState(0)
   const style = {
     left: item.left,
     width: item.renderWidth,
@@ -534,7 +537,10 @@ function WallCard({
         {!terminal && <div className="placeholder-shimmer" />}
         <div className="job-state">
           <span className="state-dot" />
-          {statusLabel(item.status, item.modelID)}
+          <span>{statusLabel(item.status, item.modelID)}</span>
+          {item.createdAt && !terminalJobStatuses.has(item.status ?? '') && (
+            <GenerationWait createdAt={item.createdAt} status={item.status} />
+          )}
         </div>
         {item.cancellable && item.jobID && item.batchID && (
           <button
@@ -630,6 +636,7 @@ function WallCard({
       onKeyDown={openFromCard}
     >
       <img
+        key={imageAttempt}
         className={imageLoaded ? 'is-loaded' : ''}
         src={asset.thumb_640_url}
         srcSet={`${asset.thumb_320_url} 320w, ${asset.thumb_640_url} 640w, ${asset.thumb_1280_url} 1280w`}
@@ -640,8 +647,22 @@ function WallCard({
         fetchPriority={priority ? 'high' : 'auto'}
         decoding="async"
         onLoad={() => setImageLoaded(true)}
+        onError={() => setImageFailed(true)}
         alt="生成资产"
       />
+      {imageFailed && (
+        <button
+          type="button"
+          className="wall-image-retry"
+          onClick={() => {
+            setImageFailed(false)
+            setImageLoaded(false)
+            setImageAttempt((value) => value + 1)
+          }}
+        >
+          图片加载失败，点击重试
+        </button>
+      )}
       <div className="card-overlay">
         <button type="button" onClick={() => onReference(asset)}>
           <ImagePlus size={14} />
@@ -690,7 +711,7 @@ function generationErrorMessage(code?: string, _fallback?: string): string {
     case 'CONTENT_POLICY_REJECTED':
       return '图片可能触发安全策略，请调整描述'
     case 'PROVIDER_HTTP_403':
-      return '请求被生成服务拒绝，请调整描述后重试'
+      return '生成渠道拒绝了请求，请联系管理员核查，不必重复修改描述'
     case 'PROMPT_TOO_LONG':
       return '提示词过长，请精简描述后重试'
     case 'REFERENCE_FETCH_FAILED':
@@ -853,6 +874,30 @@ async function copyAsset(asset: Asset): Promise<boolean> {
     )
     return false
   }
+}
+
+function GenerationWait({
+  createdAt,
+  status,
+}: {
+  createdAt: string
+  status?: string
+}) {
+  const [now, setNow] = useState(Date.now)
+  useEffect(() => {
+    const timer = window.setInterval(() => setNow(Date.now()), 1_000)
+    return () => window.clearInterval(timer)
+  }, [])
+  const seconds = Math.max(0, Math.floor((now - Date.parse(createdAt)) / 1000))
+  if (!Number.isFinite(seconds)) return null
+  return (
+    <small className="generation-wait">
+      已等待 {seconds} 秒
+      {(status === 'queued' || status === 'dispatched') && seconds > 30
+        ? ' · 等待生成名额，可离开页面'
+        : ''}
+    </small>
+  )
 }
 
 function statusLabel(status?: string, modelID?: string) {

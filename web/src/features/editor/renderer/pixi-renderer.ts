@@ -88,6 +88,8 @@ export class PixiEditorRenderer implements EditorRenderer {
   #resolutionUpgradeDelayMs = 150
   #resourceTimer?: number
   #latestDocument?: EditorRenderDocument
+  #compiledDocument?: EditorRenderDocument
+  #compiledScene?: ReturnType<typeof compileEditorRenderScene>
   #latestAssets?: ReadonlyMap<string, EditorRenderAsset>
   #latestRasterMasks: ReadonlyMap<string, EditorRasterMaskRenderResource> =
     new Map()
@@ -178,7 +180,11 @@ export class PixiEditorRenderer implements EditorRenderer {
 
   async #syncScene(document: EditorRenderDocument, resources: RenderResources) {
     if (this.#destroyed) return
-    const scene = compileEditorRenderScene(document)
+    if (this.#compiledDocument !== document || !this.#compiledScene) {
+      this.#compiledScene = compileEditorRenderScene(document)
+      this.#compiledDocument = document
+    }
+    const scene = this.#compiledScene
     const { assets, rasterMasks } = resources
     const sceneNodes = this.#visibleSceneNodes(scene)
     const plan = planEditorSceneAssetVariants(
@@ -288,6 +294,8 @@ export class PixiEditorRenderer implements EditorRenderer {
     this.#app = undefined
     this.#canvas = undefined
     this.#latestDocument = undefined
+    this.#compiledDocument = undefined
+    this.#compiledScene = undefined
     this.#latestAssets = undefined
     this.#latestRasterMasks = new Map()
     this.#textureBudgetExceeded = false

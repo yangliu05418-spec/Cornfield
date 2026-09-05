@@ -11,6 +11,12 @@ export type User = {
 }
 
 export type Model = {
+  estimated_wait?: {
+    queued_draws: number
+    lower_seconds: number
+    upper_seconds: number
+    sample_size: number
+  }
   id: string
   display_name: string
   provider: string

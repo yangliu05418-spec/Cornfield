@@ -133,7 +133,11 @@ function ProvidersPage() {
                   <dd>{provider.active_jobs}</dd>
                 </div>
                 <div>
-                  <dt>LAST PROBE</dt>
+                  <dt>
+                    {provider.id === 'openrouter'
+                      ? '账户检测（不代表模型可用）'
+                      : 'LAST PROBE'}
+                  </dt>
                   <dd>
                     {provider.last_probe_state.toUpperCase()}
                     {provider.last_probe_at

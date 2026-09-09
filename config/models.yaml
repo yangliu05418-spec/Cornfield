@@ -1,4 +1,4 @@
-revision: 10
+revision: 11
 models:
   - id: legnext-midjourney-v7
     display_name: Midjourney V7
@@ -139,6 +139,46 @@ models:
       aspect_ratios: ["1:1", "2:3", "3:2", "3:4", "4:3", "4:5", "5:4", "9:16", "16:9", "21:9"]
       resolutions: []
       qualities: ["auto", "low", "medium", "high"]
+      max_reference_images: 16
+      max_reference_bytes: 26214400
+      draw_count: { min: 1, max: 4, default: 1 }
+    policy: { submit_timeout_seconds: 300, generation_timeout_seconds: 360, max_concurrency: 4, max_safe_retries: 2, breaker_min_requests: 10, breaker_failure_ratio: 0.5, breaker_cooldown_seconds: 30, allowed_output_hosts: [] }
+
+  # OpenRouter Images endpoint discovery verified 2026-09-09.
+  # Unlike GPT Image 2, these models accept a native aspect_ratio.
+  - id: openrouter-gpt-image-2-5-sunburst
+    display_name: "OpenAI: GPT Image 2.5 Sunburst"
+    provider: openrouter
+    provider_model: openai/gpt-image-2.5-sunburst
+    enabled: true
+    order: 52
+    request_parameters: ["aspect_ratio", "quality", "n", "input_references"]
+    outputs_per_draw: 1
+    capabilities:
+      text_to_image: true
+      image_to_image: true
+      aspect_ratios: ["1:1", "3:2", "2:3", "4:3", "3:4", "16:9", "9:16", "21:9", "auto"]
+      resolutions: []
+      qualities: ["auto", "low", "medium", "high", "xhigh", "max"]
+      max_reference_images: 16
+      max_reference_bytes: 26214400
+      draw_count: { min: 1, max: 4, default: 1 }
+    policy: { submit_timeout_seconds: 300, generation_timeout_seconds: 360, max_concurrency: 4, max_safe_retries: 2, breaker_min_requests: 10, breaker_failure_ratio: 0.5, breaker_cooldown_seconds: 30, allowed_output_hosts: [] }
+
+  - id: openrouter-gpt-image-2-5-flare
+    display_name: "OpenAI: GPT Image 2.5 Flare"
+    provider: openrouter
+    provider_model: openai/gpt-image-2.5-flare
+    enabled: true
+    order: 54
+    request_parameters: ["aspect_ratio", "quality", "n", "input_references"]
+    outputs_per_draw: 1
+    capabilities:
+      text_to_image: true
+      image_to_image: true
+      aspect_ratios: ["1:1", "3:2", "2:3", "4:3", "3:4", "16:9", "9:16", "21:9", "auto"]
+      resolutions: []
+      qualities: ["auto", "low", "medium", "high", "xhigh", "max"]
       max_reference_images: 16
       max_reference_bytes: 26214400
       draw_count: { min: 1, max: 4, default: 1 }

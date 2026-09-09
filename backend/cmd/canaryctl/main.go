@@ -239,6 +239,7 @@ func main() {
 func run() error {
 	var baseURL, username, passwordFile, promptFile, providerKeyFile, refinerKeyFile, artifactDir, releaseSHA, configPath, reportPath, profile, layerCases string
 	var allowHTTP bool
+	var selectedModels string
 	var archiveOutput bool
 	flag.StringVar(&baseURL, "base-url", "https://corn.kumadrama.com", "Cornfield HTTPS origin")
 	flag.StringVar(&username, "username", defaultUsername, "existing canary username")
@@ -252,6 +253,7 @@ func run() error {
 	flag.StringVar(&reportPath, "report", "", "resumable JSON report path")
 	flag.StringVar(&profile, "profile", "matrix", "canary profile: matrix, launch, byteplus, layer-protocol, layer-e2e, refiner-protocol, or refiner-e2e")
 	flag.StringVar(&layerCases, "layer-cases", "", "comma-separated layer-e2e case names; empty runs the full profile")
+	flag.StringVar(&selectedModels, "models", "", "comma-separated enabled model IDs for the matrix profile")
 	flag.BoolVar(&archiveOutput, "archive-output", true, "archive generated canary assets")
 	flag.BoolVar(&allowHTTP, "allow-http", false, "allow HTTP for isolated tests only")
 	flag.Parse()
@@ -280,6 +282,14 @@ func run() error {
 	catalog, err := modelconfig.Load(configPath)
 	if err != nil {
 		return fmt.Errorf("load model catalog: %w", err)
+	}
+	if selectedModels != "" {
+		if profile != "matrix" {
+			return errors.New("--models requires --profile matrix")
+		}
+		if err := filterCanaryModels(catalog, selectedModels); err != nil {
+			return err
+		}
 	}
 	password, err := readPassword(passwordFile)
 	if err != nil {
@@ -1962,6 +1972,9 @@ func terminalBatch(status string) bool {
 }
 
 func ratioMatches(width, height int, ratio string, tolerance float64) bool {
+	if ratio == "auto" {
+		return width > 0 && height > 0
+	}
 	parts := strings.Split(ratio, ":")
 	if width < 1 || height < 1 || len(parts) != 2 {
 		return false

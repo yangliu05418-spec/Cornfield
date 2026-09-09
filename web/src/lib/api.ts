@@ -186,7 +186,7 @@ export type MidjourneyOptions = {
 export type GenerationOptions = {
   midjourney?: MidjourneyOptions
   image?: {
-    quality?: 'auto' | 'low' | 'medium' | 'high'
+    quality?: 'auto' | 'low' | 'medium' | 'high' | 'xhigh' | 'max'
     prompt_optimization_mode?: 'standard' | 'fast'
   }
 }

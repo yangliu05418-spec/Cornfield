@@ -365,6 +365,13 @@ func validateCapabilities(m Model) error {
 	}
 	seenRatios := make(map[string]struct{}, len(capabilities.AspectRatios))
 	for _, ratio := range capabilities.AspectRatios {
+		if _, exists := seenRatios[ratio]; exists {
+			return fmt.Errorf("model %s has duplicate aspect ratio %q", m.ID, ratio)
+		}
+		seenRatios[ratio] = struct{}{}
+		if ratio == "auto" {
+			continue
+		}
 		parts := strings.Split(ratio, ":")
 		if len(parts) != 2 {
 			return fmt.Errorf("model %s has invalid aspect ratio %q", m.ID, ratio)
@@ -374,10 +381,6 @@ func validateCapabilities(m Model) error {
 		if widthErr != nil || heightErr != nil || width <= 0 || height <= 0 || math.IsInf(width, 0) || math.IsInf(height, 0) || math.IsNaN(width) || math.IsNaN(height) {
 			return fmt.Errorf("model %s has invalid aspect ratio %q", m.ID, ratio)
 		}
-		if _, exists := seenRatios[ratio]; exists {
-			return fmt.Errorf("model %s has duplicate aspect ratio %q", m.ID, ratio)
-		}
-		seenRatios[ratio] = struct{}{}
 	}
 	if duplicateOrBlank(capabilities.Resolutions) {
 		return fmt.Errorf("model %s has blank or duplicate resolutions", m.ID)

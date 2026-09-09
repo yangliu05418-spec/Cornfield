@@ -77,7 +77,7 @@ func TestProductionCatalogIsValid(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load production catalog: %v", err)
 	}
-	if len(catalog.Models) != 13 || catalog.Hash == "" {
+	if len(catalog.Models) != 15 || catalog.Hash == "" {
 		t.Fatalf("unexpected catalog: %+v", catalog)
 	}
 	flash, ok := catalog.Find("openrouter-gemini-3-1-flash-image")
@@ -149,7 +149,7 @@ func TestCatalogRejectsIncoherentProviderCapabilities(t *testing.T) {
 		{
 			name: "invalid ratio syntax",
 			mutate: func(model *Model) {
-				model.Capabilities.AspectRatios = []string{"auto"}
+				model.Capabilities.AspectRatios = []string{"square"}
 			},
 			want: "invalid aspect ratio",
 		},

@@ -186,11 +186,11 @@ func TestProductionCatalogCanaryMatrix(t *testing.T) {
 			imageCases++
 		}
 	}
-	if textCases != 298 {
-		t.Fatalf("text matrix contains %d cases, want 298", textCases)
+	if textCases != 406 {
+		t.Fatalf("text matrix contains %d cases, want 406", textCases)
 	}
-	if imageCases != 11 {
-		t.Fatalf("image smoke matrix contains %d cases, want 11", imageCases)
+	if imageCases != 13 {
+		t.Fatalf("image smoke matrix contains %d cases, want 13", imageCases)
 	}
 }
 

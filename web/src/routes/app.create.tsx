@@ -1972,7 +1972,7 @@ function CreatePage() {
                   value={ratio}
                   items={availableRatios.map((item) => ({
                     value: item,
-                    label: item,
+                    label: item === 'auto' ? '自动' : item,
                   }))}
                   icon={<span className="ratio-icon" />}
                   onChange={setRatio}
@@ -2010,6 +2010,8 @@ function CreatePage() {
                             low: '低',
                             medium: '中',
                             high: '高',
+                            xhigh: '超高',
+                            max: '最高',
                           }[item] ?? item,
                       }))}
                       icon={<span className="resolution-icon" />}

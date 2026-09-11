@@ -1,7 +1,45 @@
 import { describe, expect, it } from 'vitest'
 
-import { buildWallItems, canRefineGenerationError } from './justified-wall'
+import {
+  buildWallItems,
+  canRefineGenerationError,
+  reconcileVisibleWallItems,
+} from './justified-wall'
+import type { WallItem } from './justified-wall'
 import type { Asset, GenerationBatch } from '#/lib/api'
+
+describe('live slots while new images await reveal', () => {
+  it('replaces all four existing draw slots without inserting unrelated images', () => {
+    const slots: WallItem[] = Array.from({ length: 4 }, (_, index) => ({
+      id: `job:${index}`,
+      width: 1,
+      height: 1,
+      status: 'provider_pending',
+    }))
+    const completed = slots.map((item, index) => ({
+      ...item,
+      status: 'succeeded',
+      asset: { id: `asset-${index}` } as Asset,
+    }))
+    const unrelated = { id: 'new-upload', width: 1, height: 1 }
+    expect(reconcileVisibleWallItems(slots, [unrelated, ...completed])).toEqual(
+      completed,
+    )
+    expect(slots.every((item) => item.status === 'provider_pending')).toBe(true)
+  })
+
+  it('updates failures, preserves visible ordering and removes dismissed slots', () => {
+    const first = { id: 'first', width: 1, height: 1, status: 'queued' }
+    const second = { ...first, id: 'second' }
+    const failed = { ...second, status: 'failed' }
+    expect(reconcileVisibleWallItems([first, second], [failed])).toEqual([
+      failed,
+    ])
+    expect(reconcileVisibleWallItems([first, second], [failed, first])).toEqual(
+      [first, failed],
+    )
+  })
+})
 
 describe('failed generation actions', () => {
   it('offers prompt refinement only for text-fixable failures', () => {

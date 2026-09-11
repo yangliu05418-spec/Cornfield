@@ -227,6 +227,17 @@ export function buildWallItems(
     .map(({ item }) => item)
 }
 
+export function reconcileVisibleWallItems(
+  current: WallItem[],
+  incoming: WallItem[],
+): WallItem[] {
+  const latest = new Map(incoming.map((item) => [item.id, item]))
+  return current.flatMap((item) => {
+    const updated = latest.get(item.id)
+    return updated ? [updated] : []
+  })
+}
+
 export const JustifiedWall = forwardRef<
   JustifiedWallHandle,
   JustifiedWallProps
@@ -261,6 +272,7 @@ export const JustifiedWall = forwardRef<
   const [width, setWidth] = useState(0)
   const [preview, setPreview] = useState<Asset | null>(null)
   const [renderItems, setRenderItems] = useState(items)
+  const renderedSlotIDs = useRef(new Set(items.map((item) => item.id)))
   const [pendingItems, setPendingItems] = useState<WallItem[] | null>(null)
   const [newImageCount, setNewImageCount] = useState(0)
 
@@ -338,8 +350,11 @@ export const JustifiedWall = forwardRef<
         [...knownAssetIDs.current].filter((id) => !removedAssetIDs.has(id)),
       )
     }
-    const newAssets = [...incomingAssetIDs].filter(
-      (id) => !knownAssetIDs.current.has(id),
+    const newAssets = items.filter(
+      (item) =>
+        item.asset &&
+        !knownAssetIDs.current.has(item.asset.id) &&
+        !renderedSlotIDs.current.has(item.id),
     )
     const node = scrollRef.current
     if (
@@ -348,12 +363,17 @@ export const JustifiedWall = forwardRef<
       node &&
       node.scrollTop > 80
     ) {
+      // Defer only new slots. Existing placeholders must keep receiving status
+      // and output updates, even while unrelated new images await reveal.
+      prepareLayoutChange()
+      setRenderItems((current) => reconcileVisibleWallItems(current, items))
       setPendingItems(items)
       setNewImageCount(newAssets.length)
       return
     }
     if (node && node.scrollTop > 80) prepareLayoutChange()
     knownAssetIDs.current = incomingAssetIDs
+    renderedSlotIDs.current = new Set(items.map((item) => item.id))
     setPendingItems(null)
     setNewImageCount(0)
     setRenderItems(items)
@@ -416,6 +436,7 @@ export const JustifiedWall = forwardRef<
       pendingItems.flatMap((item) => (item.asset ? [item.asset.id] : [])),
     )
     setRenderItems(pendingItems)
+    renderedSlotIDs.current = new Set(pendingItems.map((item) => item.id))
     setPendingItems(null)
     setNewImageCount(0)
   }
